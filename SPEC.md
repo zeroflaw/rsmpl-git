@@ -9567,11 +9567,15 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     plus the rename+attr twin) via the token-equal-methods gate —
     the engine scalar cut isolates the whole trait
     (`outermost_spans`) and the splice keeps the body verbatim.
-    The method-rename twin
-    (`trait Old { fn m_old }` → `trait New { fn m_new }`) and any
-    self-ref body (`Old` mentioned inside, plus updated to `New`)
-    stay ordinary pending the `trait Old as New` splice + method
-    joint (E2 slice 2 owner). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
+    E2 slice 2a fires the self-ref twin
+    (`trait Old { fn make() -> Old }` →
+    `trait New { fn make() -> New }`) as one intent with the
+    `+ trait Old as New { ... }` paste (name-only scope, full-text
+    agreement through the shared rename scanner, method/macro/attr
+    binding vetoes). The method-rename twin
+    (`trait Old { fn m_old }` → `trait New { fn m_new }`)
+    stays ordinary pending the one-method-rename joint
+    (E2 slice 2b owner). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Two added attrs, `//!` /

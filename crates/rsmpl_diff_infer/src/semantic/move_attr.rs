@@ -29,9 +29,9 @@
 //! fire). Slice 10 closes the added axis: the struct arm admits
 //! a vis delta riding with rename+attr, and the method-rename
 //! trait twin (`Old/m_old` → `New/m_new`) is pinned ordinary. The remaining axes
-//! (replaced-interior, item-interior attr deltas, method-rename /
-//! self-ref trait joints) stay ordinary by construction (owners: E1 residue (b)
-//! remainder, E2 slice 2). Removed/replaced + rename
+//! (replaced-interior, item-interior attr deltas, method-rename trait
+//! joint) stay ordinary by construction (owners: E1 residue (b)
+//! remainder, E2 slice 2b). Removed/replaced + rename
 //! now fires via the E1 slice-2 stripped evolved delegation (owner:
 //! `move_attr_removed.rs` — fire pins below, shape pins there).
 
@@ -1591,14 +1591,15 @@ mod tests {
 
     #[test]
     fn rename_method_bearing_trait_move_stays_ordinary() {
-        // E2 slice 1 remainder (slice 2 owner): method-bearing
+        // E2 slice 2a landed the `trait Old as New` self-ref splice;
+        // the remainder (slice 2b owner) is the method-rename joint:
+        // method-bearing
         // `trait Old { fn m_old }` moves a.rs -> b.rs as
         // `trait New { fn m_new }` (trait rename PLUS method rename).
         // Padding clears the T375 guard, so staying ordinary here
-        // proves the method-delta veto inside `trait_evolved_match`,
-        // not bytes: the header-only gate requires token-equal methods.
-        // Slice 2 (`trait Old as New` splice + one-method-rename joint)
-        // owns this shape.
+        // proves the method-delta veto, not bytes: the self-ref gate
+        // requires the scanner-renamed minus to equal the plus.
+        // Slice 2b (one-method-rename joint) owns this shape.
         let mut docs = String::new();
         for i in 0..40 {
             docs.push_str(&format!("/// doc line {i}\n"));

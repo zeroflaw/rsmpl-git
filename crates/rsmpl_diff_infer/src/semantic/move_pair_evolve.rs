@@ -276,6 +276,31 @@ pub(crate) fn evolved_pairs_for_item(
             super::move_evolve::find_trait_evolved_hits(&item.text, pbody),
             EvolvedKind::Trait,
         );
+        // E2 slice 2a: trait body-evolving pairs (move+rename whose
+        // method signatures/bodies name the trait). The paste carries
+        // the `as` template (`trait <old> as <new> { ... }`); mutually
+        // exclusive with the abstract arm above (token-equal items
+        // never reach here).
+        for (first, last, prefix, old, name) in
+            super::move_evolve_container::find_trait_body_evolved_hits(&item.text, pbody)
+        {
+            let template =
+                rsmpl_pattern::container_body_evolution_template("trait", &prefix, &old, &name);
+            pairs.push(MovePair {
+                minus_hunk_key: minus_key,
+                plus_hunk_key: plus_key,
+                item: item.clone(),
+                plus_first: first,
+                plus_last: last,
+                evolved: Some(EvolvedPair {
+                    kind: EvolvedKind::Trait,
+                    prefix,
+                    name,
+                    static_mut: false,
+                    template: Some(template),
+                }),
+            });
+        }
     }
     pairs
 }
@@ -542,6 +567,33 @@ mod tests {
             out.is_none() || !out.unwrap().join("").contains(" as "),
             "two-slot joint must not fire"
         );
+    }
+
+    #[test]
+    fn trait_body_evolve_fires_with_as_paste() {
+        // E2 slice 2a: move+rename whose method signature names the
+        // trait fires as one evolving cut/paste with the `as` template.
+        let minus = "trait Old {\n    fn make() -> Old;\n    fn use_it(&self);\n}\n";
+        let plus = "trait New {\n    fn make() -> New;\n    fn use_it(&self);\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,4 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,5 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait as must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ trait Old as New { ... }"),
+            "paste must carry the trait `as` template, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]

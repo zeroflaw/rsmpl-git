@@ -17,7 +17,7 @@
 
 use super::pattern_evolution::{
     follows_as_rename, valid_enum_evolution_prefix, valid_struct_evolution_prefix,
-    valid_union_evolution_prefix, word_bounded_contains,
+    valid_trait_evolution_prefix, valid_union_evolution_prefix, word_bounded_contains,
 };
 
 /// Shared `struct`/`enum`/`union` body-evolution template parser:
@@ -133,6 +133,16 @@ pub fn parse_union_body_evolution_template(text: &str) -> Option<(String, String
     parse_container_body_template(text, "union", valid_union_evolution_prefix)
 }
 
+/// E2 slice 2a `trait` body-evolving evolution-paste template:
+/// `trait <old> as <new> { ... }` (prefix rides verbatim:
+/// `pub trait Old as New { ... }`). Returns `(prefix, old, new)`.
+/// The engine renames the captured suffix/body through the shared
+/// scanner; the raiser proves the pairing through the same scanner,
+/// so pairing and splice agree by construction.
+pub fn parse_trait_body_evolution_template(text: &str) -> Option<(String, String, String)> {
+    parse_container_body_template(text, "trait", valid_trait_evolution_prefix)
+}
+
 /// Single-line container body-evolution paste template: the plus-side
 /// prefix verbatim, `<old> as <new>`, `{ ... }` body marker. `prefix`
 /// is trimmed; an empty prefix yields a bare header.
@@ -177,6 +187,7 @@ pub fn item_body_evolution_veto(
         variant_line: Option<usize>,
         macro_line: Option<usize>,
         attr_line: Option<usize>,
+        method_line: Option<usize>,
     }
     impl<'ast> Visit<'ast> for Probe<'_> {
         fn visit_field(&mut self, node: &'ast syn::Field) {
@@ -220,15 +231,29 @@ pub fn item_body_evolution_veto(
                 }
             }
         }
+        fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
+            // E2 slice 2a: a trait method *named* like the trait lives
+            // in another namespace — renaming it would change the
+            // method, not the self-ty, so it vetoes the `as` splice.
+            if node.sig.ident == self.old {
+                let line = node.sig.ident.span().start().line;
+                if self.method_line.is_none_or(|l| line < l) {
+                    self.method_line = Some(line);
+                }
+            }
+            syn::visit::visit_trait_item_fn(self, node);
+        }
     }
-    // The text must parse as one of the three container kinds; any
-    // other shape yields no veto (the caller's kind gate owns it).
+    // The text must parse as one of the three container kinds or a
+    // trait; any other shape yields no veto (the caller's kind gate
+    // owns it).
     let mut probe = Probe {
         old,
         field_line: None,
         variant_line: None,
         macro_line: None,
         attr_line: None,
+        method_line: None,
     };
     if let Ok(item) = syn::parse_str::<syn::ItemStruct>(minus_text) {
         probe.visit_item_struct(&item);
@@ -236,6 +261,8 @@ pub fn item_body_evolution_veto(
         probe.visit_item_enum(&item);
     } else if let Ok(item) = syn::parse_str::<syn::ItemUnion>(minus_text) {
         probe.visit_item_union(&item);
+    } else if let Ok(item) = syn::parse_str::<syn::ItemTrait>(minus_text) {
+        probe.visit_item_trait(&item);
     } else {
         return None;
     }
@@ -249,6 +276,7 @@ pub fn item_body_evolution_veto(
         }
     };
     consider("attribute", probe.attr_line);
+    consider("method", probe.method_line);
     consider("field", probe.field_line);
     consider("variant", probe.variant_line);
     consider("macro", probe.macro_line);
@@ -276,6 +304,15 @@ mod tests {
         assert_eq!(
             parse_union_body_evolution_template("union Old as New { ... }"),
             Some(("".to_string(), "Old".to_string(), "New".to_string()))
+        );
+        // E2 slice 2a: trait `as` template.
+        assert_eq!(
+            parse_trait_body_evolution_template("trait Old as New { ... }"),
+            Some(("".to_string(), "Old".to_string(), "New".to_string()))
+        );
+        assert_eq!(
+            parse_trait_body_evolution_template("pub trait Old as New { ... }"),
+            Some(("pub ".to_string(), "Old".to_string(), "New".to_string()))
         );
     }
 
@@ -337,6 +374,11 @@ mod tests {
             crate::pattern_evolution::parse_union_evolution_template("union Old as New { ... }"),
             None
         );
+        // E2 slice 2a: the abstract trait parser declines the `as` form.
+        assert_eq!(
+            crate::pattern_evolution::parse_trait_evolution_template("trait Old as New { ... }"),
+            None
+        );
         // Untouched shapes still parse.
         assert_eq!(
             crate::pattern_evolution::parse_struct_evolution_template("struct New { ... }"),
@@ -350,6 +392,9 @@ mod tests {
         ));
         assert!(crate::pattern_evolution::is_evolution_template(
             "union Old as New { ... }"
+        ));
+        assert!(crate::pattern_evolution::is_evolution_template(
+            "trait Old as New { ... }"
         ));
     }
 
@@ -404,5 +449,25 @@ mod tests {
         let text = "enum Old {\n    A(Box<Old>),\n    B(Old!()),\n}";
         let veto = item_body_evolution_veto(text, "Old").expect("macro vetoes");
         assert_eq!(veto.kind, "macro");
+    }
+
+    #[test]
+    fn trait_veto_matrix() {
+        // E2 slice 2a: self-reference in a trait method signature —
+        // no veto.
+        let firing = "trait Old {\n    fn make() -> Old;\n    fn use_it(&self);\n}";
+        assert_eq!(item_body_evolution_veto(firing, "Old"), None);
+        // A trait method *named* like the trait: veto at the method.
+        let method = "trait Old {\n    fn Old(&self);\n}";
+        let veto = item_body_evolution_veto(method, "Old").expect("method vetoes");
+        assert_eq!((veto.kind, veto.line), ("method", 2));
+        // Macro invocation names the macro, never the item.
+        let mac = "trait Old {\n    fn make() -> Old;\n    fn tag() -> Old!();\n}";
+        let veto = item_body_evolution_veto(mac, "Old").expect("macro vetoes");
+        assert_eq!(veto.kind, "macro");
+        // Attribute interiors are opaque to the rename.
+        let attr = "#[derive(Old)]\ntrait Old {\n    fn f(&self);\n}";
+        let veto = item_body_evolution_veto(attr, "Old").expect("attr vetoes");
+        assert_eq!(veto.kind, "attribute");
     }
 }

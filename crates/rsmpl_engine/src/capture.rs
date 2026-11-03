@@ -277,7 +277,8 @@ pub(crate) fn eval_collection_cut(
 /// `pub enum New { ... }`,
 /// `pub union New { ... }`, `pub type New = ...;`,
 /// `pub const New = ...;`, `pub static [mut ]New = ...;`,
-/// `pub mod New { ... }`, or `pub trait New { ... }`), or a WI-19 slice 4
+/// `pub mod New { ... }`, or `pub trait New { ... }` (or
+/// `pub trait Old as New { ... }` for a self-reference body rename)), or a WI-19 slice 4
 /// container body-evolving header (`pub struct Old as New { ... }`,
 /// `pub enum Old as New { ... }`, `pub union Old as New { ... }`). The
 /// template's prefix and new ident replace the capture's header span
@@ -367,6 +368,21 @@ pub(crate) fn splice_evolved_header(
             rule,
         );
     }
+    // E2 slice 2a: the `trait <old> as <new>` body-evolving form is
+    // checked before the abstract trait form (the abstract parser
+    // declines the `as` spelling by ownership; the splice lives in the
+    // `capture_container_body` sibling, D5).
+    if let Some((new_prefix, old_t, new_t)) =
+        rsmpl_pattern::parse_trait_body_evolution_template(template.trim())
+    {
+        return crate::capture_container_body::splice_trait_body_evolution(
+            captured,
+            &new_prefix,
+            &old_t,
+            &new_t,
+            rule,
+        );
+    }
     // WI-8 slice 9: the concrete-signature `fn` template carries the new
     // signature verbatim — checked before the abstract `(...)` form (a
     // concrete template never contains `(...)`, so the two shapes are
@@ -404,7 +420,7 @@ pub(crate) fn splice_evolved_header(
     let (new_prefix, new_name) =
         rsmpl_pattern::parse_evolution_template(template.trim()).ok_or_else(|| {
             fail(format!(
-                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, a concrete signature + `{{ ... }}`, or `fn <Old> as <New>(concrete signature) {{ ... }}` for a signature+body joint (single- or multi-line, got `{}`), a single-line `struct` header with `...` (or `struct <Old> as <New> {{ ... }}` for a self-reference body rename), a single-line `enum` header with `...` (or `enum <Old> as <New> {{ ... }}`), a single-line `union` header with `...` (or `union <Old> as <New> {{ ... }}`), `impl <Old> as <New> {{ ... }}` for an inherent-`impl` self-ty rename, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...`",
+                "evolution paste template must be a single-line `fn` header with `(...)` + `...`, `fn <Old> as <New>(...) {{ ... }}` for a self-reference body rename, a concrete signature + `{{ ... }}`, or `fn <Old> as <New>(concrete signature) {{ ... }}` for a signature+body joint (single- or multi-line, got `{}`), a single-line `struct` header with `...` (or `struct <Old> as <New> {{ ... }}` for a self-reference body rename), a single-line `enum` header with `...` (or `enum <Old> as <New> {{ ... }}`), a single-line `union` header with `...` (or `union <Old> as <New> {{ ... }}`), `impl <Old> as <New> {{ ... }}` for an inherent-`impl` self-ty rename, a single-line `type` header with `= ...;`, a single-line `const` header with `= ...;`, a single-line `static` header with `= ...;`, a single-line `mod` header with `...`, or a single-line `trait` header with `...` (or `trait <Old> as <New> {{ ... }}` for a self-reference body rename)",
                 template.trim()
             ))
         })?;

@@ -52,7 +52,7 @@ pub use pattern::{
 pub use pattern_evolution_container::{
     container_body_evolution_template, item_body_evolution_veto,
     parse_enum_body_evolution_template, parse_struct_body_evolution_template,
-    parse_union_body_evolution_template,
+    parse_trait_body_evolution_template, parse_union_body_evolution_template,
 };
 pub use pattern_evolution_impl::{
     impl_body_evolution_template, impl_body_evolution_veto, parse_impl_body_evolution_template,

@@ -1539,18 +1539,20 @@ mod tests {
 
     #[test]
     fn trait_method_rename_stays_ordinary() {
-        // E2 slice 1 remainder (slice 2 owner): a method rename inside
-        // an otherwise header-only trait evolution vetoes — needs the
-        // `trait Old as New` splice + one-method-rename joint.
+        // E2 slice 2a landed the `trait Old as New` self-ref splice
+        // (proved in `move_evolve_container`); the remainder (slice 2b
+        // owner) is the one-method-rename joint: a method rename inside
+        // an otherwise header-only trait evolution vetoes the abstract
+        // gate here.
         let minus = item_trait("trait Old {\n    fn m_old(&self);\n}");
         let plus = item_trait("trait New {\n    fn m_new(&self);\n}");
         assert_eq!(trait_evolved_match(&minus, &plus), None);
         // Method add/remove veto likewise.
         let added = item_trait("trait New {\n    fn m_old(&self);\n    fn extra(&self);\n}");
         assert_eq!(trait_evolved_match(&minus, &added), None);
-        // Self-ref body (Old mentioned inside) is NOT token-equal when
-        // the plus updated it, so it vetoes here and stays ordinary
-        // pending the slice-2 `as` splice.
+        // Self-ref body (Old mentioned inside, plus updated to New)
+        // vetoes the ABSTRACT gate here by construction and fires
+        // through the slice-2a body-evolving finder instead.
         let self_minus = item_trait("trait Old {\n    fn f(x: Old);\n}");
         let self_plus = item_trait("trait New {\n    fn f(x: New);\n}");
         assert_eq!(trait_evolved_match(&self_minus, &self_plus), None);

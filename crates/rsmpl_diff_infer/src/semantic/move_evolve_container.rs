@@ -19,6 +19,7 @@
 
 use super::move_evolve::{enum_header_prefix, union_header_prefix};
 use super::move_evolve::{struct_header_prefix, tok};
+use super::move_evolve_tail::trait_header_prefix;
 use syn::spanned::Spanned;
 
 /// Body-evolving `struct` pair check: same shape modulo the header
@@ -284,6 +285,117 @@ pub(crate) fn find_union_body_evolved_hits(
     out
 }
 
+/// E2 slice 2a: body-evolving `trait` pair check — same shape modulo
+/// the header ident, with a token-different item set the full-text
+/// agreement in [`find_trait_body_evolved_hits`] proves is exactly the
+/// old→new self-reference rename. Name-only scope: attrs, vis,
+/// generics, and supertraits must be token-equal (any wider delta
+/// vetoes); the names must differ. Returns the plus-side ident.
+pub(crate) fn trait_body_evolved_match(
+    minus: &syn::ItemTrait,
+    plus: &syn::ItemTrait,
+) -> Option<String> {
+    if minus.auto_token.is_some() || plus.auto_token.is_some() {
+        return None;
+    }
+    if minus.restriction.is_some() || plus.restriction.is_some() {
+        return None;
+    }
+    if minus.attrs.len() != plus.attrs.len()
+        || minus
+            .attrs
+            .iter()
+            .zip(plus.attrs.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
+        return None;
+    }
+    if tok(&minus.vis) != tok(&plus.vis) {
+        return None;
+    }
+    if minus.ident == plus.ident {
+        return None; // vacuous — the abstract path owns renames without body delta
+    }
+    if tok(&minus.generics) != tok(&plus.generics) {
+        return None;
+    }
+    if tok(&minus.supertraits) != tok(&plus.supertraits) {
+        return None;
+    }
+    if minus.items.len() == plus.items.len()
+        && minus
+            .items
+            .iter()
+            .zip(plus.items.iter())
+            .all(|(a, b)| tok(a) == tok(b))
+    {
+        return None; // no body delta — the abstract path owns it
+    }
+    Some(plus.ident.to_string())
+}
+
+/// E2 slice 2a: all body-evolving `trait` hits of one minus item text
+/// in a pure-plus hunk body. Mirrors `find_struct_body_evolved_hits`;
+/// spans coincide with parsed `trait` item spans by construction.
+/// Returns `(plus_first, plus_last, plus_prefix, old_name, new_name)`:
+/// the paste spells `+ <prefix>trait <old> as <new> { ... }` and the
+/// engine renames the captured suffix/body through the shared scanner
+/// — the same scanner proves the pairing here, so pairing and splice
+/// agree by construction.
+pub(crate) fn find_trait_body_evolved_hits(
+    minus_text: &str,
+    plus_body: &[String],
+) -> Vec<(usize, usize, String, String, String)> {
+    let Ok(minus) = syn::parse_str::<syn::ItemTrait>(minus_text) else {
+        return Vec::new();
+    };
+    let old = minus.ident.to_string();
+    let fragment: String = plus_body
+        .iter()
+        .map(|l| l.get(1..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(file) = syn::parse_str::<syn::File>(&fragment) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for it in &file.items {
+        let syn::Item::Trait(plus) = it else {
+            continue;
+        };
+        let Some(new) = trait_body_evolved_match(&minus, plus) else {
+            continue;
+        };
+        let s = it.span().start().line;
+        let e = it.span().end().line;
+        if s < 1 || e < s || e > plus_body.len() {
+            continue;
+        }
+        let Some(prefix) = trait_header_prefix(&plus_body[(s - 1)..e], &new) else {
+            continue;
+        };
+        // Full-text agreement: the scanner-renamed minus item must equal
+        // the plus run verbatim. Any non-rename delta (vis, generics,
+        // supertraits, extra item changes, unrenamed occurrences) vetoes.
+        let plus_text: String = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if rsmpl_pattern::rename_ident_in_code(minus_text, &old, &new) != plus_text {
+            continue;
+        }
+        // E2 slice 2a / WI-2: the same binding boundary as the
+        // authored splice — a method ident, macro name, or attribute
+        // occurrence stays ordinary even when the text scan agrees.
+        if rsmpl_pattern::item_body_evolution_veto(minus_text, &old).is_some() {
+            continue;
+        }
+        out.push((s - 1, e - 1, prefix, old.clone(), new));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +490,46 @@ mod tests {
         // Stale self-ref: token-equal bodies belong to the abstract path.
         let stale = plus_body("struct New {\n    next: Box<Old>,\n}");
         assert!(find_struct_body_evolved_hits(minus, &stale).is_empty());
+    }
+
+    #[test]
+    fn trait_body_evolve_fires() {
+        // E2 slice 2a: move+rename whose method signature names the
+        // trait — pairs through the body-evolving finder (the abstract
+        // finder vetoes item deltas).
+        let minus = "trait Old {\n    fn make() -> Old;\n    fn use_it(&self);\n}";
+        let body = plus_body("trait New {\n    fn make() -> New;\n    fn use_it(&self);\n}");
+        let hits = find_trait_body_evolved_hits(minus, &body);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert_eq!((hits[0].3.as_str(), hits[0].4.as_str()), ("Old", "New"));
+    }
+
+    #[test]
+    fn trait_body_matcher_gates() {
+        // Identical items belong to the abstract path, never here.
+        let a: syn::ItemTrait = syn::parse_str("trait Old {\n    fn f(&self);\n}").unwrap();
+        let b: syn::ItemTrait = syn::parse_str("trait New {\n    fn f(&self);\n}").unwrap();
+        assert_eq!(trait_body_evolved_match(&a, &b), None);
+        // Method rename passes the matcher (any item delta) but the
+        // finder declines it: the scanner-renamed minus never equals a
+        // method-renamed plus (slice 2b territory, pinned ordinary).
+        let c: syn::ItemTrait = syn::parse_str("trait New {\n    fn g(&self);\n}").unwrap();
+        assert_eq!(trait_body_evolved_match(&a, &c), Some("New".to_string()));
+        let a_text = "trait Old {\n    fn f(&self);\n}";
+        let c_body = plus_body("trait New {\n    fn g(&self);\n}");
+        assert!(find_trait_body_evolved_hits(a_text, &c_body).is_empty());
+        // Vis delta stays out (name-only scope).
+        let d: syn::ItemTrait =
+            syn::parse_str("pub trait New {\n    fn make() -> New;\n}").unwrap();
+        let e: syn::ItemTrait = syn::parse_str("trait Old {\n    fn make() -> Old;\n}").unwrap();
+        assert_eq!(trait_body_evolved_match(&e, &d), None);
+        // Stale self-ref: renamed scan disagrees, finder declines.
+        let stale = plus_body("trait New {\n    fn make() -> Old;\n    fn use_it(&self);\n}");
+        let e_text = "trait Old {\n    fn make() -> Old;\n    fn use_it(&self);\n}";
+        assert!(find_trait_body_evolved_hits(e_text, &stale).is_empty());
+        // Method named like the trait: binding risk stays ordinary.
+        let m = "trait Old {\n    fn Old(&self);\n}";
+        let renamed = rsmpl_pattern::rename_ident_in_code(m, "Old", "New");
+        assert!(find_trait_body_evolved_hits(m, &plus_body(&renamed)).is_empty());
     }
 }

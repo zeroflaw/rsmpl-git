@@ -843,6 +843,125 @@ pub(crate) fn splice_trait_header(
     Ok(lines.join("\n"))
 }
 
+/// E2 slice 2a: splice a captured `trait` item under a
+/// body-evolving template header (`pub trait Old as New { ... }`).
+/// The template's visibility prefix (+ optional `unsafe`) and new ident
+/// replace the capture's `trait <Old>` header span; the captured suffix
+/// (generics/supertraits/`{...items}`) and body rename `Old` → `New`
+/// through [`rsmpl_pattern::rename_ident_in_code`]. The WI-2 binding
+/// boundary ([`rsmpl_pattern::item_body_evolution_veto`]) applies: a
+/// method ident, macro name, or attribute interior vetoes loud instead
+/// of renaming.
+pub(crate) fn splice_trait_body_evolution(
+    captured: &str,
+    new_prefix: &str,
+    old_t: &str,
+    new_t: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| {
+        StructuredError::new(ErrorCode::PatternConflict, msg)
+            .with_rule(rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "trait-as-paste",
+                "write `+ <vis>trait <Old> as <New> { ... }` (exactly the trait rename, WI-2 binding law), or split the move",
+            ))
+    };
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name: String = match file.items.as_slice() {
+        [syn::Item::Trait(t)] => t.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `trait` item for a `trait <Old> as <New>` template"
+                    .to_string(),
+            ));
+        }
+    };
+    if old_name != old_t {
+        return Err(fail(format!(
+            "body-evolving paste names `{old_t}` but the capture holds `trait {old_name}`"
+        )));
+    }
+    if let Some(veto) = rsmpl_pattern::item_body_evolution_veto(captured, &old_name) {
+        return Err(fail(format!(
+            "body-evolving paste vetoes: `{old_name}` has a {} occurrence at captured line {} (rename it by hand or split the move)",
+            veto.kind, veto.line
+        )));
+    }
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if trait_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx = target.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `trait {old_name}` header line"
+        ))
+    })?;
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, rest) = line.split_at(ws_len);
+    let mut kw_at = None;
+    let mut search = rest;
+    let mut base = 0;
+    while let Some(pos) = search.find("trait") {
+        let before = search.as_bytes().get(pos.wrapping_sub(1));
+        let before_ok =
+            pos == 0 || before.is_some_and(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        let after = &search[pos + 5..];
+        let after_ok = after.starts_with(|c: char| c.is_whitespace());
+        if before_ok && after_ok && after.trim_start().starts_with(old_name.as_str()) {
+            let tail = &after.trim_start()[old_name.len()..];
+            let boundary = tail
+                .chars()
+                .next()
+                .map(|c| c != '_' && !c.is_ascii_alphanumeric())
+                .unwrap_or(true);
+            if boundary {
+                kw_at = Some(base + pos);
+                break;
+            }
+        }
+        search = &search[pos + 5..];
+        base += pos + 5;
+    }
+    let kw_at = kw_at.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `trait {old_name}` header line"
+        ))
+    })?;
+    let after_kw = &rest[kw_at + 5..];
+    let trimmed = after_kw.trim_start();
+    let suffix = trimmed[old_name.len()..].to_string();
+    let renamed_suffix = rsmpl_pattern::rename_ident_in_code(&suffix, &old_name, new_t);
+    let pre = new_prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("trait {new_t}")
+    } else {
+        format!("{pre} trait {new_t}")
+    };
+    lines[idx] = format!("{ws}{head}{renamed_suffix}");
+    if idx + 1 < lines.len() {
+        let body = lines[idx + 1..].join("\n");
+        let renamed = rsmpl_pattern::rename_ident_in_code(&body, &old_name, new_t);
+        let mut new_lines: Vec<String> = renamed.split('\n').map(str::to_string).collect();
+        lines.truncate(idx + 1);
+        lines.append(&mut new_lines);
+    }
+    Ok(lines.join("\n"))
+}
+
 /// The ident of a `trait <Ident>` header line (`None` when the line
 /// holds no word-bounded `trait` + ident pair).
 pub(crate) fn trait_line_ident(line: &str) -> Option<String> {
@@ -1282,6 +1401,25 @@ mod tests {
             .expect("union as splice must fire");
         assert!(out.contains("union New {"), "got:\n{out}");
         assert!(out.contains("x: New"), "got:\n{out}");
+    }
+
+    #[test]
+    fn trait_as_splice_renames_self_ref_signature() {
+        // E2 slice 2a: trait self-ref splice via the `as` template.
+        let cap = "trait Old {\n    fn make() -> Old;\n    fn use_it(&self);\n}";
+        let out = splice_evolved_header(cap, "trait Old as New { ... }", "r")
+            .expect("trait as splice must fire");
+        assert!(out.contains("trait New {"), "got:\n{out}");
+        assert!(out.contains("fn make() -> New;"), "got:\n{out}");
+        assert!(!out.contains("Old"), "old name gone, got:\n{out}");
+    }
+
+    #[test]
+    fn trait_as_splice_vetoes_method_name() {
+        let cap = "trait Old {\n    fn Old(&self);\n}";
+        let err = splice_evolved_header(cap, "trait Old as New { ... }", "r")
+            .expect_err("method-name capture must veto");
+        assert!(err.to_string().contains("method"), "got: {err}");
     }
 
     #[test]
