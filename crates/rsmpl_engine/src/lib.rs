@@ -57,6 +57,7 @@ mod postcheck_follow;
 mod postcheck_item_joint;
 mod postcheck_move;
 mod postcheck_move_evo;
+mod postcheck_move_member;
 mod postcheck_namehole;
 mod postcheck_synth;
 mod postcheck_use;
@@ -244,14 +245,12 @@ mod tests {
     /// are explicitly exempt.
     #[test]
     fn wi22_no_exiled_sibling_tests() {
-        // Slice-1 allow-list (deferred to slice 2, which splits production
-        // first): plan + postcheck_move still hold exiled siblings.
+        // Slice-2a allow-list (deferred to slice 2b, which needs a
+        // production split of single-`fn apply_inner` first): only the
+        // plan family still holds an exiled sibling.
         let allowed: std::collections::HashSet<&str> = [
             "crates/rsmpl_engine/src/plan_tests.rs",
-            "crates/rsmpl_engine/src/postcheck_move_tests.rs",
-            "crates/rsmpl_engine/src/postcheck_move_sweep_tests.rs",
             "crates/rsmpl_engine/src/plan.rs",
-            "crates/rsmpl_engine/src/postcheck_move.rs",
         ]
         .into_iter()
         .collect();
