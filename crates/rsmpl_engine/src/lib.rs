@@ -234,3 +234,92 @@ pub fn apply_patch_to_tree(
 ) -> Result<ApplyReport, StructuredError> {
     apply_with_captures(files, patch)
 }
+
+#[cfg(test)]
+mod tests {
+    /// WI-22 slice 1 gate: unit tests stay inline (`mod tests` at the
+    /// bottom of the owning file). No `*_tests.rs` sibling may reappear
+    /// under `crates/*/src/` and no `src/**/*.rs` may carry
+    /// `#[path = "*_tests.rs"]`. Integration/e2e files under `tests/`
+    /// are explicitly exempt.
+    #[test]
+    fn wi22_no_exiled_sibling_tests() {
+        // Slice-1 allow-list (deferred to slice 2, which splits production
+        // first): plan + postcheck_move still hold exiled siblings.
+        let allowed: std::collections::HashSet<&str> = [
+            "crates/rsmpl_engine/src/plan_tests.rs",
+            "crates/rsmpl_engine/src/postcheck_move_tests.rs",
+            "crates/rsmpl_engine/src/postcheck_move_sweep_tests.rs",
+            "crates/rsmpl_engine/src/plan.rs",
+            "crates/rsmpl_engine/src/postcheck_move.rs",
+        ]
+        .into_iter()
+        .collect();
+        let root = workspace_root();
+        let mut offenders: Vec<String> = Vec::new();
+        for dir in ["crates", "bin"] {
+            let base = root.join(dir);
+            let mut stack = vec![base];
+            while let Some(top) = stack.pop() {
+                let entries = std::fs::read_dir(&top)
+                    .unwrap_or_else(|e| panic!("WI-22 scan cannot read {}: {e}", top.display()));
+                for entry in entries {
+                    let path = entry.expect("dir entry").path();
+                    if path.is_dir() {
+                        // Descend everywhere except integration `tests/` dirs.
+                        if path.file_name().is_some_and(|n| n == "tests") {
+                            continue;
+                        }
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().is_none_or(|e| e != "rs") {
+                        continue;
+                    }
+                    let rel = path.strip_prefix(&root).unwrap_or(&path);
+                    // Sibling-file rule applies under `src/` trees only.
+                    let under_src = rel.components().any(|c| c.as_os_str() == "src");
+                    if !under_src {
+                        continue;
+                    }
+                    let rel_str = rel.display().to_string().replace('\\', "/");
+                    if allowed.contains(rel_str.as_str()) {
+                        continue;
+                    }
+                    if path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
+                    {
+                        offenders.push(format!("sibling file: {}", rel.display()));
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    // Skip the gate's own file (it names the pattern it bans).
+                    if text.contains("wi22_no_exiled_sibling_tests") {
+                        continue;
+                    }
+                    if text.contains("#[path = \"") && text.contains("_tests.rs") {
+                        offenders.push(format!("#[path] exile: {}", rel.display()));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "WI-22: exiled sibling tests found (move them inline):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    fn workspace_root() -> std::path::PathBuf {
+        let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            if dir.join("crates").is_dir() && dir.join("bin").is_dir() {
+                return dir;
+            }
+            if !dir.pop() {
+                panic!("WI-22 scan cannot locate the workspace root");
+            }
+        }
+    }
+}
