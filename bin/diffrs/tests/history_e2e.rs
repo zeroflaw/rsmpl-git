@@ -489,6 +489,17 @@ const CASES: &[Case] = &[
         root: false,
         expect_sem: 1,
     },
+    // 535425f (WI-1a F1): the move raiser used to cut the outline decl
+    // `mod sweep_tests;` as a bare `- I` bind while its `#[path = …]`
+    // line left as ordinary, and the raised patch failed `--check`.
+    // Outline decls are never cut items now — both decl lines stay
+    // ordinary and the raise verifies clean (10 semantic hunks).
+    Case {
+        commit: "535425fdbcfeb89be89595aac75709a0ee219f6a",
+        rev: None,
+        root: false,
+        expect_sem: 10,
+    },
 ];
 
 fn binary() -> PathBuf {

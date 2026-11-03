@@ -42,16 +42,21 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     }
     let mut items = Vec::new();
     for it in &file.items {
-        // WI-mod-content-cut + E2 slice 1: the scalar `- I` cut cannot
-        // isolate a content-bearing inline `mod` (it would match nested
-        // items too — `expected one match, found N`), so those stay
-        // ordinary. Method-bearing traits ARE eligible: the engine's
-        // `outermost_spans` keeps the outermost (trait) span for scalar
-        // cuts (probed `verified` for bare + `trait New { ... }`
-        // evolution pastes), so the cut isolates the whole trait.
-        // Empty `mod {}` / `mod;` still move. Mirrors the empty-only
-        // evolved `mod` narrowing (WI-8 slice 7); trait evolution now
-        // admits token-equal methods (E2 slice 1).
+        // WI-mod-content-cut + E2 slice 1 + WI-1a: the scalar `- I` cut
+        // cannot isolate a content-bearing inline `mod` (it would match
+        // nested items too — `expected one match, found N`), so those
+        // stay ordinary. Outline `mod X;` declarations are never cut
+        // items either (WI-1a: the F1 `535425f` shape cut
+        // `mod sweep_tests;` while its `#[path = …]` line left as
+        // ordinary, and the engine cannot match the bare cut at that
+        // range — decl renames raise via the `mod` intent, decl
+        // deletions stay ordinary). Method-bearing traits ARE eligible:
+        // the engine's `outermost_spans` keeps the outermost (trait)
+        // span for scalar cuts (probed `verified` for bare +
+        // `trait New { ... }` evolution pastes), so the cut isolates the
+        // whole trait. Empty `mod {}` still moves. Mirrors the
+        // empty-only evolved `mod` narrowing (WI-8 slice 7); trait
+        // evolution now admits token-equal methods (E2 slice 1).
         if !move_cut_eligible(it) {
             continue;
         }
@@ -72,7 +77,8 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     Some(items)
 }
 
-/// WI-mod-content-cut + E2 slice 1: scalar-cut eligibility for moves.
+/// WI-mod-content-cut + E2 slice 1 + WI-1a: scalar-cut eligibility for
+/// moves.
 ///
 /// The engine's `- I` cut matches nested items too (`collect_fns`
 /// recurses into inline `mod` content; `collect_impl_method_spans`
@@ -81,12 +87,18 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
 /// cuts as one capture (probed `verified`). Content-bearing `mod`
 /// still stays ordinary (nested `fn` items would also pair as
 /// independent moves, unlike trait methods which never move alone).
-/// Empty inline `mod {}` (`Some` empty), outline `mod;` (`None`),
+/// Outline `mod X;` declarations (`None` content) are never cut items
+/// (WI-1a): their attributes split across hunks, so the cited span
+/// cannot carry them whole, and the engine rejects the bare cut at
+/// that range (F1 `535425f`). Empty inline `mod {}` (`Some` empty)
 /// and all traits (empty or method-bearing) stay eligible.
 pub(crate) fn move_cut_eligible(it: &syn::Item) -> bool {
     match it {
         syn::Item::Mod(m) => match &m.content {
-            None => true,
+            // WI-1a: outline declarations never move via bind cuts —
+            // decl renames raise via the `mod` intent, decl deletions
+            // stay ordinary.
+            None => false,
             Some((_, inner)) => inner.is_empty(),
         },
         syn::Item::Trait(_) => true,
@@ -158,4 +170,51 @@ pub(crate) fn plus_run_is_item(body: &[String], first: usize, last: usize) -> bo
         return true;
     }
     super::move_attr::plus_run_is_attr_added_item(body, first, last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn outline_mod_decl_is_not_cut_eligible() {
+        // WI-1a (F1 `535425f`): `mod sweep_tests;` parses but yields no
+        // eligible move items — the raiser never cuts outline decls.
+        let items = minus_items_in(&body(&["-mod sweep_tests;"])).expect("parses");
+        assert_eq!(items.len(), 0);
+        let items = plus_items_in(&body(&["+mod sweep_tests;"])).expect("parses");
+        assert_eq!(items.len(), 0);
+    }
+
+    #[test]
+    fn empty_inline_mod_stays_eligible() {
+        // Guards over-correction: `mod m {}` keeps its move eligibility.
+        let items = minus_items_in(&body(&["-mod m {}"])).expect("parses");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].ident, "m");
+    }
+
+    #[test]
+    fn attributed_outline_mod_parses_but_declines() {
+        // The exact F1 minus shape: attr + decl parse as one item whose
+        // span covers both lines, but the outline decl is not cuttable.
+        let items = minus_items_in(&body(&[
+            "-#[path = \"sweep_tests.rs\"]",
+            "-mod sweep_tests;",
+        ]))
+        .expect("parses");
+        assert_eq!(items.len(), 0);
+    }
+
+    #[test]
+    fn plain_fn_stays_eligible() {
+        // The gate narrows only outline mods; ordinary items unaffected.
+        let items = minus_items_in(&body(&["-fn f() {}"])).expect("parses");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].ident, "f");
+    }
 }

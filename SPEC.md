@@ -4452,6 +4452,12 @@ This means:
 2. Bind that item as `Helper`.
 3. Remove it from `src/old.rs`.
 
+Not every named item can be cut: an outline `mod X;` declaration (no
+body in the citing file) is never a cut item (WI-1a) — its attributes
+split across hunks, so the cited span cannot carry them whole. A
+`mod old;` → `mod new;` rename raises via the `mod` intent; a deleted
+declaration stays ordinary.
+
 ### 20.2 Paste item
 
 ```diff
@@ -9555,7 +9561,9 @@ every length and the totals stay the default truth at any size.
    (ident-less impl/use/macro stay ordinary; content-bearing inline `mod`
    (≥1 nested item) and method-bearing `trait` (any trait item) stay
    ordinary — the scalar `- I` cut would match the nested items too;
-   empty `mod {}` / `mod;` / empty trait still move),
+   empty `mod {}` / empty trait still move; outline `mod;` declarations
+   never move via bind cuts (WI-1a — decl renames raise via the `mod`
+   intent, decl deletions stay ordinary)),
   global N-minus + M-plus pairing (one cut per surviving minus item sharing
   its bind across its pastes; duplicate plus-run claims dedup to the first
   pair in document order, the rest stay ordinary), cut-file pre-image flat-ws uniqueness (twin

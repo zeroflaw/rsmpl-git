@@ -500,6 +500,40 @@ mod tests {
     }
 
     #[test]
+    fn outline_mod_decl_never_cuts() {
+        // WI-1a (F1 `535425f`): a deleted outline `mod sweep_tests;`
+        // facing an added outline `mod methods_ref_strip;` is a
+        // rename-only evolved hit, but the decl is not a cut item — the
+        // sweep declines the pair while the carrying big move still
+        // fires, and both decl lines stay ordinary.
+        let big = big_fn("big");
+        let a_old = format!("{big}fn keep() {{}}\nmod sweep_tests;\nfn tail() {{}}\n");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let a = format!(
+            "diff --git m.rs\n--- a/m.rs\n+++ b/m.rs\n@@ -1,42 +1,0 @@\n{a_minus}@@ -44,1 +44,0 @@\n-mod sweep_tests;\n@@ -45,0 +46,1 @@\n+mod methods_ref_strip;\n@@ -46,0 +47,42 @@\n{b_plus}"
+        );
+        let pre = pre_map(&[("m.rs", &a_old)]);
+        let mut used = Vec::new();
+        let out = try_move_sweep(&[a], &pre, &mut used).expect("big move carries T375");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "big cut missing, got:\n{text}");
+        assert!(
+            text.contains("-mod sweep_tests;"),
+            "decl minus must stay ordinary, got:\n{text}"
+        );
+        assert!(
+            text.contains("+mod methods_ref_strip;"),
+            "decl plus must stay ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+ mod methods_ref_strip { ... }"),
+            "no evolved mod paste, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
     fn move_non_fn_struct_fires() {
         // T432a: named non-fn items (struct/enum/...) move like fns.
         let body: String = (0..40).map(|i| format!("    f{i}: u32,\n")).collect();
