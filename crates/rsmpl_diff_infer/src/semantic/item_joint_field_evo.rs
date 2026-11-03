@@ -737,4 +737,79 @@ mod tests {
             out.unwrap_or_default()
         );
     }
+
+    #[test]
+    fn struct_evo_cross_file_use_joint_fires() {
+        // WI-12 slice 5: def + field-type evo in one file, the rename
+        // use in another — the workspace claim machinery carries it as
+        // one joint (single follow hunk at the def; the follow rewrites
+        // the use file at apply time). The member itself stays
+        // same-file by the container law.
+        let sections = [
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n-struct Old {\n-    x: u32,\n+struct New {\n+    x: u64,\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n"
+                .to_string(),
+        ];
+        let pre = std::collections::HashMap::from([
+            (
+                "a.rs".to_string(),
+                "struct Old {\n    x: u32,\n}\n".to_string(),
+            ),
+            ("b.rs".to_string(), "fn f(s: Old) {\n}\n".to_string()),
+        ]);
+        let out = super::super::infer_semantic_with_pre_images(&sections, &pre)
+            .expect("struct evo cross-file joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- struct Old"), "got:\n{out}");
+        assert!(out.contains("+ struct New"), "got:\n{out}");
+        assert!(out.contains("x: u64"), "got:\n{out}");
+        assert_eq!(out.matches("rule=r1").count(), 1, "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(
+            files["a.rs"].contains("struct New"),
+            "got: {}",
+            files["a.rs"]
+        );
+        assert!(files["a.rs"].contains("x: u64"), "got: {}", files["a.rs"]);
+        assert!(files["b.rs"].contains("s: New"), "got: {}", files["b.rs"]);
+        assert!(!files["a.rs"].contains("Old"), "got: {}", files["a.rs"]);
+        assert!(!files["b.rs"].contains("Old"), "got: {}", files["b.rs"]);
+    }
+
+    #[test]
+    fn enum_evo_cross_file_use_joint_fires() {
+        // WI-12 slice 5: enum half of the same law — def +
+        // variant-evolution in one file, the rename use in another.
+        let sections = [
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n-enum Old {\n-    A(u32),\n+enum New {\n+    A(u64),\n"
+                .to_string(),
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1,1 +1,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n"
+                .to_string(),
+        ];
+        let pre = std::collections::HashMap::from([
+            (
+                "a.rs".to_string(),
+                "enum Old {\n    A(u32),\n}\n".to_string(),
+            ),
+            ("b.rs".to_string(), "fn f(v: Old) {\n}\n".to_string()),
+        ]);
+        let out = super::super::infer_semantic_with_pre_images(&sections, &pre)
+            .expect("enum evo cross-file joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- enum Old"), "got:\n{out}");
+        assert!(out.contains("+ enum New"), "got:\n{out}");
+        assert!(out.contains("A(u64)"), "got:\n{out}");
+        assert_eq!(out.matches("rule=r1").count(), 1, "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emits parseable patch");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("joint applies");
+        assert!(files["a.rs"].contains("enum New"), "got: {}", files["a.rs"]);
+        assert!(files["a.rs"].contains("A(u64)"), "got: {}", files["a.rs"]);
+        assert!(files["b.rs"].contains("v: New"), "got: {}", files["b.rs"]);
+        assert!(!files["a.rs"].contains("Old"), "got: {}", files["a.rs"]);
+        assert!(!files["b.rs"].contains("Old"), "got: {}", files["b.rs"]);
+    }
 }
