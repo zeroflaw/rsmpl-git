@@ -634,6 +634,123 @@ fn plain_rename_without_uses_reports_no_orphans() {
     assert!(report.rules[0].orphans.is_empty());
 }
 
+// Pass-0 follow scoping: an ordinary-only `.rs` target is parsed for
+// search, so `# follow=uses` rewrites its uses alongside its ordinary
+// edit. Before the fix the uses stayed silently stale (no orphans, no
+// follow-skips naming them).
+
+const XFOLLOW_ORDINARY_PATCH: &str = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,1 @@ rule=rename\n# follow=uses\n- struct Old\n+ struct New\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -3,1 +3,1 @@\n-// note\n+// edited\n";
+
+#[test]
+fn ordinary_only_target_joins_follow_domain() {
+    let (files, report) = apply_multi_report(
+        XFOLLOW_ORDINARY_PATCH,
+        vec![
+            ("src/a.rs", "pub struct Old;\n"),
+            (
+                "src/b.rs",
+                "use crate::Old;\nfn f(x: Old) -> Old {\n// note\n    x\n}\n",
+            ),
+        ],
+    )
+    .unwrap();
+    assert_eq!(files["src/a.rs"], "pub struct New;\n");
+    assert_eq!(
+        files["src/b.rs"],
+        "use crate::New;\nfn f(x: New) -> New {\n// edited\n    x\n}\n"
+    );
+    // Def entry plus a follow-only entry for the ordinary-only file.
+    assert_eq!(report.rules.len(), 2, "report: {:?}", report.rules);
+    let extra = &report.rules[1];
+    assert_eq!(
+        (extra.rule.as_str(), extra.file.as_str()),
+        ("rename", "src/b.rs")
+    );
+    assert_eq!(extra.matches, 3, "report: {extra:?}");
+    assert_eq!(extra.spans.len(), 3);
+}
+
+// Ordinary-only target that does not parse: the ordinary hunk must
+// address its real lines, and the unsearched `old` mention fails loud
+// without `# fallback=syntax` — never silently stale.
+
+const XFOLLOW_UNPARSEABLE_PATCH: &str = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,1 @@ rule=rename\n# follow=uses\n- struct Old\n+ struct New\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -1,1 +1,1 @@\n-this is not rust {{{\n+fixed line\n";
+
+#[test]
+fn follow_unparseable_ordinary_target_fails_loud() {
+    let err = apply_multi_report(
+        XFOLLOW_UNPARSEABLE_PATCH,
+        vec![
+            ("src/a.rs", "pub struct Old;\n"),
+            ("src/b.rs", "this is not rust {{{\nOld\n"),
+        ],
+    )
+    .unwrap_err();
+    assert!(err.contains("RSMPL_SYMBOL_CONFLICT"), "got: {err}");
+    assert!(err.contains("src/b.rs"), "got: {err}");
+}
+
+#[test]
+fn follow_unparseable_ordinary_target_skips_with_fallback() {
+    let patch =
+        XFOLLOW_UNPARSEABLE_PATCH.replace("# follow=uses\n", "# follow=uses\n# fallback=syntax\n");
+    let (files, report) = apply_multi_report(
+        &patch,
+        vec![
+            ("src/a.rs", "pub struct Old;\n"),
+            ("src/b.rs", "this is not rust {{{\nOld\n"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(files["src/a.rs"], "pub struct New;\n");
+    // Ordinary edit lands; the unsearched use stays and is listed.
+    assert!(
+        files["src/b.rs"].contains("Old"),
+        "got: {}",
+        files["src/b.rs"]
+    );
+    assert!(
+        files["src/b.rs"].contains("fixed line"),
+        "got: {}",
+        files["src/b.rs"]
+    );
+    let listed: Vec<&str> = report
+        .rules
+        .iter()
+        .flat_map(|r| r.follow_skipped_details.iter().map(|s| s.file.as_str()))
+        .collect();
+    assert!(listed.contains(&"src/b.rs"), "report: {:?}", report.rules);
+}
+
+#[test]
+fn follow_ordinary_target_bypass_preserved() {
+    // The follow-parsed file keeps the T137 plain-text law: an ordinary
+    // edit that breaks the parse still applies (no new reparse veto),
+    // while the follow uses still rewrite.
+    let patch = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,1 @@ rule=rename\n# follow=uses\n- struct Old\n+ struct New\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -4,1 +4,1 @@\n-    x\n+    x {{\n";
+    let (files, _) = apply_multi_report(
+        patch,
+        vec![
+            ("src/a.rs", "pub struct Old;\n"),
+            (
+                "src/b.rs",
+                "use crate::Old;\nfn f(x: Old) -> Old {\n    // note\n    x\n}\n",
+            ),
+        ],
+    )
+    .unwrap();
+    assert!(
+        files["src/b.rs"].contains("x: New"),
+        "got: {}",
+        files["src/b.rs"]
+    );
+    assert!(
+        files["src/b.rs"].contains("x {{"),
+        "got: {}",
+        files["src/b.rs"]
+    );
+}
+
 #[test]
 fn follow_hunk_carries_no_orphans() {
     let (_, report) = apply_multi_report(

@@ -11,7 +11,7 @@
 //!   per-file edit list (original coordinates), resolving `# use=` pastes.
 //! - Finally: overlap-check, materialize, reparse-validate, report.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rsmpl_patch::{ErrorCode, Hunk, Patch, Scope, StructuredError};
 use rsmpl_pattern::PatternKind;
@@ -93,6 +93,10 @@ fn apply_inner(
     // Files that look like Rust but do not parse: the follow step applies
     // the `raw_mentions` tripwire (veto/skip when the text names `old`).
     let mut unparseable: Vec<(String, String)> = Vec::new();
+    // Ordinary-only targets parsed only because the patch carries
+    // `# follow=uses` (pass-0 follow scoping): they join the follow
+    // search domain but keep the T137 plain-text law in pass 3.
+    let mut follow_parsed: HashSet<String> = HashSet::new();
     for section in &patch.files {
         let path = section.target_path.clone();
         if states.contains_key(&path) {
@@ -127,6 +131,23 @@ fn apply_inner(
                     "fix the Rust syntax error in the target file first (ordinary hunks bypass the Rust parse)",
                 ))
             })?)
+        } else if patch_has_follow && path.ends_with(".rs") {
+            // Pass-0 follow scoping: an ordinary-only `.rs` target is
+            // parsed for search only. Failure falls back to `None`
+            // (ordinary still applies as plain text) and joins the
+            // `unparseable` tripwire so an unsearched `old` mention
+            // stays loud instead of silently stale. Non-`.rs` targets
+            // are never searched (SPEC 14.8) and keep skipping.
+            match syn::parse_str(&original) {
+                Ok(parsed) => {
+                    follow_parsed.insert(path.clone());
+                    Some(parsed)
+                }
+                Err(_) => {
+                    unparseable.push((path.clone(), original.clone()));
+                    None
+                }
+            }
         } else {
             None
         };
@@ -996,7 +1017,10 @@ fn apply_inner(
 
     // ---- Pass 3: overlap check, materialize, reparse-validate. ----
     // T137: ordinary-only files (`parsed.is_none()`) skip the Rust
-    // reparse — they are plain text, not Rust.
+    // reparse — they are plain text, not Rust. Files parsed only for
+    // follow search (`follow_parsed`) keep the same skip: their
+    // ordinary edits stay bypassed and their follow edits are proven
+    // by the resolver plus the follow span probe instead.
     for (path, state) in &states {
         let edits = file_edits.remove(path).unwrap_or_default();
         if edits.is_empty() {
@@ -1018,7 +1042,7 @@ fn apply_inner(
         // construction, SPEC 24.6); the trust gates are reparse +
         // postcondition below, both of which fail loud on real input.
         let updated = apply_edits(&state.original, edits).map_err(|e| e.with_file(path))?;
-        if state.parsed.is_some() {
+        if state.parsed.is_some() && !follow_parsed.contains(path) {
             syn::parse_str::<syn::File>(&updated).map_err(|e| {
                 StructuredError::new(
                     ErrorCode::ParseConflict,

@@ -134,7 +134,10 @@ impl LineIndex {
 /// `parsed` is `None` for ordinary-only files (T137): a file touched by
 /// no RSmPL hunk is plain text — no Rust parse of the original or the
 /// rewritten file. Any file with >=1 RSmPL hunk keeps `Some` and the
-/// current strict Rust behavior.
+/// current strict Rust behavior. Exception: when the patch carries
+/// `# follow=uses`, an ordinary-only `.rs` target is parsed for search
+/// only (pass-0 follow scoping) — the rewritten file still skips the
+/// reparse, so the ordinary bypass holds for it.
 pub(crate) struct FileState {
     pub(crate) original: String,
     pub(crate) index: LineIndex,

@@ -1307,6 +1307,11 @@ A file section touched only by ordinary hunks is language-agnostic
 Rust reparse of the rewritten file, so Markdown, Cargo.toml / .toml configs, and any other
 plain text flow through the same tool. Any section whose file carries
 >=1 RSmPL hunk requires the target to parse as Rust (Section 25.2).
+Exception: when the patch carries `# follow=uses`, an ordinary-only
+`.rs` target is parsed for follow search only — the rewritten file
+still skips the reparse, so the ordinary bypass holds for it; an
+ordinary-only target that does not parse stays unsearched and its
+`old` mentions ride the unparseable tripwire (Section 14.8).
 
 ---
 
