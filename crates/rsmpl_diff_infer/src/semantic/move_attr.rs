@@ -16,10 +16,10 @@
 //! Scope is deliberately narrow: any move-eligible item kind, exactly
 //! one added single `#[...]` attr (one line, or one balanced attr
 //! spanning up to `MAX_ATTR_LINES` lines — slice 5) or one `///` line.
-//! Removed / replaced attrs, two added attrs, multi-line docs,
-//! `/* */` / `//!` docs all decline to ordinary (pinned below; slice 4
-//! proves the removed mirror needs engine work — the whole-span cut law
-//! — so it stays ordinary by construction). Slices 7–8 extend the added
+//! Two added attrs, multi-line docs, `/* */` / `//!` docs all decline to
+//! ordinary (pinned below). Removed / replaced bare at prefix position
+//! now fires via the E1 sub-span cut (owner: `move_attr_removed.rs` —
+//! thin flip pins below, shape pins there). Slices 7–8 extend the added
 //! axis to move+rename (bare minus, one added leading block, renamed
 //! item): `fn` in slice 7, every other move-eligible kind in slice 8,
 //! empty `trait` in slice 9 —
@@ -29,8 +29,8 @@
 //! engine-owned). Slice 10 closes the added axis: the struct arm admits
 //! a vis delta riding with rename+attr, and the rename-only
 //! method-bearing trait twin is pinned ordinary. The remaining axes
-//! (removed/replaced ± rename, method-bearing trait moves) are
-//! engine-owned (whole-span cut law) and stay ordinary by construction.
+//! (removed/replaced + rename, interior attr deltas, method-bearing
+//! trait moves) stay ordinary by construction (owners: E1 follow-ups).
 
 use syn::spanned::Spanned;
 
@@ -47,7 +47,7 @@ const MAX_ATTR_LINES: usize = 10;
 /// absorbs any textual false positive (unbalanced text never spans as
 /// one attr+item), so a hostile interior stays ordinary rather than
 /// misfiring.
-fn is_balanced_single_attr(lines: &[&str]) -> bool {
+pub(crate) fn is_balanced_single_attr(lines: &[&str]) -> bool {
     if lines.is_empty() {
         return false;
     }
@@ -361,8 +361,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "single-line attr-replaced fn move must stay ordinary (engine span law)"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: fn replaced now fires via sub-span cut"
         );
     }
 
@@ -386,8 +386,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "struct attr-replaced move must stay ordinary (engine span law)"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: struct replaced now fires via sub-span cut"
         );
     }
 
@@ -423,8 +423,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "multi-line minus replaced attr must stay ordinary"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: multi-line-minus replaced now fires via sub-span cut"
         );
     }
 
@@ -442,8 +442,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "doc-replaced move must stay ordinary"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: doc replaced now fires via sub-span cut"
         );
     }
 
@@ -468,10 +468,10 @@ mod tests {
     #[test]
     fn attr_replaced_multi_item_partial_fires() {
         // Two-item minus hunk with one replaced member: the replaced
-        // member forms no pair (span law) but the byte-identical
+        // member forms no pair (prefix-only stripped cut, E1 slice 1 —
+        // interior attrs stay ordinary) but the byte-identical
         // companion still moves — partial rescue. `aaa` rides
         // cut+paste while `bbb` (both attrs + body) stays ordinary on
-        // both sides.
         let big_a = big_fn("aaa");
         let big_b = big_fn("bbb");
         let minus_b = format!("#[allow(dead_code)]\n{big_b}");
@@ -521,8 +521,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "ident-mentioning replaced attrs must stay ordinary"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: ident-mention replaced now fires via sub-span cut"
         );
     }
 
@@ -544,8 +544,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "removed attr must stay ordinary"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: fn removed now fires via sub-span cut"
         );
     }
 
@@ -1068,8 +1068,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "doc-removed move must stay ordinary (engine span law)"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: struct doc-removed now fires via sub-span cut"
         );
     }
 
@@ -1100,8 +1100,8 @@ mod tests {
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "multi-line removed attr must stay ordinary"
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_some(),
+            "E1 slice 1: multi-line removed now fires via sub-span cut"
         );
     }
 

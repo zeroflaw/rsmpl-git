@@ -39,6 +39,68 @@ pub(crate) fn find_item_targets(
     candidates.dedup();
     candidates
 }
+/// E1 slice 1: attr-stripped sub-span cut target (move-cut-only).
+///
+/// When a top-level item carries exactly one outer attr (`#[...]`
+/// single-line, single `///`, or one balanced multi-line), a cut citing
+/// exactly the stripped span (attr lines excluded, item end unchanged)
+/// matches here. The caller (`plan_cut`) captures/deletes only the
+/// stripped lines; the attr line rides an ordinary hunk the raiser emits
+/// alongside. Bare `- I` deletion never consults this (whole-item law
+/// stays).
+pub(crate) fn find_stripped_item_target(
+    parsed: &syn::File,
+    old_start: u32,
+    old_len: u32,
+) -> Option<(u32, u32)> {
+    if old_len == 0 {
+        return None;
+    }
+    let old_end = old_start + old_len - 1;
+    for c in collect_fns(parsed) {
+        if c.item.attrs.len() != 1 {
+            continue;
+        }
+        let attr_end = c.item.attrs[0].span().end().line as u32;
+        let stripped = attr_end + 1;
+        if stripped == old_start && c.end_line == old_end && c.start_line < stripped {
+            return Some((stripped, c.end_line));
+        }
+    }
+    for it in &parsed.items {
+        if matches!(it, syn::Item::Fn(_)) {
+            continue;
+        }
+        let attrs: &[syn::Attribute] = match it {
+            syn::Item::Const(i) => &i.attrs,
+            syn::Item::Enum(i) => &i.attrs,
+            syn::Item::ExternCrate(i) => &i.attrs,
+            syn::Item::ForeignMod(i) => &i.attrs,
+            syn::Item::Impl(i) => &i.attrs,
+            syn::Item::Macro(i) => &i.attrs,
+            syn::Item::Mod(i) => &i.attrs,
+            syn::Item::Static(i) => &i.attrs,
+            syn::Item::Struct(i) => &i.attrs,
+            syn::Item::Trait(i) => &i.attrs,
+            syn::Item::TraitAlias(i) => &i.attrs,
+            syn::Item::Type(i) => &i.attrs,
+            syn::Item::Union(i) => &i.attrs,
+            syn::Item::Use(i) => &i.attrs,
+            _ => continue,
+        };
+        if attrs.len() != 1 {
+            continue;
+        }
+        let s = it.span().start().line as u32;
+        let e = it.span().end().line as u32;
+        let attr_end = attrs[0].span().end().line as u32;
+        let stripped = attr_end + 1;
+        if stripped == old_start && e == old_end && s < stripped && stripped <= e {
+            return Some((stripped, e));
+        }
+    }
+    None
+}
 
 /// Delete the single matched item for a bare `- I` hunk (SPEC 18.2).
 pub fn apply_item_delete(
@@ -333,5 +395,26 @@ mod tests {
         let (code, w) = wi18_fn_item_repair(&err);
         assert_eq!(code, "fn-dispatch-insertion-template");
         assert!(w.contains("@@ -N,0 @@"), "got: {w}");
+    }
+
+    #[test]
+    fn e1_stripped_single_attr_fn_matches_bare_span() {
+        // `#[inline]` + `fn foo`: the bare span (2..=2) matches stripped,
+        // while the whole-span Contained probe sees nothing there.
+        let src = "#[inline]\nfn foo() {}\n";
+        let parsed: syn::File = syn::parse_str(src).expect("src parses");
+        assert!(super::find_item_targets(&parsed, rsmpl_patch::Scope::Contained, 2, 1).is_empty());
+        assert_eq!(
+            super::find_stripped_item_target(&parsed, 2, 1),
+            Some((2, 2))
+        );
+    }
+
+    #[test]
+    fn e1_stripped_two_attrs_decline() {
+        // Exactly one attr: two leading attrs never strip.
+        let src = "#[inline]\n#[allow(dead_code)]\nfn foo() {}\n";
+        let parsed: syn::File = syn::parse_str(src).expect("src parses");
+        assert_eq!(super::find_stripped_item_target(&parsed, 3, 1), None);
     }
 }

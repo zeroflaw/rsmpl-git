@@ -9568,16 +9568,17 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     plus the empty-items gate, never the byte guard). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
-    mods still decline via the shared cut gate. Removed / replaced attrs, two added attrs, `//!` / `/* */`
-    docs, removed+rename, replaced+rename, and two-added+rename stay
-    ordinary — removed/replaced by
-    construction under the engine whole-span cut law (slice 4: `- I`
-    matches the full item span including attrs, so a bare-span cut
-    matches nothing while a full-span cut captures the attr a bare
-    paste would replay; stripping needs sub-span-cut or
-    strip-on-paste engine work; slice 6 proves the replaced axis hits
-    the same wall — a bare-pair attempt failed `validated_live` with
-    `no match found` on both `fn` and `struct`, then reverted).
+    mods still decline via the shared cut gate. Two added attrs, `//!` /
+    `/* */` docs, removed+rename, replaced+rename, two-added+rename, and
+    interior (non-prefix) attr deltas stay ordinary — removed+rename /
+    replaced+rename need stripped evolved matchers (a later slice);
+    interior deltas stay ordinary by the prefix-only rule (an interior
+    attr would strand as uncovered non-blank and veto the sweep,
+    losing the companions' partial rescue). Removed / replaced bare at
+    prefix position fires via the E1 sub-span cut: `- I` cites the
+    stripped span (new `find_stripped_item_target`, move-cut-only) with
+    the old block as an ordinary minus prefix (removed) or ordinary
+    prefixes on both sides (replaced) around a bare `+ M1` paste.
        Everything else (other item kinds, other attr deltas, vis+body combos
        without a signature delta, two-slot signature+body combos,
        trait-`impl` moves, shadowed-body

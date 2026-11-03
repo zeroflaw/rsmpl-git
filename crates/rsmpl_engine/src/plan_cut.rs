@@ -73,12 +73,24 @@ pub(crate) fn run_pass1(
             let parsed = state.parsed.as_ref().expect(
                 "T137: RSmPL cut hunk on a file with no parsed AST (ordinary-only files carry no semantic hunks)",
             );
-            let targets = matcher_fn::find_item_targets(
+            let mut targets = matcher_fn::find_item_targets(
                 parsed,
                 rh.scope(),
                 rh.header.old_start,
                 rh.header.old_len,
             );
+            // E1 slice 1: sub-span move cut (stripped attr lines excluded).
+            // Scalar `# bind=` cuts only; collection/deletion paths keep
+            // every span by design.
+            if targets.is_empty() && rh.allow() != rsmpl_patch::Allow::Many {
+                if let Some(stripped) = crate::matcher_fn_item::find_stripped_item_target(
+                    parsed,
+                    rh.header.old_start,
+                    rh.header.old_len,
+                ) {
+                    targets = vec![stripped];
+                }
+            }
             let range_desc = format!(
                 "{}..{}",
                 rh.header.old_start,

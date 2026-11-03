@@ -108,6 +108,15 @@ pub(crate) fn try_move_sweep(
                 // WI-8a + WI-8 slices 1-9: no byte-identical run — the
                 // evolved-header cascade lives in `move_pair_evolve`
                 // (D5 split; push order preserved for run-dedup).
+                // E1 slice 1: stripped minus remainder vs bare plus run
+                // (removed bare; replaced bare composes via the plus-side
+                // added prefix check; rename twins stay ordinary).
+                pairs.extend(super::move_attr_removed::removed_pairs_for_item(
+                    item,
+                    &parsed[..],
+                    &plus_hunks[..],
+                    (*msi, *mhi),
+                ));
                 pairs.extend(super::move_pair_evolve::evolved_pairs_for_item(
                     item,
                     &parsed[..],
