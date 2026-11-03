@@ -115,15 +115,18 @@ pub(crate) fn prefix_qual(qual: &str, callee: &str) -> String {
 /// WI-4b uniform arg-evolution template over the non-def pairs
 /// (indices `!= def_idx`): every call renames old→new with an equal
 /// qualifier and equal turbofish, with uniform arity on both sides,
-/// in one of two shapes — trailing-add (every plus side extends the
+/// in one of three shapes — trailing-add (every plus side extends the
 /// token-identical minus prefix by the same non-empty concrete
-/// suffix) or trailing-retype (WI-8 slice 3; same arity, leading
-/// args token-identical per call and hole-bound, trailing suffix
-/// uniform concrete on both sides and differing). Returns the
-/// `(call_minus, call_plus)` pattern pair, or `None` on any hetero
-/// shape (prefix rewrite, hetero suffix/arity/qual/turbo, deletion,
-/// varying-value retype — suppressed, pinned). WI-4f reuses it for
-/// the workspace B1 gate over cross-file claims.
+/// suffix), trailing-drop (WI-8 slice 7; mirror — every plus side is
+/// the token-identical minus prefix, the same non-empty concrete
+/// suffix rides every minus side), or trailing-retype (WI-8 slice 3;
+/// same arity, leading args token-identical per call and hole-bound,
+/// trailing suffix uniform concrete on both sides and differing).
+/// Returns the `(call_minus, call_plus)` pattern pair, or `None` on
+/// any hetero shape (prefix rewrite, hetero suffix/arity/qual/turbo,
+/// non-trailing or hetero drop, varying-value retype — suppressed,
+/// pinned). WI-4f reuses it for the workspace B1 gate over
+/// cross-file claims.
 pub(crate) fn arg_add_template(
     flat: &[FlatPair],
     def_idx: usize,
@@ -222,6 +225,32 @@ pub(crate) fn arg_add_template(
             ));
         }
         return None;
+    }
+    if minus_len > plus_len {
+        // Trailing-drop (WI-8 slice 7): mirror of trailing-add — the
+        // plus prefix is token-identical per call and hole-bound; one
+        // shared concrete dropped suffix rides every minus side.
+        for c in &calls {
+            if !c.plus.iter().zip(c.minus.iter()).all(|(a, b)| a == b) {
+                return None;
+            }
+        }
+        let dropped: Vec<String> = first.minus[plus_len..].to_vec();
+        if dropped.is_empty() {
+            return None;
+        }
+        if !calls.iter().all(|c| c.minus[plus_len..] == dropped) {
+            return None;
+        }
+        return Some(render_call_template(
+            &first.qual,
+            &first.turbo,
+            old,
+            new,
+            plus_len,
+            &dropped,
+            &[],
+        ));
     }
     None
 }
@@ -392,13 +421,52 @@ mod tests {
     #[test]
     fn retype_hetero_vetoes() {
         // Non-uniform suffixes, varying-value retypes (no uniform
-        // concrete to state), deletions, and mixed arities each
-        // decline — suppressed downstream, pinned.
+        // concrete to state), and mixed arities each decline —
+        // suppressed downstream, pinned. (WI-8 slice 7: the uniform
+        // trailing-drop twin now fires, pinned by drop_template_fires.)
         for (minus0, plus0, minus1, plus1) in [
             ("foo(1, 2);", "bar(1, 2u32);", "foo(3, 2);", "bar(3, 3u32);"),
             ("foo(1);", "bar(1u32);", "foo(2);", "bar(2u32);"),
-            ("foo(1, 0);", "bar(1);", "foo(2, 0);", "bar(2);"),
             ("foo(1);", "bar(1, 0);", "foo(2, 3);", "bar(2, 3);"),
+        ] {
+            let flat = vec![def_pair(), pair(minus0, plus0), pair(minus1, plus1)];
+            assert_eq!(arg_add_template(&flat, 0, "foo", "bar"), None);
+        }
+    }
+
+    #[test]
+    fn drop_template_fires() {
+        // WI-8 slice 7: mirror of the add law — hole-bound prefix plus
+        // the shared concrete dropped suffix.
+        let flat = vec![
+            def_pair(),
+            pair("foo(1, 0);", "bar(1);"),
+            pair("foo(2, 0);", "bar(2);"),
+        ];
+        assert_eq!(
+            arg_add_template(&flat, 0, "foo", "bar"),
+            Some(("foo(E0, 0)".to_string(), "bar(E0)".to_string()))
+        );
+        // Fully concrete drop (no hole) fires too.
+        let flat = vec![
+            def_pair(),
+            pair("foo(0);", "bar();"),
+            pair("foo(0);", "bar();"),
+        ];
+        assert_eq!(
+            arg_add_template(&flat, 0, "foo", "bar"),
+            Some(("foo(0)".to_string(), "bar()".to_string()))
+        );
+    }
+
+    #[test]
+    fn drop_hetero_vetoes() {
+        // Hetero dropped suffixes, prefix rewrites under a shrink, and
+        // mixed shrink arities each decline — suppressed, pinned.
+        for (minus0, plus0, minus1, plus1) in [
+            ("foo(1, 0);", "bar(1);", "foo(2, 1);", "bar(2);"),
+            ("foo(1, 0);", "bar(9);", "foo(2, 0);", "bar(2);"),
+            ("foo(1, 0);", "bar(1);", "foo(2, 0, 0);", "bar(2);"),
         ] {
             let flat = vec![def_pair(), pair(minus0, plus0), pair(minus1, plus1)];
             assert_eq!(arg_add_template(&flat, 0, "foo", "bar"), None);

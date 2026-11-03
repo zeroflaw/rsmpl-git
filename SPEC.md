@@ -2266,8 +2266,8 @@ joined with its call-callee uses in the same file. Three shapes fire.
 Joint-A (rename+vis/qual/params/return with at most two slots evolving
 and callee-only calls) emits the single header-pair hunk with `# sweep`
 + `# follow=uses` carrying both deltas. Joint-B1
-(rename+params-evolve with uniform arg-adding or
-uniform trailing-retype calls) and
+(rename+params-evolve with uniform arg-adding, uniform
+trailing-drop, or uniform trailing-retype calls) and
 Joint-B2 (rename+attr add/remove with uniform callee-only calls) emit
 two hunks under one shared rule — the def hunk (header pair rebuilt
 from native lines, attr line on its own `+`/`-` line for B2) plus the

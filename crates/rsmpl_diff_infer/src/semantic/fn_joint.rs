@@ -1170,6 +1170,43 @@ mod tests {
     }
 
     #[test]
+    fn joint_b1_argdrop_fires_shared_rule() {
+        // WI-8 slice 7: rename+param-drop with uniform arg-dropping
+        // calls raises to the shared-rule two-hunk B1 at N=2 and N=1
+        // (mirror of the trailing-add shape; workspace inherits via
+        // the shared `arg_add_template`).
+        for (pre_text, body, post) in [
+            (
+                "fn foo(x: i32, y: i32) {\n    x\n}\nfn m() {\n    foo(1, 0);\n    foo(2, 0);\n}\n",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32, y: i32) {\n+fn bar(x: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 0);\n-    foo(2, 0);\n+    bar(1);\n+    bar(2);\n",
+                "fn bar(x: i32) {\n    x\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            ),
+            (
+                "fn foo(x: i32, y: i32) {\n    x\n}\nfn m() {\n    foo(1, 0);\n}\n",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32, y: i32) {\n+fn bar(x: i32) {\n@@ -5,1 +5,1 @@\n-    foo(1, 0);\n+    bar(1);\n",
+                "fn bar(x: i32) {\n    x\n}\nfn m() {\n    bar(1);\n}\n",
+            ),
+        ] {
+            let sections = vec![section("src.rs", body)];
+            let pre = pre_map(&[("src.rs", pre_text)]);
+            let out = infer_semantic_with_pre_images(&sections, &pre)
+                .unwrap_or_else(|| panic!("B1 arg-drop must fire for {body}"));
+            assert!(
+                out.matches("rule=r1").count() >= 2,
+                "both hunks share one rule for {body}, got:\n{out}"
+            );
+            assert!(!out.contains("follow=uses"), "no follow in a joint");
+            assert!(out.contains("- foo(E0, 0)"), "call template minus");
+            assert!(out.contains("+ bar(E0)"), "call template plus");
+            validated_live(&out, &pre);
+            let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+            let mut files = pre.clone();
+            rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+            assert_eq!(files["src.rs"], post, "B1 arg-drop must round-trip");
+        }
+    }
+
+    #[test]
     fn joint_b1_zero_prefix_and_qualified_fire() {
         // Zero-prefix addition (`foo()` → `bar(false)`) and qualified
         // uniform calls (`crate::m::foo(1)` → `crate::m::bar(1, 0)`)
@@ -1307,8 +1344,8 @@ mod tests {
             "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32, y: i32) -> u32 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
             // Non-uniform trailing retype (WI-8 slice 3).
             "@@ -1,1 +1,1 @@\n-fn foo(a: i32, b: i32) {\n+fn bar(a: i32, b: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 2);\n-    foo(3, 2);\n+    bar(1, 2u32);\n+    bar(3, 3u32);\n",
-            // Arg deletion is never a B1 evolution.
-            "@@ -1,1 +1,1 @@\n-fn foo(x: i32, y: i32) {\n+fn bar(x: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 0);\n-    foo(2, 0);\n+    bar(1);\n+    bar(2);\n",
+            // Hetero dropped suffix (WI-8 slice 7: uniform drops fire).
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32, y: i32) {\n+fn bar(x: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 0);\n-    foo(2, 0);\n+    bar(1);\n+    bar(2, 0);\n",
         ] {
             let sections = vec![section("src.rs", body)];
             let pre = pre_map(&[("src.rs", pre)]);
