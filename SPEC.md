@@ -7921,7 +7921,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   hunks under one shared rule with `# sweep` and no follow. B1
   (rename+param-add): the def hunk is exactly the header pair (name
   delta, params evolve, return preserved, vis closed-set and
-  preserved, qual/generics/where preserved) and every call pair
+  preserved, qual may evolve alongside params (WI-8 slice 6),
+  generics/where preserved) and every call pair
   anti-unifies to one uniform arg-add template (N≥2, equal
   qualifier/turbofish, token-identical E-prefix, one shared concrete
   trailing suffix: `- foo(E0)` / `+ bar(E0, 0)`). B2 (rename+attr):

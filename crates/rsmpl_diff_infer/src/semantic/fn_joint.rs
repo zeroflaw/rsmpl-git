@@ -1244,9 +1244,51 @@ mod tests {
     }
 
     #[test]
+    fn joint_b1_qual_argadd_fires() {
+        // WI-8 slice 6: rename + qual-run + param-add with uniform
+        // arg-adding calls raises to the shared-rule two-hunk B1 at
+        // N=2 and N=1 (single-file; workspace inherits via the shared
+        // `header_argadd_gates`). Vis + arg-add stays vetoed (pinned
+        // in the hetero test); qual + return + arg-add triples veto.
+        for (pre_text, body, post) in [
+            (
+                "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+                "async fn bar(x: i32, y: i32) {\n    x\n}\nfn m() {\n    bar(1, 0);\n    bar(2, 0);\n}\n",
+            ),
+            (
+                "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n}\n",
+                "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32, y: i32) {\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1, 0);\n",
+                "async fn bar(x: i32, y: i32) {\n    x\n}\nfn m() {\n    bar(1, 0);\n}\n",
+            ),
+        ] {
+            let sections = vec![section("src.rs", body)];
+            let pre = pre_map(&[("src.rs", pre_text)]);
+            let out = infer_semantic_with_pre_images(&sections, &pre)
+                .unwrap_or_else(|| panic!("B1+qual must fire for {body}"));
+            assert!(
+                out.matches("rule=r1").count() >= 2,
+                "both hunks share one rule for {body}, got:\n{out}"
+            );
+            assert!(!out.contains("follow=uses"), "no follow in a joint");
+            assert!(out.contains("- foo(E0)"), "call template minus");
+            assert!(out.contains("+ bar(E0, 0)"), "call template plus");
+            assert!(
+                out.contains("+ async fn bar(x: i32, y: i32) { ... }"),
+                "def plus carries qual, got:\n{out}"
+            );
+            validated_live(&out, &pre);
+            let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+            let mut files = pre.clone();
+            rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+            assert_eq!(files["src.rs"], post, "B1+qual must round-trip");
+        }
+    }
+
+    #[test]
     fn joint_b1_hetero_vetoes_stay_ordinary() {
         // Hetero suffixes, prefix rewrites, hetero arities, return deltas,
-        // and vis/qual deltas each stay wholly ordinary — no uniform
+        // and vis deltas each stay wholly ordinary — no uniform
         // template states them. (WI-8 slice 2: lone N=1 additions now fire
         // as B1, pinned by joint_b1_single_call_fires_shared_rule.)
         let pre = PRE;
@@ -1259,8 +1301,10 @@ mod tests {
             "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2, 3);\n+    bar(1, 0);\n+    bar(2, 3, 0);\n",
             // Return delta plus arg-add is two evolutions.
             "@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32, y: i32) -> u32 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
-            // Qualifier delta plus arg-add is two evolutions.
-            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+            // Vis delta plus arg-add stays vetoed (qual alone fires slice 6).
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+pub fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+            // Qualifier plus return delta plus arg-add is a triple.
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32, y: i32) -> u32 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
             // Non-uniform trailing retype (WI-8 slice 3).
             "@@ -1,1 +1,1 @@\n-fn foo(a: i32, b: i32) {\n+fn bar(a: i32, b: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 2);\n-    foo(3, 2);\n+    bar(1, 2u32);\n+    bar(3, 3u32);\n",
             // Arg deletion is never a B1 evolution.

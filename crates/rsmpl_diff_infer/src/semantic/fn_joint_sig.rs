@@ -77,8 +77,9 @@ pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
 }
 
 /// WI-4b Joint-B1 header gates: vis in the WI-1 closed set and
-/// preserved; qual/generics/where preserved; params evolve, return
-/// preserved (a return delta plus an arg-add is two evolutions the
+/// preserved; qual may evolve alongside params (WI-8 slice 6);
+/// generics/where preserved; params evolve, return preserved
+/// (a return delta plus an arg-add is two evolutions the
 /// shared-rule pair cannot restate — suppressed, pinned).
 pub(crate) fn header_argadd_gates(minus: &str, plus: &str) -> bool {
     let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
@@ -90,7 +91,7 @@ pub(crate) fn header_argadd_gates(minus: &str, plus: &str) -> bool {
     if contains_ident(&m.vis, &m.name) {
         return false;
     }
-    if m.qual != p.qual || m.generics != p.generics || m.where_ != p.where_ {
+    if m.generics != p.generics || m.where_ != p.where_ {
         return false;
     }
     if m.ret != p.ret {
