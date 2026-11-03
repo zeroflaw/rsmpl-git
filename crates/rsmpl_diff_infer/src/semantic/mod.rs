@@ -1835,4 +1835,43 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn wi3_oneline_fn_rename_stays_ordinary() {
+        // WI-3 slice 4: complete one-line `fn` items (`fn foo() {}`)
+        // deliberately decline the item-rename terse diet — the gate
+        // admits only multi-line `{` headers. The terse pair applies
+        // byte-exact through the engine (span parity probed), but
+        // admitting it lets the WI-19 partial partition claim the
+        // single and park better co-resident compressions ordinary
+        // (04 hunk-2's call_sweep win displaced by a +14B single);
+        // the opener belongs to WI-6 (free-fn col0 emission) together
+        // with a pipeline that retries parked leftovers (WI-8/WI-15
+        // input). Multi-line headers still fire terse.
+        let mut used = Vec::new();
+        assert!(
+            try_item_rename(
+                "fn foo() {}",
+                "fn bar() {}",
+                "f.rs",
+                Some("fn foo() {}\n"),
+                &[1],
+                &mut used,
+            )
+            .is_none(),
+            "one-line fn must decline item-rename"
+        );
+        let mut used_multi = Vec::new();
+        let out = try_item_rename(
+            "fn foo() {",
+            "fn bar() {",
+            "f.rs",
+            Some("fn foo() {\n    1\n}\n"),
+            &[1],
+            &mut used_multi,
+        )
+        .expect("multi-line header must fire terse");
+        assert!(out.contains("- fn foo\n"), "got:\n{out}");
+        assert!(out.contains("+ fn bar\n"), "got:\n{out}");
+    }
 }

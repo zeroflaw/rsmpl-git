@@ -9841,7 +9841,7 @@ cycle must still be tree-lossless).
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser
-deliberately leaves ordinary (`04`, `06`, `13`,
+deliberately leaves ordinary (`13`,
 `22` — definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
 macro-rename singles fire as allow-one verbatim `old!(...)` /
@@ -9850,7 +9850,13 @@ token-equal bodies, `macro_holds` at n=1 plus the scratch
 byte-compare; holed authored legs unify via the verbatim literal
 arm); same-name macro-interior edits stay with the interior family;
 return-carrying/vis-carrying fn singles still need their slice-2
-detectors); heterogeneous sites no template fires on stay
+detectors); `04` divergent mixed sections (one hunk re-infers
+semantic while the ordinary remainder never normalizes): hunk-2
+raises as a `call_sweep` single while hunk-1's one-line col0 fn
+rename stays ordinary (slot frame ~2x native, precision-guard veto;
+terse admission reverted — greedy partial would park hunk-2's win;
+opener is WI-6 free-fn col0 emission with leftover retry);
+heterogeneous sites no template fires on stay
   ordinary (interleaved same-class groups — A B A line order stays
   ordinary, order is never manufactured; container-joint residue without
   uses, e.g. the first hunk of `99-partition-partial-mixed` — and no
@@ -9865,9 +9871,12 @@ detectors); heterogeneous sites no template fires on stay
   raises with its trait+self-ty defs as one joint intent (WI-3,
   `item_joint_impl`, diffrs fixture `128-joint-impl-rename-fires`); all-single-delta
   multi-rename sections compress pair by pair instead (diffrs fixture
-  `98-partition-fires`, canonically lossless)), `30` trait-side-only decl/def
-  pairs (ordinary by design — no impl side shares the intent; mixed
-  trait+impl classes raise via `trait_method_rename`, WI-4b); zero-edit optional (`05`) re-diffs to empty,
+   `98-partition-fires`, canonically lossless)), `30` trait-side-only decl/def
+   pairs (ordinary by design — no impl side shares the intent; mixed
+   trait+impl classes raise via `trait_method_rename`, WI-4b); `06`
+   standalone single-line insertions (ordinary by design — the
+   rule-tag overhead exceeds native with zero template benefit;
+   insertion joints with a shared rule ride WI-8/WI-13); zero-edit optional (`05`) re-diffs to empty,
 which `canonicalize` rejects as unparseable. These are the only
 non-tree-canonical cycles; every other corpus case is
 canonically lossless, and one further iteration is a byte-identical

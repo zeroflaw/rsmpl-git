@@ -369,14 +369,14 @@ const CYCLE_OK: &[&str] = &[
 /// `hetero` sites differ structurally so no template fires (WI-4/7);
 /// `empty` zero-edit re-diff (05).
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
-    ("04-mixed", "t375: two single-site edits re-infer ordinary"),
+    ("04-mixed", "partial (WI-3 slice 4): hunk-2 re-infers as a call_sweep single; hunk-1 one-line col0 fn rename stays ordinary (slot frame ~2x native, precision-guard veto; terse admission reverted — greedy partial would park hunk-2's win; opener is WI-6 free-fn col0 emission + leftover retry)"),
     (
         "05-optional-noop",
         "empty: zero-match optional leaves an empty re-diff",
     ),
     (
         "06-insert-use",
-        "t375: single insertion anchor re-infers ordinary",
+        "by design (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13",
     ),
     (
         "12-stmt-rewrite",

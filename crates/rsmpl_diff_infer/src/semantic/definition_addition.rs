@@ -1231,4 +1231,20 @@ mod tests {
             "b"
         ));
     }
+
+    #[test]
+    fn wi3_lone_use_insertion_stays_ordinary() {
+        // WI-3 slice 4: a standalone top-level `+ use …` insertion is
+        // ordinary by design — no struct/enum container spans the
+        // point, and a literal-only insertion single would cost the
+        // rule-tag overhead over native with zero template benefit
+        // (holed insertions are unbound). Insertion joints with a
+        // shared rule ride WI-8/WI-13.
+        let raw = section("f.rs", "@@ -1,0 +2 @@\n+use crate::new_module::Thing;\n");
+        let pre = pre_map(&[("f.rs", "fn main() {}\n")]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+            "lone use insertion must stay ordinary"
+        );
+    }
 }
