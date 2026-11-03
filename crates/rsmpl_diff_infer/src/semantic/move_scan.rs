@@ -136,11 +136,11 @@ pub(crate) fn find_runs(body: &[String], needle: &[String]) -> Vec<(usize, usize
     out
 }
 
-/// The plus run must coincide with a parsed fn-item span (never a
-/// sub-range of a larger item) — or, under WI-14 slice 1, with an `fn`
-/// item span minus exactly one leading single-line `#[...]` line (the
-/// attr line becomes a T432b plus-prefix ordinary leftover while the
-/// cut + bare paste carry the move).
+/// The plus run must coincide with a parsed item span (never a
+/// sub-range of a larger item) — or, under WI-14 slices 1-3, with an
+/// item span minus exactly one leading single-line `#[...]` / `///`
+/// line (the attr/doc line becomes a T432b plus-prefix
+/// ordinary leftover while the cut + bare paste carry the move).
 pub(crate) fn plus_run_is_item(body: &[String], first: usize, last: usize) -> bool {
     let Some(items) = plus_items_in(body) else {
         return false;
@@ -148,5 +148,5 @@ pub(crate) fn plus_run_is_item(body: &[String], first: usize, last: usize) -> bo
     if items.iter().any(|it| it.first == first && it.last == last) {
         return true;
     }
-    super::move_attr::plus_run_is_attr_added_fn(body, first, last)
+    super::move_attr::plus_run_is_attr_added_item(body, first, last)
 }

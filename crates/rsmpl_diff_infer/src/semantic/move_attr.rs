@@ -1,20 +1,20 @@
-//! WI-14 slices 1-2: move + exactly one added single-line `#[...]`
-//! attr line (D5 sibling of `move_scan.rs`).
+//! WI-14 slices 1-3: move + exactly one added single-line `#[...]`
+//! or outer-doc (`///`) line (D5 sibling of `move_scan.rs`).
 //!
-//! A verbatim item move whose plus side carries one extra `#[attr]`
+//! A verbatim item move whose plus side carries one extra attr/doc
 //! line above an otherwise identical item re-diffs as delete-cut +
 //! wholly ordinary plus: byte-identical `find_runs` matches the item
 //! lines, but `plus_run_is_item` declines (sub-span of the attr+item
 //! span) and the evolved cascade vetoes every attr delta. This module
 //! admits exactly that shape: the claimed plus run is the item span
-//! minus its one leading attr line, so the attr line falls into the
-//! existing T432b plus-prefix leftover (ordinary `+#[attr]` hunk)
-//! while the cut + bare `+ M1` paste carry the move — no pattern or
-//! engine change, no new spelling.
+//! minus its one leading attr/doc line, so the attr/doc line falls into
+//! the existing T432b plus-prefix leftover (ordinary `+#[attr]` / `+///`
+//! hunk) while the cut + bare `+ M1` paste carry the move — no pattern
+//! or engine change, no new spelling.
 //!
 //! Scope is deliberately narrow: any move-eligible item kind, exactly
-//! one added single-line `#[...]` line. Removed / replaced /
-//! multi-line attrs, doc (`///`) additions, and rename+attr (two
+//! one added single-line `#[...]` or `///` line. Removed / replaced /
+//! multi-line attrs, `/* */` / `//!` docs, and rename+attr (two
 //! deltas) all decline to ordinary (pinned below) — later WI-14
 //! slices own those axes.
 
@@ -24,21 +24,28 @@ use super::move_parts::line_text;
 
 /// True when `body[first..=last]` (0-based hunk-body lines) is a parsed
 /// move-eligible item span minus exactly one leading single-line
-/// `#[...]` attr line. The caller guarantees the run textually matches
-/// a minus item; this checks the plus-side shape only: an item whose
-/// span starts exactly one line above the run, that line is one
-/// `#[...]` line, and the remaining item lines equal the run lines
-/// verbatim. Content-bearing `mod` / method-bearing `trait` decline
-/// via the shared `move_cut_eligible` gate (the cut cannot carry
-/// them); ident-less items (use/macro/trait-impl) decline since no
-/// minus item ever pairs them.
-pub(crate) fn plus_run_is_attr_added_fn(body: &[String], first: usize, last: usize) -> bool {
+/// `#[...]` attr or `///` outer-doc line. The caller guarantees
+/// the run textually matches a minus item; this checks the plus-side
+/// shape only: an item whose span starts exactly one line above the
+/// run, that line is one `#[...]` / `///` line, and the
+/// remaining item lines equal the run lines verbatim. Content-bearing
+/// `mod` / method-bearing `trait` decline via the shared
+/// `move_cut_eligible` gate (the cut cannot carry them); ident-less
+/// items (use/macro/trait-impl) decline since no minus item ever pairs
+/// them.
+pub(crate) fn plus_run_is_attr_added_item(body: &[String], first: usize, last: usize) -> bool {
     if first == 0 || last < first || last >= body.len() {
         return false;
     }
     let attr_idx = first - 1;
     let attr = line_text(&body[attr_idx]).trim();
-    if !(attr.starts_with("#[") && attr.ends_with(']')) {
+    let is_attr = attr.starts_with("#[") && attr.ends_with(']');
+    // Only outer `///` doc lines attach to the following item's span.
+    // `//!` is an inner doc of the enclosing scope (syn leaves the item
+    // span starting at the item line), so it never satisfies the span
+    // check below and stays ordinary by construction.
+    let is_doc = attr.starts_with("///");
+    if !(is_attr || is_doc) {
         return false;
     }
     let fragment: String = body
@@ -331,18 +338,81 @@ mod tests {
     }
 
     #[test]
-    fn doc_comment_added_stays_ordinary() {
-        // Slices 1-2 cover `#[...]` only; `///` additions stay ordinary.
+    fn doc_added_fn_move_fires_with_ordinary_doc_prefix() {
+        // WI-14 slice 3: `fn foo` moves a.rs -> b.rs gaining one
+        // single-line `///` doc line. The cut + bare paste carry the
+        // move; the doc line rides an ordinary prefix hunk above the
+        // paste (same T432b shape as `#[...]` slices 1-2).
         let big = big_fn("foo");
         let a_old = format!("fn keep() {{}}\n{big}");
         let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
-        let mut b_plus = String::from("+/// Adds one.\n");
+        let mut b_plus = String::from("+/// Moved helper.\n");
+        b_plus.push_str(&big.lines().map(|l| format!("+{l}\n")).collect::<String>());
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("doc-added fn move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ M1\n") || text.contains("+M1\n"),
+            "paste must stay bare, got:\n{text}"
+        );
+        assert!(
+            text.contains("+/// Moved helper.\n"),
+            "doc rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn foo() {"),
+            "plus fn lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn doc_added_struct_fires_with_ordinary_prefix() {
+        // Second-kind twin: struct + one added `///` doc line fires
+        // identically (any move-eligible kind rides the shape).
+        let mut strukt = String::from("struct Big {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let a_old = format!("fn keep() {{}}\n{strukt}");
+        let a_minus: String = strukt.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("/// Big container.\n{strukt}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("struct doc-added move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("+/// Big container.\n"),
+            "doc rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+struct Big {"),
+            "plus struct lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn two_docs_added_stays_ordinary() {
+        // Exactly one doc line: two added doc lines decline.
+        let big = big_fn("foo");
+        let a_old = format!("fn keep() {{}}\n{big}");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let mut b_plus = String::from("+/// First.\n+/// Second.\n");
         b_plus.push_str(&big.lines().map(|l| format!("+{l}\n")).collect::<String>());
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
         assert!(
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "doc-comment addition must stay ordinary"
+            "two added doc lines must stay ordinary"
         );
     }
 
@@ -364,17 +434,29 @@ mod tests {
 
     #[test]
     fn helper_single_line_gate() {
-        // Direct helper pins: `#[x]` fires, `///` never does.
+        // Direct helper pins: `#[x]` and `///` fire; plain `//` never
+        // does (trivia, outside the item span), and neither does `//!`
+        // (inner doc of the enclosing scope, item span starts below it).
         let body: Vec<String> = ["+#[inline]", "+fn f() {", "+}"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert!(plus_run_is_attr_added_fn(&body, 1, 2));
+        assert!(plus_run_is_attr_added_item(&body, 1, 2));
         let doc: Vec<String> = ["+/// Doc.", "+fn f() {", "+}"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert!(!plus_run_is_attr_added_fn(&doc, 1, 2));
-        assert!(!plus_run_is_attr_added_fn(&body, 0, 2));
+        assert!(plus_run_is_attr_added_item(&doc, 1, 2));
+        let inner: Vec<String> = ["+//! Mod doc.", "+fn f() {", "+}"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(!plus_run_is_attr_added_item(&inner, 1, 2));
+        let plain: Vec<String> = ["+// lead", "+fn f() {", "+}"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(!plus_run_is_attr_added_item(&plain, 1, 2));
+        assert!(!plus_run_is_attr_added_item(&body, 0, 2));
     }
 }
