@@ -1333,19 +1333,20 @@ fn compress_section_per_hunk(
                 used_rules.truncate(add_before);
             }
         }
-        // WI-14 slice 2: `use`-regroup merge (N≥2 `use P::Ti;` minus
-        // lines + one `use P::{...};` plus line). Unbalanced by
-        // construction, so the balanced chain below never sees it;
-        // existing unbalanced owners (partial-delete above) keep
-        // priority and this declines anything outside the merge law.
-        // Precision guard + D13 probe live inside (a regroup never wins
-        // strict T375 since the `rule=` tag costs bytes).
-        if minuses.len() >= 2 && pluses.len() == 1 {
+        // WI-14/WI-18: `use`-regroup merge (N→1) + split (1→N); see sibling.
+        if (minuses.len() >= 2 && pluses.len() == 1) || (minuses.len() == 1 && pluses.len() >= 2) {
             let regroup_before = used_rules.len();
+            let probe_name: &'static str = if minuses.len() == 1 {
+                "use_split"
+            } else {
+                "use_regroup"
+            };
             if let Some((body, detector)) = attempt(
                 declined,
-                "use_regroup",
-                super::try_use_regroup_hunk(&minuses, &pluses, path, file_old, hunk, used_rules),
+                probe_name,
+                super::try_use_regroup_or_split_hunk(
+                    &minuses, &pluses, path, file_old, hunk, used_rules,
+                ),
             ) {
                 push_section_prov(
                     prov,

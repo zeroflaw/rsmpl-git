@@ -403,6 +403,9 @@ pub(crate) fn plus_instantiated_parsed(
         PatternKind::UseRegroup { .. } => {
             crate::postcheck_use::verify_use_regroup(&compiled.kind, post_text)
         }
+        PatternKind::UseSplit { .. } => {
+            crate::postcheck_use::verify_use_split(&compiled.kind, post_text)
+        }
         PatternKind::UseRename { plus_path, .. } => {
             // Grouped tails (`crate::{new::Deep}`) never contain the full
             // `crate::new` prefix as a substring; the final segment is the

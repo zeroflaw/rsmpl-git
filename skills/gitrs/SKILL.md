@@ -94,7 +94,7 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   `as` paste (`+ fn old as new(...)`) renames fn + self-calls, joint (`+ fn old as new(x: i64) -> i64`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, inherent-`impl` (`+ impl old as new { ... }`) renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto, two slots stay ordinary (SPEC 20.2).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`) moves imports;
   grouped/glob/`as` tails preserved, members at the matched position rewrite too; regroup
-  merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` (same order/vis, no attrs) (SPEC 14.9).
+  merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` and splits the inverse (same order/vis, no attrs) (SPEC 14.9).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`T` inferred), 2–4-line `let` sequences (per-position
   `P0`/`E0` holes). Bare `P` never matches `x: T` — write `P: T`.

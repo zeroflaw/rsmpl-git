@@ -717,6 +717,178 @@ pub fn apply_use_regroup_hunk(
     Ok(merged)
 }
 
+/// Apply a `use`-regroup split hunk (SPEC 14.9). Returns the number of
+/// split sets. Line-wise: the grouped `use` item line is replaced by the
+/// N verbatim plus lines (each with the matched line's indent). Only
+/// single-line grouped `use` items match; visibility must equal the
+/// pattern's uniform vis (whitespace-insensitive); leading `::` is
+/// normalized away on both sides.
+pub fn apply_use_split_hunk(
+    parsed: &syn::File,
+    original: &str,
+    index: &LineIndex,
+    hunk: &RsmplHunk,
+    compiled: &CompiledPattern,
+    edits: &mut Vec<TextEdit>,
+) -> Result<usize, StructuredError> {
+    let (prefix, members, vis, plus_lines) = match &compiled.kind {
+        PatternKind::UseSplit {
+            prefix,
+            members,
+            vis,
+            plus_lines,
+            ..
+        } => (
+            prefix.clone(),
+            members.clone(),
+            vis.clone(),
+            plus_lines.clone(),
+        ),
+        _ => {
+            return Err(StructuredError::new(
+                ErrorCode::PatternConflict,
+                "expected use-split pattern".to_string(),
+            )
+            .with_repair(StructuredError::fix_pattern_repair(
+                "dispatch-use-split-template",
+                "write a split-only use-regroup pair (one grouped `use P::{...}` minus line plus N≥2 `use P::Ti;` plus lines; see SPEC 14.9)",
+            )));
+        }
+    };
+    let rule = hunk.rule_name();
+    let want_vis: String = vis.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut items = Vec::new();
+    collect_use_items(&parsed.items, &mut items);
+    let old_start = hunk.header.old_start;
+    let old_len = hunk.header.old_len;
+    let end = old_start + old_len.saturating_sub(1);
+    let mut candidates: Vec<(u32, u32)> = Vec::new();
+    for v in &items {
+        let Some((group_prefix, group_members)) = grouped_use_path(v.tree) else {
+            continue;
+        };
+        if group_prefix != prefix || group_members != members {
+            continue;
+        }
+        if norm_use_vis(&v.vis) != want_vis {
+            continue;
+        }
+        let (start, last) = (v.anchor_line, v.anchor_line);
+        let in_scope = match hunk.scope() {
+            Scope::Exact => old_len > 0 && start == old_start && last == end.max(old_start),
+            Scope::File => true,
+            _ => start >= old_start && last <= end.max(old_start),
+        };
+        if !in_scope {
+            continue;
+        }
+        if !is_single_line_tree(v.tree) {
+            continue;
+        }
+        candidates.push((v.anchor_line, v.attr_start_line));
+    }
+    candidates.sort();
+    candidates.dedup();
+    if candidates.is_empty() {
+        return Ok(0);
+    }
+    let allow_many = hunk.allow() == rsmpl_patch::Allow::Many;
+    if !allow_many && candidates.len() > 1 {
+        return Ok(candidates.len());
+    }
+    // Same-line grouped items can never split line-wise.
+    {
+        let mut lines: Vec<u32> = candidates.iter().map(|(l, _)| *l).collect();
+        lines.sort();
+        lines.dedup();
+        if lines.len() != candidates.len() {
+            return Err(StructuredError::new(
+                ErrorCode::MatchConflict,
+                "use-split groups share one line (each group must be its own `use` item)",
+            )
+            .with_rule(&rule)
+            .with_repair(StructuredError::internal_repair()));
+        }
+    }
+    let sets = if allow_many { candidates.len() } else { 1 };
+    let mut split = 0;
+    for (line, attr_start) in candidates.iter().take(sets) {
+        let v = items
+            .iter()
+            .find(|v| v.anchor_line == *line)
+            .expect("split line resolves to its item");
+        check_attrs(v.attrs, hunk.attrs_policy(), &[], &rule, "")?;
+        let line_start = index
+            .line_start(*line)
+            .ok_or_else(|| range_err(&rule, *line))?;
+        let line_end =
+            line_end_excl_nl(original, index, *line).ok_or_else(|| range_err(&rule, *line))?;
+        let indent: String = original[line_start..line_end]
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let mut replacement = String::new();
+        for (i, pl) in plus_lines.iter().enumerate() {
+            if i > 0 {
+                replacement.push('\n');
+                replacement.push_str(&indent);
+            } else {
+                replacement.push_str(&indent);
+            }
+            replacement.push_str(pl.trim());
+        }
+        // `# attrs=strip` deletes attribute lines above the grouped item.
+        let start = if hunk.attrs_policy() == AttrsPolicy::Strip && !v.attrs.is_empty() {
+            let attr_line = index
+                .line_start(*attr_start)
+                .ok_or_else(|| range_err(&rule, *attr_start))?;
+            if line_start > attr_line {
+                attr_line
+            } else {
+                line_start
+            }
+        } else {
+            line_start
+        };
+        let _ = attr_start;
+        edits.push(TextEdit::new(start, line_end, replacement));
+        split += 1;
+        if !allow_many {
+            break;
+        }
+    }
+    Ok(split)
+}
+
+/// Prefix + members of a grouped `use` tree (`a::b::{X, Y}` only);
+/// `None` for plain paths, globs, renames, nested groups, or empty groups.
+fn grouped_use_path(tree: &syn::UseTree) -> Option<(Vec<String>, Vec<String>)> {
+    let mut prefix = Vec::new();
+    let mut t = tree;
+    loop {
+        match t {
+            syn::UseTree::Path(p) => {
+                prefix.push(p.ident.to_string());
+                t = &p.tree;
+            }
+            syn::UseTree::Group(g) => {
+                let mut members = Vec::new();
+                for m in &g.items {
+                    match m {
+                        syn::UseTree::Name(n) => members.push(n.ident.to_string()),
+                        _ => return None,
+                    }
+                }
+                if members.is_empty() {
+                    return None;
+                }
+                return Some((prefix, members));
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Full path segments of a plain `use` tree (`a::b::X` only);
 /// `None` for groups, globs, renames, and qualified trees.
 fn plain_use_path(tree: &syn::UseTree) -> Option<Vec<String>> {
@@ -1252,16 +1424,103 @@ mod tests {
     }
 
     #[test]
-    fn regroup_same_line_members_fail() {
-        // Two members on one line can never merge line-wise.
-        let patch = regroup_patch_in(
+    fn split_vis_and_shape_gated() {
+        // `pub` pattern never matches plain items.
+        let patch = split_patch_in(
             "@@ -1,1 @@",
-            &["use a::b::X;", "use a::b::Y;"],
-            "use a::b::{X, Y};",
+            "pub use a::b::{X, Y};",
+            &["pub use a::b::X;", "pub use a::b::Y;"],
             "",
         );
-        let err = apply(&patch, "use a::b::X; use a::b::Y;\n").unwrap_err();
+        let err = apply(&patch, "use a::b::{X, Y};\n").unwrap_err();
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        // Plain minus paths never match grouped targets.
+        let err = apply(&patch, "use a::b::X;\nuse a::b::Y;\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn split_leaves_hetero_group_untouched() {
+        // A `{X, Z}` group is not the `{X, Y}` pattern: no match, never a guess.
+        let patch = split_patch_in(
+            "@@ -1,1 @@",
+            "use a::b::{X, Y};",
+            &["use a::b::X;", "use a::b::Y;"],
+            "",
+        );
+        let err = apply(&patch, "use a::b::{X, Z};\n").unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    fn split_patch_in(range: &str, minus: &str, pluses: &[&str], extra: &str) -> String {
+        let mut out = format!("diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n{range} rule=u\n");
+        if !extra.is_empty() {
+            out.push_str(extra);
+            if !extra.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out.push_str(&format!("- {minus}\n"));
+        for p in pluses {
+            out.push_str(&format!("+ {p}\n"));
+        }
+        out
+    }
+
+    #[test]
+    fn split_expands_in_place_with_indent() {
+        let patch = split_patch_in(
+            "@@ -1,1 @@",
+            "use a::b::{X, Y};",
+            &["use a::b::X;", "use a::b::Y;"],
+            "",
+        );
+        let src = "use a::b::{X, Y};\nfn m() {}\n";
+        let out = apply(&patch, src).unwrap();
+        assert_eq!(
+            out, "use a::b::X;\nuse a::b::Y;\nfn m() {}\n",
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn split_keeps_indent_in_inline_mod() {
+        let patch = split_patch_in(
+            "@@ -2,1 @@",
+            "use a::b::{X, Y};",
+            &["use a::b::X;", "use a::b::Y;"],
+            "",
+        );
+        let src = "mod outer {\n    use a::b::{X, Y};\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert_eq!(
+            out, "mod outer {\n    use a::b::X;\n    use a::b::Y;\n}\n",
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn split_double_group_one_fails_many_splits() {
+        let src = "use a::b::{X, Y};\nuse a::b::{X, Y};\nfn m() {}\n";
+        let one = split_patch_in(
+            "@@ -1,2 @@",
+            "use a::b::{X, Y};",
+            &["use a::b::X;", "use a::b::Y;"],
+            "",
+        );
+        let err = apply(&one, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+        let many = split_patch_in(
+            "@@ -1,2 @@",
+            "use a::b::{X, Y};",
+            &["use a::b::X;", "use a::b::Y;"],
+            "# allow=many\n",
+        );
+        let out = apply(&many, src).unwrap();
+        assert_eq!(
+            out, "use a::b::X;\nuse a::b::Y;\nuse a::b::X;\nuse a::b::Y;\nfn m() {}\n",
+            "got: {out:?}"
+        );
     }
 
     fn wi18_use_setup(
@@ -1331,6 +1590,29 @@ mod tests {
         let (code, w) = wi18_use_repair(&err);
         assert_eq!(code, "dispatch-use-rename-template");
         assert!(w.contains("`- use crate::old`"), "got: {w}");
+    }
+
+    #[test]
+    fn wi18_use_split_dispatch_repair_is_specific() {
+        let patch = split_patch_in(
+            "@@ -1,1 @@",
+            "use a::b::{X, Y};",
+            &["use a::b::X;", "use a::b::Y;"],
+            "",
+        );
+        let (hunk, mut compiled, parsed, index, src) =
+            wi18_use_setup(&patch, "use a::b::{X, Y};\n");
+        compiled.kind = rsmpl_pattern::PatternKind::Raw {
+            minus: "x".to_string(),
+            plus: "y".to_string(),
+        };
+        let mut edits = Vec::new();
+        let err = super::apply_use_split_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
+            .expect_err("wrong kind must fail");
+        assert_eq!(err.message, "expected use-split pattern");
+        let (code, w) = wi18_use_repair(&err);
+        assert_eq!(code, "dispatch-use-split-template");
+        assert!(w.contains("split-only"), "got: {w}");
     }
 
     #[test]

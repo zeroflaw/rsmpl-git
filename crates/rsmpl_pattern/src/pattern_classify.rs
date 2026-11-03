@@ -557,6 +557,20 @@ pub(crate) fn classify(
         });
     }
 
+    // `use`-regroup split (one `use P::{...};` minus line + N≥2
+    // `use P::Ti;` plus lines). Disjoint from merge by shape
+    // (merge needs multi-line minus + single grouped plus; split the
+    // inverse), so registration order needs no tie-break.
+    if let Some(split) = crate::use_rename::classify_use_split(m, p, table)? {
+        return Ok(PatternKind::UseSplit {
+            prefix: split.prefix,
+            members: split.members,
+            vis: split.vis,
+            minus_line: split.minus_line,
+            plus_lines: split.plus_lines,
+        });
+    }
+
     // `use`-path prefix renames (`use crate::old` -> `use crate::new`).
     // Disjoint from item/fn/call shapes; falls through as `None`.
     if let Some((minus_segs, plus_segs)) = crate::use_rename::classify_use_rename(m, p, table)? {

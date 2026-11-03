@@ -44,6 +44,7 @@ pub(crate) fn candidate_preview(
             | PatternKind::ArmAddition { .. }
             | PatternKind::UseRename { .. }
             | PatternKind::UseRegroup { .. }
+            | PatternKind::UseSplit { .. }
     );
     if kind_specific {
         if let Some(parsed) = state.parsed.as_ref() {
@@ -131,6 +132,7 @@ pub(crate) fn candidate_preview(
                 PatternKind::ImplContext { .. } => Some(("fn ".to_string(), None)),
                 PatternKind::UseRename { .. } => Some(("use ".to_string(), None)),
                 PatternKind::UseRegroup { .. } => Some(("use ".to_string(), None)),
+                PatternKind::UseSplit { .. } => Some(("use ".to_string(), None)),
                 _ => None,
             };
             let nearest = match want {

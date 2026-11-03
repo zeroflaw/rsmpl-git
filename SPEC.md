@@ -3069,24 +3069,28 @@ diff --git src/lib.rs
 - use a::b::Y;
 + use a::b::{X, Y};
 ```
-  Merge-only (splitting a group back into separate lines stays
-  ordinary), order-preserving (the group lists the tails in minus
+  Merge-or-split, order-preserving (the group lists the tails in minus
   order — the tool never manufactures order), plain `Name` members
-  only, uniform visibility across all minus lines and the plus line
-  (a merge never changes visibility), no attribute lines on either
+  only, uniform visibility across minus and plus lines
+  (a regroup never changes visibility), no attribute lines on either
   side, no duplicate tails, and a non-empty shared prefix with every
-  minus line exactly at the grouping depth (`<prefix>::<Tail>`).
+  plain line exactly at the grouping depth (`<prefix>::<Tail>`).
   `as`/`glob`/nested-group members, mixed visibility or mixed leading
-  `::`, deeper members, and single-minus shapes are pattern errors
+  `::`, deeper members, and wrong-arity shapes are pattern errors
   (same envelope + nulls as the tail family above; each names its
-  tail or law). The engine replaces the first-in-file member line
-  with the verbatim plus line (keeping that line's indent) and
+  tail or law). The merge engine replaces the first-in-file member
+  line with the verbatim plus line (keeping that line's indent) and
   deletes the other member lines whole (attribute lines above a
   deleted item go with it); only single-line `use` items match and
   each member must be its own line. Default `one` merges exactly one
   member set (a second identical set fails loud); `# allow=many`
-  merges every set. Raising (detector `use_regroup`): the per-hunk
-  fallback claims the shape only for adjacent minus lines under the
+  merges every set. The split engine replaces the grouped item line
+  with the N verbatim plus lines (each with the matched line's
+  indent); default `one` splits exactly one grouped item (a second
+  identical group fails loud); `# allow=many` splits every identical
+  group. Raising (detectors `use_regroup` for merge, `use_split` for
+  split): the per-hunk fallback claims the shape only for adjacent
+  minus lines (merge; split needs only its single minus) under the
   precision guard (`semantic <= ordinary + 16` — a regroup never wins
   strict T375 since the `rule=` tag costs bytes over the ordinary
   header) with the D13 scratch-apply probe as totality (exactly one
@@ -3094,9 +3098,19 @@ diff --git src/lib.rs
   the native post-tree); without a pre-image the shape stays ordinary
   (a line-deleting raise without proof is data-loss risk, so the
   section-visible legacy allow does not apply here). Non-adjacent
-  minus lines stay ordinary (the native plus lands at the last-minus
-  position while the engine merges at the first — the adjacency gate
-  names the reason instead of a bare probe miss).
+  merge minus lines stay ordinary (the native plus lands at the
+  last-minus position while the engine merges at the first — the
+  adjacency gate names the reason instead of a bare probe miss).
+  Merge and split are one equivalence: `merge(split(x)) == x` and
+  `split(merge(x)) == x` canonically (same prefix, same members in
+  the same order, same visibility).
+```diff
+diff --git src/lib.rs
+@@ -1,1 @@ rule=split_uses
+- use a::b::{X, Y};
++ use a::b::X;
++ use a::b::Y;
+```
 - No `# root=` is needed: a `use`-led minus/plus pair routes
   automatically (a `use_foo(E)` call keeps routing to the call matcher by
   the word-boundary rule). `# repeat` and `# returns=none` are rejected
@@ -9437,9 +9451,16 @@ every length and the totals stay the default truth at any size.
   minus order, uniform visibility, no attributes) → one
   directive-free hunk (no `- I` cut ever) under the precision guard
   with the D13 scratch-apply probe as totality (detector
-  `use_regroup`; splitting, `as`/glob/nested members, vis-mixed,
+  `use_regroup`; `as`/glob/nested members, vis-mixed,
   attributed, duplicate, non-adjacent, and single-minus shapes stay
   ordinary).
+- Use-regroup split: one `- use <prefix>::{<members>};` line plus N ≥ 2
+  `+ use <prefix>::<Tail>;` lines stating its expansion (same members in
+  the same order, uniform visibility, no attributes) → one
+  directive-free hunk under the same precision guard with the same D13
+  probe as totality (detector `use_split`; merge↔split round-trips
+  canonically; `as`/glob/nested members, vis-mixed, attributed,
+  duplicate, and wrong-arity shapes stay ordinary).
 - Whole-item move inference (T430/T432a/T432b/T432c/T432d): a byte-identical named item (fn,
   struct, enum, trait, type, mod, union, const, static) deleted in
   one file and added in another (or the same file, or a new file) compresses

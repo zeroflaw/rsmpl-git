@@ -304,6 +304,33 @@ fn regroup_err(msg: impl Into<String>) -> StructuredError {
     )
 }
 
+/// A `use` regroup split: one `use P::{M1..Mn};` line stating the grouped
+/// form plus N≥2 `use P::Ti;` lines stating its expansion (SPEC 14.9).
+/// Split-only, order-preserving, plain-`Name` members, uniform visibility,
+/// no attributes — anything else vetoes with its reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseSplit {
+    /// Shared prefix segments (leading `::` normalized away).
+    pub prefix: UsePrefix,
+    /// Member idents in minus group order (== plus line order).
+    pub members: Vec<String>,
+    /// Uniform visibility text (`""` or e.g. `"pub(crate)"`).
+    pub vis: String,
+    /// Verbatim minus grouped line (trimmed).
+    pub minus_line: String,
+    /// Verbatim plus lines (trimmed, in order).
+    pub plus_lines: Vec<String>,
+}
+
+fn split_err(msg: impl Into<String>) -> StructuredError {
+    StructuredError::new(ErrorCode::PatternConflict, msg.into()).with_repair(
+        StructuredError::fix_pattern_repair(
+            "pattern",
+            "write one `use <prefix>::{<Tails>};` minus line plus N≥2 `use <prefix>::<Tail>;` plus lines (split-only, same order, plain members, uniform visibility) or use an ordinary hunk",
+        ),
+    )
+}
+
 /// Split `pub` / `pub(...)` visibility off a `use` line, returning the
 /// raw visibility text plus the remainder. Mirrors `skip_visibility`
 /// consumption exactly (so `public` stays an ident, never visibility).
@@ -622,6 +649,110 @@ pub fn classify_use_regroup(
         plus_line: plus_lines[0].trim().to_string(),
     }))
 }
+
+/// Classify a minus/plus side pair as a `use`-regroup split.
+///
+/// - `Ok(None)` — not a split shape; the caller falls through to
+///   the next classifier.
+/// - `Ok(Some(split))` — valid split.
+/// - `Err(_)` — `use`-led on both sides but the split law fails
+///   (order/tails/visibility/attrs/duplicates); fail fast, never
+///   guess.
+pub fn classify_use_split(
+    minus_raw: &str,
+    plus_raw: &str,
+    _table: &MetavarTable,
+) -> Result<Option<UseSplit>, StructuredError> {
+    let minus_lines: Vec<&str> = minus_raw.lines().filter(|l| !l.trim().is_empty()).collect();
+    let plus_lines: Vec<&str> = plus_raw.lines().filter(|l| !l.trim().is_empty()).collect();
+    let use_led = |l: &str| eat_keyword(split_use_vis(l).1, "use").is_some();
+    let attr_led = |l: &str| {
+        let t = l.trim_start();
+        t.starts_with("#[") || t.starts_with("///") || t.starts_with("//!") || t.starts_with("/*")
+    };
+    if !minus_lines.iter().all(|l| use_led(l)) {
+        return Ok(None);
+    }
+    if !plus_lines.iter().all(|l| use_led(l) || attr_led(l)) {
+        return Ok(None);
+    }
+    for l in minus_lines.iter().chain(plus_lines.iter()) {
+        if attr_led(l) {
+            return Err(split_err(
+                "mirrored attributes are not supported in `use`-path patterns in v1 (docs are preserved by default; drop the attribute lines or use an ordinary hunk)",
+            ));
+        }
+    }
+    if minus_lines.len() != 1 || plus_lines.len() < 2 {
+        return Ok(None);
+    }
+    let mut vis: Option<String> = None;
+    for l in minus_lines.iter().chain(plus_lines.iter()) {
+        let (v, _) = split_use_vis(l);
+        if vis.as_ref().is_some_and(|x| *x != v) {
+            return Err(split_err(
+                "mixed visibility in `use`-split (write the minus line and all plus lines with the same visibility, or use an ordinary hunk)",
+            ));
+        }
+        vis = Some(v);
+    }
+    let vis = vis.unwrap_or_default();
+    let Some((minus_leading, minus_prefix, minus_members)) =
+        parse_regroup_plus(split_use_vis(minus_lines[0]).1)?
+    else {
+        return Ok(None);
+    };
+    let mut plus_paths: Vec<(bool, Vec<String>)> = Vec::new();
+    for l in &plus_lines {
+        let (_, rest) = split_use_vis(l);
+        let Some(parsed) = parse_regroup_minus(rest) else {
+            return Ok(None);
+        };
+        plus_paths.push(parsed);
+    }
+    let leading = minus_leading;
+    if plus_paths.iter().any(|(l, _)| *l != leading) {
+        return Err(split_err(
+            "mixed leading `::` in `use`-split (write minus and plus lines uniformly, or use an ordinary hunk)",
+        ));
+    }
+    if minus_prefix.is_empty() {
+        return Err(split_err(
+            "no shared `use`-split prefix (the minus group must share a leading path, or use an ordinary hunk)",
+        ));
+    }
+    let mut tails: Vec<String> = Vec::new();
+    for (_, p) in &plus_paths {
+        if p.len() != minus_prefix.len() + 1 || p[..minus_prefix.len()] != minus_prefix[..] {
+            return Err(split_err(
+                "unstatable `use`-split plus shape (every plus line must be `<prefix>::<Tail>` at the grouping depth, or use an ordinary hunk)",
+            ));
+        }
+        tails.push(p[minus_prefix.len()].clone());
+    }
+    {
+        let mut sorted = tails.clone();
+        sorted.sort();
+        sorted.dedup();
+        if sorted.len() != tails.len() {
+            return Err(split_err(
+                "duplicate tails in `use`-split plus lines (each tail must appear once, or use an ordinary hunk)",
+            ));
+        }
+    }
+    if minus_members != tails {
+        return Err(split_err(
+            "plus line order differs from minus group order in `use`-split (list plus lines in minus order, or use an ordinary hunk)",
+        ));
+    }
+    Ok(Some(UseSplit {
+        prefix: minus_prefix,
+        members: tails,
+        vis,
+        minus_line: minus_lines[0].trim().to_string(),
+        plus_lines: plus_lines.iter().map(|l| l.trim().to_string()).collect(),
+    }))
+}
 pub fn classify_use_rename(
     minus_raw: &str,
     plus_raw: &str,
@@ -901,5 +1032,88 @@ mod tests {
         );
         // Mixed leading `::` never merges.
         assert!(regroup("use a::b::X;\nuse ::a::b::Y;", "use a::b::{X, Y};").is_err());
+    }
+
+    fn split(minus: &str, plus: &str) -> Result<Option<UseSplit>, StructuredError> {
+        classify_use_split(minus, plus, &table())
+    }
+
+    #[test]
+    fn split_fires_plain() {
+        let r = split("use a::b::{X, Y};", "use a::b::X;\nuse a::b::Y;")
+            .unwrap()
+            .expect("must fire");
+        assert_eq!(r.prefix, vec!["a", "b"]);
+        assert_eq!(r.members, vec!["X", "Y"]);
+        assert_eq!(r.vis, "");
+        assert_eq!(r.minus_line, "use a::b::{X, Y};");
+        assert_eq!(r.plus_lines, vec!["use a::b::X;", "use a::b::Y;"]);
+    }
+
+    #[test]
+    fn split_fires_pub_and_deep_prefix() {
+        let r = split(
+            "pub(crate) use a::b::c::{X, Y};",
+            "pub(crate) use a::b::c::X;\npub(crate) use a::b::c::Y;",
+        )
+        .unwrap()
+        .expect("must fire");
+        assert_eq!(r.prefix, vec!["a", "b", "c"]);
+        assert_eq!(r.vis, "pub(crate)");
+    }
+
+    #[test]
+    fn split_fallthrough_shapes() {
+        // Single plus: meaningless split, never a regroup.
+        assert!(split("use a::b::{X};", "use a::b::X;").unwrap().is_none());
+        // Non-`use` plus lines: not a split, fall through untouched.
+        assert!(split("use a::b::{X, Y};", "use a::b::X;\nfoo(E)")
+            .unwrap()
+            .is_none());
+        // Bare minus: not a split (the rename gate owns it).
+        assert!(split("use a::b::New;", "use a::b::X;\nuse a::b::Y;")
+            .unwrap()
+            .is_none());
+        // Plain minus: not a split shape.
+        assert!(split("use a::b::X;\nuse a::b::Y;", "use a::b::{X, Y};")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn split_veto_matrix() {
+        // Order swap: plus lines must list minus group order.
+        assert!(split("use a::b::{X, Y};", "use a::b::Y;\nuse a::b::X;").is_err());
+        // `as` plus member: unstatable tail (falls through to None).
+        assert!(
+            split("use a::b::{X, Y};", "use a::b::X;\nuse a::b::Y as Z;")
+                .unwrap()
+                .is_none()
+        );
+        // Mixed visibility must never change visibility.
+        assert!(split("use a::b::{X, Y};", "use a::b::X;\npub use a::b::Y;").is_err());
+        assert!(split("pub use a::b::{X, Y};", "use a::b::X;\nuse a::b::Y;").is_err());
+        // Depth mismatch: every plus must sit at the grouping depth.
+        assert!(split("use a::b::{X, Y};", "use a::b::X;\nuse a::b::Y::Deep;").is_err());
+        // Duplicate tails can never split honestly.
+        let err = split("use a::b::{X, X};", "use a::b::X;\nuse a::b::X;").unwrap_err();
+        assert!(
+            err.render().contains("duplicate tails"),
+            "got: {}",
+            err.render()
+        );
+        // Mirrored attributes fail fast with the shared needle (plus side).
+        let err = split("use a::b::{X, Y};", "use a::b::X;\n#[x]\nuse a::b::Y;").unwrap_err();
+        assert!(
+            err.render().contains("mirrored attributes"),
+            "got: {}",
+            err.render()
+        );
+        // Mixed leading `::` never splits.
+        assert!(split("use a::b::{X, Y};", "use a::b::X;\nuse ::a::b::Y;").is_err());
+        // Glob minus never splits (unstatable merge tail).
+        assert!(split("use a::b::*;", "use a::b::X;\nuse a::b::Y;")
+            .unwrap()
+            .is_none());
     }
 }

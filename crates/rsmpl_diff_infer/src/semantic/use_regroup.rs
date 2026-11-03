@@ -1,8 +1,9 @@
-//! `use`-regroup merge raising (WI-14 slice 2, SPEC 14.9).
+//! `use`-regroup merge + split raising (WI-14 slice 2 + WI-18, SPEC 14.9).
 //!
 //! A minus set of `use` lines plus one `use` line whose tree is exactly
-//! their merge (same paths, grouped at the longest common prefix)
-//! raises to a use-path template pair — never a bare `- I` cut:
+//! their merge (same paths, grouped at the longest common prefix), or the
+//! inverse split (one grouped line plus its N-line expansion), raises to a
+//! use-path template pair — never a bare `- I` cut:
 //!
 //! ```diff
 //! diff --git f.rs
@@ -12,10 +13,10 @@
 //! + use a::b::{X, Y};
 //! ```
 //!
-//! Merge-only, order-preserving, plain-`Name` members, uniform
-//! visibility, no attributes. Anything else (splits, `as`/glob/nested
+//! Merge-or-split, order-preserving, plain-`Name` members, uniform
+//! visibility, no attributes. Anything else (`as`/glob/nested
 //! members, mixed visibility, attribute lines, order changes,
-//! duplicate tails, single-minus) vetoes to ordinary. The emission is
+//! duplicate tails, wrong arity) vetoes to ordinary. The emission is
 //! directive-free (diet terse: `rule=` alone marks a semantic hunk,
 //! SPEC 7.1) under the precision guard (`semantic <= ordinary + 16` —
 //! a regroup never wins strict T375 since the `rule=` tag costs bytes
@@ -109,6 +110,82 @@ pub(crate) fn try_use_regroup_hunk(
     // section prelude, so the body carries no file header (same shape
     // as the balanced pair bodies).
     Some((body, "use_regroup"))
+}
+
+/// Unbalanced-hunk split entry: exactly one grouped `use` minus line plus
+/// N≥2 `use` plus lines stating its expansion. Mirrors the merge entry
+/// (same precision guard, same D13 probe, same exactly-one proof).
+pub(crate) fn try_use_split_hunk(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    hunk: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() != 1 || pluses.len() < 2 {
+        return None;
+    }
+    let plus_raw = pluses.join("\n");
+    let table = rsmpl_pattern::MetavarTable::from_directives(&[]).expect("empty directives parse");
+    match rsmpl_pattern::classify_use_split(minuses[0], &plus_raw, &table) {
+        Ok(Some(_)) => {}
+        Ok(None) | Err(_) => return None,
+    }
+    let pre = file_old?;
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let t = minuses[0].trim();
+    if pre_lines.iter().filter(|l| l.trim() == t).count() != 1 {
+        return None;
+    }
+    for p in pluses {
+        if pre_lines.iter().any(|l| l.trim() == p.trim()) {
+            return None;
+        }
+    }
+    let changed = crate::totality::changed_old_lines(hunk);
+    if changed.len() != 1 || changed.contains(&0) {
+        return None;
+    }
+    let min = changed[0];
+    if min < 1 {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let rule = super::unique_rule(used_rules, "use_split");
+    let mut body = format!("@@ -{min},1 @@ rule={rule}\n");
+    body.push_str(&format!("- {}\n", minuses[0]));
+    for p in pluses {
+        body.push_str(&format!("+ {p}\n"));
+    }
+    if !super::guard::within_precision(body.len(), super::normalized_hunk_len(hunk), 1, 0) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    if !probe_regroup_reproduces(path, pre, hunk, &body) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some((body, "use_split"))
+}
+
+/// Shared unbalanced entry for the regroup family: merge (N→1) or split
+/// (1→N), else `None`. Lets `chain.rs` keep one call site (D5).
+pub(crate) fn try_use_regroup_or_split_hunk(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    hunk: &str,
+    used_rules: &mut Vec<String>,
+) -> Option<(String, &'static str)> {
+    if minuses.len() >= 2 && pluses.len() == 1 {
+        return try_use_regroup_hunk(minuses, pluses, path, file_old, hunk, used_rules);
+    }
+    if minuses.len() == 1 && pluses.len() >= 2 {
+        return try_use_split_hunk(minuses, pluses, path, file_old, hunk, used_rules);
+    }
+    None
 }
 
 /// D13 scratch-apply probe for regroup (T361 doctrine): the ranged
@@ -307,5 +384,122 @@ mod tests {
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
         assert_eq!(files, native_post(&raw, &pre));
+    }
+
+    #[test]
+    fn split_one_to_two_fires_and_round_trips() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-use a::b::{X, Y};\n+use a::b::X;\n+use a::b::Y;\n fn m() {}\n",
+        );
+        let pre = pre_map(&[("f.rs", "use a::b::{X, Y};\nfn m() {}\n")]);
+        let out =
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).expect("must fire");
+        validated_live(&out, &pre);
+        assert!(out.contains("@@ -1,1 @@ rule=r1\n"), "got: {out}");
+        assert!(!out.contains("# allow=many"), "directive-free, got: {out}");
+        assert!(out.contains("- use a::b::{X, Y};\n"), "got: {out}");
+        assert!(out.contains("+ use a::b::X;\n"), "got: {out}");
+        assert!(out.contains("+ use a::b::Y;\n"), "got: {out}");
+        let mut files = pre.clone();
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files, native_post(&raw, &pre));
+    }
+
+    #[test]
+    fn split_one_to_three_fires() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,4 @@\n-use a::b::{X, Y, Z};\n+use a::b::X;\n+use a::b::Y;\n+use a::b::Z;\n fn m() {}\n",
+        );
+        let pre = pre_map(&[("f.rs", "use a::b::{X, Y, Z};\nfn m() {}\n")]);
+        let out =
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).expect("must fire");
+        validated_live(&out, &pre);
+        assert!(out.contains("+ use a::b::Z;\n"), "got: {out}");
+        let mut files = pre.clone();
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files, native_post(&raw, &pre));
+    }
+
+    #[test]
+    fn split_veto_matrix() {
+        // Order swap: plus lines must list minus group order.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-use a::b::{X, Y};\n+use a::b::Y;\n+use a::b::X;\n fn m() {}\n",
+        );
+        let pre = pre_map(&[("f.rs", "use a::b::{X, Y};\nfn m() {}\n")]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        // Mixed visibility: split must never change visibility.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-use a::b::{X, Y};\n+use a::b::X;\n+pub use a::b::Y;\n fn m() {}\n",
+        );
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+        // `as` plus member: unstatable tail.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-use a::b::{X, Y};\n+use a::b::X;\n+use a::b::Y as Z;\n fn m() {}\n",
+        );
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn split_duplicate_group_vetoes() {
+        // A second identical grouped line in the pre-image: ambiguous.
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-use a::b::{X, Y};\n+use a::b::X;\n+use a::b::Y;\n fn m() {}\n",
+        );
+        let pre = pre_map(&[("f.rs", "use a::b::{X, Y};\nuse a::b::{X, Y};\nfn m() {}\n")]);
+        assert!(infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none());
+    }
+
+    #[test]
+    fn split_no_pre_image_stays_ordinary() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-use a::b::{X, Y};\n+use a::b::X;\n+use a::b::Y;\n fn m() {}\n",
+        );
+        assert!(super::super::infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn split_pub_uniform_fires() {
+        let raw = section(
+            "f.rs",
+            "@@ -1,2 +1,3 @@\n-pub use a::b::{X, Y};\n+pub use a::b::X;\n+pub use a::b::Y;\n fn m() {}\n",
+        );
+        let pre = pre_map(&[("f.rs", "pub use a::b::{X, Y};\nfn m() {}\n")]);
+        let out =
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).expect("must fire");
+        validated_live(&out, &pre);
+        assert!(out.contains("+ pub use a::b::Y;\n"), "got: {out}");
+        let mut files = pre.clone();
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files, native_post(&raw, &pre));
+    }
+
+    #[test]
+    fn merge_split_round_trip_is_canonical() {
+        // merge(split(x)) == x and split(merge(x)) == x via classify+apply:
+        // the two directions are one equivalence (WI-1 instantiation rule).
+        let table =
+            rsmpl_pattern::MetavarTable::from_directives(&[]).expect("empty directives parse");
+        let grouped = "use a::b::{X, Y};";
+        let expanded = "use a::b::X;\nuse a::b::Y;";
+        let split = rsmpl_pattern::classify_use_split(grouped, expanded, &table)
+            .unwrap()
+            .expect("split classifies");
+        let merge = rsmpl_pattern::classify_use_regroup(expanded, grouped, &table)
+            .unwrap()
+            .expect("merge classifies");
+        assert_eq!(split.prefix, merge.prefix);
+        assert_eq!(split.members, merge.members);
+        assert_eq!(split.vis, merge.vis);
     }
 }

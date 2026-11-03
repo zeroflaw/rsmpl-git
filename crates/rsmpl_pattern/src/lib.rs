@@ -66,5 +66,6 @@ pub use quote_utils::{
 };
 pub use terse_fn::is_terse_fn_line;
 pub use use_rename::{
-    classify_use_regroup, classify_use_rename, parse_use_prefix, UsePrefix, UseRegroup,
+    classify_use_regroup, classify_use_rename, classify_use_split, parse_use_prefix, UsePrefix,
+    UseRegroup, UseSplit,
 };

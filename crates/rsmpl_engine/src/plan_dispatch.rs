@@ -231,6 +231,15 @@ pub(crate) fn apply_rsmpl_hunk(
             edits,
         )
         .map(|n| (n, vec![empty(); n])),
+        PatternKind::UseSplit { .. } => matcher_use::apply_use_split_hunk(
+            parsed,
+            &state.original,
+            &state.index,
+            rh,
+            compiled,
+            edits,
+        )
+        .map(|n| (n, vec![empty(); n])),
         PatternKind::General { .. } => matcher_general_apply::apply_general_hunk(
             parsed,
             &state.original,
