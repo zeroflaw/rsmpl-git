@@ -168,22 +168,43 @@ fn wi15_ordinary_section_names_declined_detectors() {
     assert_eq!(e["saved_bytes"], serde_json::json!(0), "got: {v}");
     let declined = e["declined"].as_array().unwrap();
     assert!(!declined.is_empty(), "got: {v}");
-    // Pair-chain families tried in chain order; every reason is
-    // chain-level (`no-match` shape decline here). A 1-pair whole
-    // section routes through the singles arms + per-hunk fallback, so
-    // the list names those families (whole-section multi-pair drivers
-    // never run on it — the routing, not a gap).
+    // WI-17 slice 1: the trial log is complete — every chain-registry
+    // detector appears exactly once across attempted (`no-match` here)
+    // and `not-tried` (whole-section multi-pair drivers never run on a
+    // 1-pair section — the routing, recorded as absence, not silence).
+    // Every reason parses under the closed taxonomy.
     let names: Vec<&str> = declined
         .iter()
         .map(|d| d["detector"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"item_rename"), "got: {names:?}");
     assert!(names.contains(&"call_sweep"), "got: {names:?}");
     assert!(names.contains(&"delete"), "got: {names:?}");
     assert!(names.contains(&"subhunk"), "got: {names:?}");
     for d in declined {
-        assert_eq!(d["reason"], serde_json::json!("no-match"), "got: {d}");
+        let reason = d["reason"].as_str().unwrap();
+        let closed = reason == "no-match"
+            || reason == "not-tried"
+            || reason.starts_with("guard:")
+            || reason.starts_with("totality:")
+            || reason.starts_with("veto:")
+            || reason.starts_with("precondition:")
+            || reason == "byte-guard"
+            || reason == "precision-guard"
+            || reason == "crlf-content"
+            || reason == "stranded-joint"
+            || reason == "cross-kind-member"
+            || reason == "unbalanced-hunks";
+        assert!(closed, "open reason: {d}");
     }
+    // Chain-registry detectors ride `not-tried` when the 1-pair routing
+    // never attempts them (multi-pair drivers); attempted families ride
+    // their chain reason. `item_rename` is a registry detector (present
+    // exactly once, either posture).
+    let item_count = declined
+        .iter()
+        .filter(|d| d["detector"] == serde_json::json!("item_rename"))
+        .count();
+    assert_eq!(item_count, 1, "got: {names:?}");
     // WI-15 review (pre-pass silence): whole-patch pre-pass declines are
     // patch-global and never attributed per-section — the pre-pass-only
     // detectors never appear in a section's `declined` list. The shared
@@ -386,4 +407,139 @@ fn wi15_partial_subhunk_mix_reports_context_exact_remainder() {
         overhead <= budget,
         "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
     );
+}
+
+#[test]
+fn wi17_text_parity_matches_json_trial() {
+    // WI-17 slice 1 text parity: the same comment-only input reports
+    // the same ordinary-section trial in text mode (stderr
+    // `declined:` lines, stdout patch untouched) and in JSON mode
+    // (`declined` arrays). The two sets must be equal as
+    // (file, detector, reason) triples.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    // hello\n    let x = 1;\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    // hello world\n    let x = 1;\n}\n",
+    );
+    let json_out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        json_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout)).expect("stdout is JSON");
+    let mut want = std::collections::BTreeSet::new();
+    for e in v["hunks"].as_array().unwrap() {
+        if e["detector"] != serde_json::json!("ordinary") {
+            continue;
+        }
+        let file = e["file"].as_str().unwrap().to_string();
+        for d in e["declined"].as_array().unwrap() {
+            want.insert(format!(
+                "{} {} {}",
+                file,
+                d["detector"].as_str().unwrap(),
+                d["reason"].as_str().unwrap()
+            ));
+        }
+    }
+    assert!(!want.is_empty(), "got: {v}");
+    let text_out = run(dir.path(), &[]);
+    assert!(
+        text_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text_out.stderr)
+    );
+    let patch_text = String::from_utf8_lossy(&text_out.stdout).to_string();
+    let patch_json = v["patch"].as_str().unwrap();
+    assert_eq!(patch_text, patch_json, "text stdout must equal JSON patch");
+    let mut got = std::collections::BTreeSet::new();
+    for line in String::from_utf8_lossy(&text_out.stderr).lines() {
+        if let Some(rest) = line.strip_prefix("declined: ") {
+            got.insert(rest.to_string());
+        }
+    }
+    assert_eq!(got, want, "text trial must equal JSON trial");
+}
+
+#[test]
+fn wi17_guard_veto_carries_verdict_numbers() {
+    // WI-17 slice 1 guard numbers: every `guard:` reason on the
+    // pair-chain path carries the exact verdict inputs (`sem`, `ord`,
+    // `allow`), so the overflow (`sem > ord + allow`) is computable
+    // from the report alone. This pin owns the taxonomy shape over
+    // whatever the fixture below raises (fire or veto): no bare veto
+    // without numbers on the pair-chain path, and every reason closed.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    old_a_variable_with_a_long_name();\n    old_a_variable_with_a_long_name();\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    new_a_variable_with_a_long_name();\n    new_a_variable_with_a_long_name();\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    for e in hunks {
+        for d in e
+            .get("declined")
+            .and_then(|a| a.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+        {
+            let reason = d["reason"].as_str().unwrap();
+            let closed = reason == "no-match"
+                || reason == "not-tried"
+                || reason.starts_with("guard:")
+                || reason.starts_with("totality:")
+                || reason.starts_with("veto:")
+                || reason.starts_with("precondition:")
+                || reason == "byte-guard"
+                || reason == "precision-guard"
+                || reason == "crlf-content"
+                || reason == "stranded-joint"
+                || reason == "cross-kind-member"
+                || reason == "unbalanced-hunks";
+            assert!(closed, "open reason: {d}");
+            if reason.starts_with("guard:") {
+                let rest = reason.strip_prefix("guard:").unwrap();
+                let mut parts = rest.split(':');
+                let kind = parts.next().unwrap();
+                assert!(kind == "byte" || kind == "precision", "got: {reason}");
+                let (mut sem, mut ord, mut allow) = (None, None, None);
+                for p in parts {
+                    if let Some(x) = p.strip_prefix("sem=") {
+                        sem = x.parse::<usize>().ok();
+                    } else if let Some(x) = p.strip_prefix("ord=") {
+                        ord = x.parse::<usize>().ok();
+                    } else if let Some(x) = p.strip_prefix("allow=") {
+                        allow = x.parse::<usize>().ok();
+                    } else {
+                        panic!("bad guard slot: {reason}");
+                    }
+                }
+                let (s, o, a) = (sem.unwrap(), ord.unwrap(), allow.unwrap());
+                assert!(s > o + a, "guard veto must name its overflow: {reason}");
+            }
+        }
+    }
 }

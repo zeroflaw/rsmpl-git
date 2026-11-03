@@ -81,8 +81,10 @@ pub(crate) fn within_strict(body_len: usize, ordinary_len: usize) -> bool {
 /// set (block probe + full-set scratch-apply), so they price the WI-7
 /// allowance over the claimed pair count plus the per-emission
 /// filter-header excess measured from the emission itself; Strict
-/// detectors keep T375. The chain records `precision-guard` vs
-/// `byte-guard` on veto (both in SPEC D.2, no schema change).
+/// detectors keep T375. WI-17 slice 1 records the veto with the
+/// verdict numbers via `prov::declined_guard_with_numbers`
+/// (`guard:<kind>:sem=X:ord=Y:allow=Z`, SPEC D.2); the bare
+/// `precision-guard`/`byte-guard` spellings are retired on this path.
 pub(crate) fn pair_section_gate(
     detector: &str,
     emission: &str,
@@ -101,9 +103,11 @@ pub(crate) fn pair_section_gate(
     }
 }
 
-/// Veto reason for a whole-section pair-chain decline:
-/// `precision-guard` under the WI-7 allowance, `byte-guard` under
-/// strict T375 (both in SPEC D.2, no schema change).
+/// WI-17 slice 1: retired — pair-chain gate vetoes now carry the
+/// verdict numbers via `prov::declined_guard_with_numbers`
+/// (`guard:<kind>:sem=X:ord=Y:allow=Z`, SPEC D.2). Kept for the
+/// partition/partial arms' prose until their slice unifies them.
+#[allow(dead_code)]
 pub(crate) fn pair_gate_reason(detector: &str) -> &'static str {
     if guard_for(detector) == Guard::Precision {
         "precision-guard"

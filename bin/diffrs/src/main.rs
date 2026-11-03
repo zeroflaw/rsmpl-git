@@ -246,9 +246,11 @@ fn run() -> Result<(), CliError> {
             "version": rsmpl_patch::REPORT_VERSION,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
-            // WI-15c: wholly-ordinary sections carry one entry with
+            // WI-15c/17: wholly-ordinary sections carry one entry with
             // `detector: "ordinary"` and the chain-level `declined`
-            // list (which families were tried and why); semantic hunks
+            // trial log (attempted declines in chain order plus
+            // `not-tried` for never-attempted registry detectors,
+            // closed reason taxonomy, SPEC D.2); semantic hunks
             // never carry `declined` (a firing section explains itself).
             "hunks": patch.hunks.iter().map(|h| {
                 let mut entry = serde_json::json!({
@@ -284,6 +286,19 @@ fn run() -> Result<(), CliError> {
         return check_verdict(&check);
     }
     print!("{}", patch.rsmpl);
+    // WI-17 slice 1 text parity: the patch artifact stays stdout-only
+    // (byte-identical with or without provenance), while the same
+    // ordinary-section trial JSON carries rides stderr as one
+    // `declined:` line per declined entry (file, detector, reason) —
+    // the same set, the same closed taxonomy (SPEC D.2). Like warnings,
+    // these lines are outside the JSON `patch`-overhead budget.
+    for h in &patch.hunks {
+        if h.detector == "ordinary" {
+            for d in &h.declined {
+                eprintln!("declined: {} {} {}", h.file, d.detector, d.reason);
+            }
+        }
+    }
     check_verdict(&check)
 }
 

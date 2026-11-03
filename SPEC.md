@@ -7755,7 +7755,8 @@ ungrouped sections never move). Per-group T375 re-basis: the shared
 name must cost strictly less than the group's `saved_bytes` sum, else
 that group falls back to positional `rN` names while keeping the
 `group` label. An ordinary entry carries `declined: [{detector,
-reason}]` — one per attempted detector family that declined, in chain
+reason}]` — the complete trial log for the section (WI-17): every
+detector the chain attempted records exactly one decline in chain
 order (deduped): pair-chain families individually
 (`item_rename`, `fn_slot_sweep`, …, `literal_frame`, including the
 per-hunk singles arms `precision_definition_single`,
@@ -7765,11 +7766,26 @@ arms); composite drivers by driver name (`partition`, `partial`,
 `macro_rule_body`, `macro_enclosing`, `attr_sweep`, `verbatim`,
 `delete`, `definition_addition`, `definition_addition_follow`,
 `variant_addition_follow`, `use_regroup`); section gates by gate name
-(`section` with `crlf-content`, `stranded-joint`, or `cross-kind-member`). `reason` is chain-level — `no-match` (shape
-decline), `byte-guard` (strict-T375 veto after a candidate),
-`precision-guard` (precision-allowance veto after a candidate) —
-never detector-inferred: a detector-internal guard veto surfaces as
-`no-match`. Whole-patch pre-pass declines (moves, item/member/mod
+(`section` with `crlf-content`, `stranded-joint`, or `cross-kind-member`). Every
+detector the chain never attempted for the section records one
+`not-tried` entry in registry order appended after the attempts —
+absence is data, not silence. `reason` is chain-level under the
+closed taxonomy (WI-17 slice 1): `no-match` (shape decline, no
+candidate), `guard:<kind>:sem=X:ord=Y:allow=Z` (a candidate priced
+out by the byte guard — `kind` is `byte` under strict T375 with
+`allow == 0`, `precision` under the WI-7 allowance; `sem` is the
+losing emission bytes, `ord` the normalized ordinary span, `allow`
+the precision allowance, so the overflow `sem > ord + allow` is
+computable from the report alone), `totality:<found>:<want>`
+(site-count mismatch), `veto:<name>` (named veto: off-diff use,
+opaque hit, ambiguous anti-unification), `precondition:<name>` (named
+failed shape premise); the pre-WI-17 bare `byte-guard` /
+`precision-guard` spellings stay parseable but are no longer emitted
+on the pair-chain path. Detector-internal guard vetoes surface as
+`no-match` — reasons are never detector-inferred. Text mode prints
+the same trial to stderr as one `declined: <file> <detector>
+<reason>` line per entry (stdout stays the patch byte-identical).
+Whole-patch pre-pass declines (moves, item/member/mod
 intents, cross-file intents) are patch-global and never attributed
 per-section: the pre-pass-only detectors (`move`, `item_intent`,
 `item_joint_impl`, `fn_joint`, `mod_rename`) never appear in a

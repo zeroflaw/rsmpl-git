@@ -11,7 +11,10 @@
 /// WI-8 pair partition driver, split to `partition.rs` under the
 /// 2000-line gate (D5): pure move, call sites unchanged.
 pub(crate) use super::partition::try_partition_section;
-use super::prov::{attempt, commit_prov, declined_guard, push_section_prov, reheader_rename};
+use super::prov::{
+    attempt, commit_prov, declined_guard, declined_guard_with_numbers, push_section_prov,
+    reheader_rename,
+};
 use super::{HunkDeclined, HunkProvenance};
 
 /// Ordered pair-sweep chain, tightest first (existing order,
@@ -795,6 +798,22 @@ pub(crate) fn compress_section(
         // Strict keeps T375 over the normalized span.
         let ordinary = super::guard::normalized_section_len(section);
         let n_claimed = minuses.len();
+        // WI-17 slice 1: pair-chain gate vetoes carry the WI-7 numbers
+        // in the closed `guard:` form (SPEC D.2). `sem` prices the exact
+        // losing emission, `ord` the normalized ordinary span, `allow`
+        // the precision allowance (0 under strict T375).
+        let guard_numbers = |emission: &str| -> (&'static str, usize, usize, usize) {
+            let sem = emission.len();
+            if super::guard::guard_for(detector) == super::guard::Guard::Precision {
+                let allow = super::guard::precision_allowance(
+                    n_claimed,
+                    super::block_headers::filter_header_excess(emission),
+                );
+                ("precision", sem, ordinary, allow)
+            } else {
+                ("byte", sem, ordinary, 0)
+            }
+        };
         if let Some(prelude) = &rename_prelude {
             if let Some(final_text) = reheader_rename(&sweep, prelude) {
                 if super::guard::pair_section_gate(detector, &final_text, ordinary, n_claimed) {
@@ -812,7 +831,8 @@ pub(crate) fn compress_section(
                     return Some(final_text);
                 }
             }
-            declined_guard(declined, detector, super::guard::pair_gate_reason(detector));
+            let (kind, sem, ord, allow) = guard_numbers(&sweep);
+            declined_guard_with_numbers(declined, detector, kind, sem, ord, allow);
             used_rules.truncate(checkpoint);
         } else if super::guard::pair_section_gate(detector, &sweep, ordinary, n_claimed) {
             push_section_prov(
@@ -820,7 +840,8 @@ pub(crate) fn compress_section(
             );
             return Some(sweep);
         } else {
-            declined_guard(declined, detector, super::guard::pair_gate_reason(detector));
+            let (kind, sem, ord, allow) = guard_numbers(&sweep);
+            declined_guard_with_numbers(declined, detector, kind, sem, ord, allow);
             used_rules.truncate(checkpoint);
         }
     }

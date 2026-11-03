@@ -51,17 +51,104 @@ pub struct HunkProvenance {
 
 /// WI-15c one declined detector attempt: the family name the chain
 /// observed (pair-chain families individually; composite drivers by
-/// driver name; section gates by gate name) plus the chain-level reason
-/// (`no-match` shape decline, `byte-guard` strict-T375 veto after a
-/// candidate, `precision-guard` precision-allowance veto after a
-/// candidate, or a section-gate reason like `crlf-content`,
-/// `unbalanced-hunks`, `stranded-joint`, `cross-kind-member`). Detector-internal guard
-/// vetoes surface as `no-match` — reasons are chain-level, never
-/// detector-inferred (SPEC D.2).
+/// driver name; section gates by gate name) plus the chain-level reason.
+/// WI-17 slice 1 closes the taxonomy (SPEC D.2): `no-match` (shape
+/// decline, no candidate), `guard:<kind>:sem=X:ord=Y:allow=Z` (a
+/// candidate priced out by the byte guard, with the three WI-7
+/// numbers), `totality:<a>:<b>` (site-count mismatch), `veto:<name>`
+/// (a named veto: off-diff use, opaque hit, ambiguous
+/// anti-unification), `precondition:<name>` (a stated shape premise
+/// failed), `not-tried` (the detector never ran on this hunk —
+/// absence, not silence). Bare `byte-guard`/`precision-guard` are the
+/// pre-WI-17 spellings of `guard:byte`/`guard:precision` (kept
+/// parseable, no longer emitted on the wired paths).
+/// Detector-internal guard vetoes surface as `no-match` — reasons are
+/// chain-level, never detector-inferred (SPEC D.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HunkDeclined {
     pub detector: String,
     pub reason: String,
+}
+
+/// WI-17 slice 1 closed reason taxonomy (SPEC D.2). Every reason the
+/// chain emits parses under one of these arms; anything else fails
+/// the `reason_is_closed` pin (new arms extend this function with
+/// their SPEC sentence, never an ad-hoc string at the call site).
+#[allow(dead_code)]
+pub(crate) fn reason_is_closed(reason: &str) -> bool {
+    if reason == "no-match" || reason == "not-tried" {
+        return true;
+    }
+    if let Some(rest) = reason.strip_prefix("guard:") {
+        // `guard:<byte|precision>:sem=X:ord=Y:allow=Z`.
+        let mut parts = rest.split(':');
+        let kind = parts.next().unwrap_or("");
+        if kind != "byte" && kind != "precision" {
+            return false;
+        }
+        let mut sem = None;
+        let mut ord = None;
+        let mut allow = None;
+        for p in parts {
+            if let Some(v) = p.strip_prefix("sem=") {
+                sem = v.parse::<usize>().ok();
+            } else if let Some(v) = p.strip_prefix("ord=") {
+                ord = v.parse::<usize>().ok();
+            } else if let Some(v) = p.strip_prefix("allow=") {
+                allow = v.parse::<usize>().ok();
+            } else {
+                return false;
+            }
+        }
+        return sem.is_some() && ord.is_some() && allow.is_some();
+    }
+    if let Some(rest) = reason.strip_prefix("totality:") {
+        let mut parts = rest.split(':');
+        return parts.next().is_some_and(|a| a.parse::<usize>().is_ok())
+            && parts.next().is_some_and(|b| b.parse::<usize>().is_ok())
+            && parts.next().is_none();
+    }
+    if let Some(rest) = reason.strip_prefix("veto:") {
+        return !rest.is_empty() && !rest.contains(':');
+    }
+    if let Some(rest) = reason.strip_prefix("precondition:") {
+        return !rest.is_empty() && !rest.contains(':');
+    }
+    // Pre-WI-17 spellings (pinned, no longer emitted on wired paths).
+    reason == "byte-guard"
+        || reason == "precision-guard"
+        || reason == "crlf-content"
+        || reason == "stranded-joint"
+        || reason == "cross-kind-member"
+        || reason == "unbalanced-hunks"
+}
+
+/// WI-17 slice 1 reason constructors (one spelling per arm, SPEC D.2).
+pub(crate) fn reason_no_match() -> String {
+    "no-match".to_string()
+}
+pub(crate) fn reason_not_tried() -> String {
+    "not-tried".to_string()
+}
+pub(crate) fn reason_guard(kind: &str, sem: usize, ord: usize, allow: usize) -> String {
+    format!("guard:{kind}:sem={sem}:ord={ord}:allow={allow}")
+}
+/// WI-17 slice 1 constructor (wired by a later slice: totality vetoes
+/// with both counts).
+#[allow(dead_code)]
+pub(crate) fn reason_totality(found: usize, want: usize) -> String {
+    format!("totality:{found}:{want}")
+}
+/// WI-17 slice 1 constructor (wired by a later slice: named vetoes).
+#[allow(dead_code)]
+pub(crate) fn reason_veto(name: &str) -> String {
+    format!("veto:{name}")
+}
+/// WI-17 slice 1 constructor (wired by a later slice: named
+/// preconditions).
+#[allow(dead_code)]
+pub(crate) fn reason_precondition(name: &str) -> String {
+    format!("precondition:{name}")
 }
 
 /// WI-15c chain attempt recorder: `Some` passes through untouched;
@@ -76,7 +163,7 @@ pub(crate) fn attempt<T>(
     if r.is_none() {
         declined.push(HunkDeclined {
             detector: detector.to_string(),
-            reason: "no-match".to_string(),
+            reason: reason_no_match(),
         });
     }
     r
@@ -84,6 +171,10 @@ pub(crate) fn attempt<T>(
 
 /// WI-15c chain guard-veto recorder: the detector fired but the
 /// section/hunk guard priced it out. Call at the veto branch only.
+/// WI-17 slice 1: prefer [`declined_guard_with_numbers`] on newly
+/// wired paths (the closed `guard:` form with the WI-7 numbers);
+/// this bare form stays for the not-yet-unified arms (partition,
+/// partial, per-hunk) and is pinned parseable by `reason_is_closed`.
 pub(crate) fn declined_guard(
     declined: &mut Vec<HunkDeclined>,
     detector: &str,
@@ -93,6 +184,87 @@ pub(crate) fn declined_guard(
         detector: detector.to_string(),
         reason: reason.to_string(),
     });
+}
+
+/// WI-17 slice 1 guard-veto recorder with the WI-7 numbers: the
+/// detector fired a `sem`-byte candidate over an `ord`-byte ordinary
+/// span with a precision allowance of `allow` bytes (`kind` is
+/// `byte` under strict T375 with `allow == 0`, `precision` under
+/// the WI-7 allowance). Emits the closed `guard:` reason (SPEC D.2).
+pub(crate) fn declined_guard_with_numbers(
+    declined: &mut Vec<HunkDeclined>,
+    detector: &str,
+    kind: &str,
+    sem: usize,
+    ord: usize,
+    allow: usize,
+) {
+    declined.push(HunkDeclined {
+        detector: detector.to_string(),
+        reason: reason_guard(kind, sem, ord, allow),
+    });
+}
+
+/// WI-17 slice 1 whole-section pair-chain registry in chain order
+/// (emitted detector names, deduped — the two `call_arg_template`
+/// arms, three `let_template` arms, and two `single_block` arms each
+/// share one family entry). `push_ordinary_prov` completes wholly-
+/// ordinary entries with `not-tried` for every registry detector the
+/// chain never attempted, so the F10 comment-only probe lists every
+/// detector exactly once across `declined`/`not-tried`. A new chain
+/// arm without a registry entry fails the `chain_registry_covers`
+/// pin (house source-scan style: the test lists the chain names).
+pub(crate) const CHAIN_DETECTORS: &[&str] = &[
+    "macro_rules_rename",
+    "fn_slot_sweep",
+    "sig_evolution",
+    "header_evolution",
+    "item_rename",
+    "attr_sweep",
+    "trait_method_rename",
+    "inherent_method_rename",
+    "member_rename",
+    "assoc_rename",
+    "definition_evolution",
+    "method_to_fn",
+    "method_to_method",
+    "method_same_literal",
+    "ref_strip",
+    "qualified_call",
+    "turbofish",
+    "macro_rename",
+    "use_prefix",
+    "call_sweep",
+    "call_arg_template",
+    "call_arg_add",
+    "call_literal",
+    "method_arg_template",
+    "general_expr",
+    "control_template",
+    "call_peel",
+    "let_type_add",
+    "type_sweep",
+    "let_template",
+    "sequence",
+    "repeat_fold",
+    "partial_strip",
+    "single_block",
+    "literal_frame",
+];
+
+/// WI-17 slice 1: append `(detector, "not-tried")` for every
+/// [`CHAIN_DETECTORS`] entry absent from `declined` (by detector
+/// name), preserving registry order. Attempted declines keep their
+/// chain order first; completion only appends.
+pub(crate) fn complete_with_not_tried(declined: &mut Vec<HunkDeclined>) {
+    for det in CHAIN_DETECTORS {
+        if !declined.iter().any(|d| d.detector == *det) {
+            declined.push(HunkDeclined {
+                detector: det.to_string(),
+                reason: reason_not_tried(),
+            });
+        }
+    }
 }
 
 /// WI-2 totality label (SPEC D.2): `"pre-image"` when the section had
@@ -469,7 +641,9 @@ pub(crate) fn push_section_prov(
 /// header-derived, hence `sites_exact: true` either way); `saved_bytes`
 /// is `0` (nothing won); `totality`/`proven` follow the pre-image rule.
 /// Entries dedupe preserving first-seen chain order (one hunk's singles
-/// declining the same family five times reports it once). Sections with
+/// declining the same family five times reports it once), then WI-17
+/// completes with `not-tried` for every [`CHAIN_DETECTORS`] entry the
+/// chain never attempted (registry order appended). Sections with
 /// no native (`rule=`-free) hunk get no entry: pre-pass emissions (move
 /// / joint intents) are already semantic, and attributing chain declines
 /// to them would mislabel a compressed section as ordinary.
@@ -487,9 +661,11 @@ pub(crate) fn push_ordinary_prov(
     if !has_native_hunk(section) {
         return;
     }
+    let mut completed: Vec<HunkDeclined> = declined.to_vec();
+    complete_with_not_tried(&mut completed);
     let mut seen = std::collections::HashSet::new();
     let mut deduped = Vec::new();
-    for d in declined {
+    for d in completed {
         if seen.insert((d.detector.clone(), d.reason.clone())) {
             deduped.push(d.clone());
         }
@@ -832,7 +1008,10 @@ mod tests {
     #[test]
     fn ordinary_entry_dedupes_preserving_chain_order() {
         // WI-15c: one hunk's singles declining the same family five
-        // times reports it once, first-seen order kept.
+        // times reports it once, first-seen order kept. WI-17 slice 1:
+        // the entry then completes with `not-tried` for every chain
+        // registry detector the chain never attempted (registry order
+        // appended).
         let mut prov = Vec::new();
         push_ordinary_prov(
             &mut prov,
@@ -855,16 +1034,24 @@ mod tests {
         assert!(e.sites_exact);
         assert!(e.proven);
         assert_eq!(e.saved_bytes, 0);
-        assert_eq!(
-            e.declined,
-            declined(&[
-                ("call_sweep", "no-match"),
-                ("verbatim", "no-match"),
-                ("call_sweep", "byte-guard"),
-            ]),
-            "got: {:?}",
+        let head = declined(&[
+            ("call_sweep", "no-match"),
+            ("verbatim", "no-match"),
+            ("call_sweep", "byte-guard"),
+        ]);
+        assert!(
+            e.declined.starts_with(&head),
+            "attempted declines first in chain order, got: {:?}",
             e.declined
         );
+        // Every registry detector absent from the attempt list rides
+        // `not-tried` exactly once, in registry order.
+        let mut want: Vec<HunkDeclined> = head;
+        complete_with_not_tried(&mut want);
+        assert_eq!(e.declined, want, "got: {:?}", e.declined);
+        for d in &e.declined {
+            assert!(reason_is_closed(&d.reason), "open reason: {d:?}");
+        }
     }
 
     #[test]
@@ -893,10 +1080,15 @@ mod tests {
         assert_eq!(e.sites, vec![4], "remainder only, got: {prov:?}");
         assert!(e.sites_exact);
         assert_eq!(e.saved_bytes, 0);
-        assert_eq!(
-            e.declined,
-            declined(&[("call_sweep", "no-match"), ("verbatim", "no-match")])
-        );
+        // WI-17 slice 1: remainder entries complete with `not-tried`
+        // like wholly-ordinary ones (attempted declines first, then
+        // registry order).
+        let mut want = declined(&[("call_sweep", "no-match"), ("verbatim", "no-match")]);
+        complete_with_not_tried(&mut want);
+        assert_eq!(e.declined, want);
+        for d in &e.declined {
+            assert!(reason_is_closed(&d.reason), "open reason: {d:?}");
+        }
         assert!(has_semantic_hunk(semantic));
         assert!(has_native_hunk(semantic));
     }
@@ -1052,5 +1244,191 @@ mod tests {
             Some("pre"),
         );
         assert!(prov.is_empty(), "sweep dummy claims all: {prov:?}");
+    }
+
+    #[test]
+    fn wi17_reason_taxonomy_is_closed() {
+        // WI-17 slice 1: every reason the chain emits parses under one
+        // closed arm; anything else fails here (new arms extend
+        // `reason_is_closed` with their SPEC sentence first).
+        for r in [
+            "no-match",
+            "not-tried",
+            "guard:byte:sem=120:ord=100:allow=0",
+            "guard:precision:sem=120:ord=100:allow=32",
+            "totality:2:3",
+            "veto:opaque-hit",
+            "precondition:shared-delta",
+            // Pre-WI-17 spellings stay parseable (pinned).
+            "byte-guard",
+            "precision-guard",
+            "crlf-content",
+            "stranded-joint",
+            "cross-kind-member",
+            "unbalanced-hunks",
+        ] {
+            assert!(reason_is_closed(r), "{r} must be closed");
+        }
+        for r in [
+            "",
+            "guard:sem=1:ord=1:allow=1",
+            "guard:strict:sem=1:ord=1:allow=0",
+            "guard:byte:sem=1:ord=1",
+            "totality:2",
+            "veto:",
+            "precondition:a:b",
+            "BYTE-GUARD",
+        ] {
+            assert!(!reason_is_closed(r), "{r} must be open");
+        }
+        // Constructors emit the closed form.
+        assert_eq!(
+            reason_guard("precision", 120, 100, 32),
+            "guard:precision:sem=120:ord=100:allow=32"
+        );
+        assert_eq!(reason_totality(2, 3), "totality:2:3");
+        assert_eq!(reason_veto("opaque-hit"), "veto:opaque-hit");
+        assert_eq!(
+            reason_precondition("shared-delta"),
+            "precondition:shared-delta"
+        );
+        // The numbers are the verdict inputs: overflow is computable
+        // from the reason alone (`sem > ord + allow`).
+        let r = reason_guard("precision", 120, 100, 16);
+        let overflow = r
+            .strip_prefix("guard:precision:")
+            .and_then(|rest| {
+                let mut sem = None;
+                let mut ord = None;
+                let mut allow = None;
+                for p in rest.split(':') {
+                    if let Some(v) = p.strip_prefix("sem=") {
+                        sem = v.parse::<usize>().ok();
+                    } else if let Some(v) = p.strip_prefix("ord=") {
+                        ord = v.parse::<usize>().ok();
+                    } else if let Some(v) = p.strip_prefix("allow=") {
+                        allow = v.parse::<usize>().ok();
+                    }
+                }
+                Some((sem?, ord?, allow?))
+            })
+            .is_some_and(|(s, o, a)| s > o + a);
+        assert!(overflow, "guard reason must name its overflow: {r}");
+    }
+
+    #[test]
+    fn wi17_chain_registry_covers_pair_chain_attempts() {
+        // WI-17 slice 1 registry completeness: every `run_pair_chain`
+        // `attempt(` detector name appears in `CHAIN_DETECTORS` (emitted
+        // names, deduped — the shared-family arms list once). A new
+        // chain arm without a registry entry fails here by
+        // construction (add the arm + its SPEC sentence together).
+        // This list mirrors `run_pair_chain` in `chain.rs` in order.
+        let chain_attempts = [
+            "macro_rules_rename",
+            "fn_slot_sweep",
+            "sig_evolution",
+            "header_evolution",
+            "item_rename",
+            "attr_sweep",
+            "trait_method_rename",
+            "inherent_method_rename",
+            "member_rename",
+            "assoc_rename",
+            "definition_evolution",
+            "method_to_fn",
+            "method_to_method",
+            "method_same_literal",
+            "ref_strip",
+            "qualified_call",
+            "turbofish",
+            "macro_rename",
+            "use_prefix",
+            "call_sweep",
+            "call_arg_template",
+            "call_arg_add",
+            "call_literal",
+            "call_arg_template",
+            "method_arg_template",
+            "general_expr",
+            "control_template",
+            "call_peel",
+            "let_type_add",
+            "type_sweep",
+            "let_template",
+            "let_template",
+            "let_template",
+            "sequence",
+            "repeat_fold",
+            "partial_strip",
+            "single_block",
+            "single_block",
+            "literal_frame",
+        ];
+        for det in chain_attempts {
+            assert!(
+                CHAIN_DETECTORS.contains(&det),
+                "{det} attempted by run_pair_chain but missing from CHAIN_DETECTORS"
+            );
+        }
+        // Registry holds the emitted names (whole-section
+        // `let_type_add` is recorded under the detector the call
+        // passes: `let_sweep` returns the `let_type_add` label at the
+        // `run_pair_chain` boundary, so the registry entry is the
+        // emitted `"let_type_add"`).
+        let mut seen = std::collections::HashSet::new();
+        for det in CHAIN_DETECTORS {
+            assert!(seen.insert(*det), "duplicate registry entry: {det}");
+        }
+    }
+
+    #[test]
+    fn wi17_complete_with_not_tried_appends_registry_order() {
+        // Completion only appends: attempted declines keep chain order
+        // first, missing registry detectors follow in registry order,
+        // present ones never duplicate.
+        let mut v = declined(&[("call_sweep", "no-match")]);
+        complete_with_not_tried(&mut v);
+        assert_eq!(v[0].detector, "call_sweep");
+        assert_eq!(v[0].reason, "no-match");
+        let want_order: Vec<&str> = CHAIN_DETECTORS
+            .iter()
+            .copied()
+            .filter(|d| *d != "call_sweep")
+            .collect();
+        let got_order: Vec<&str> = v[1..].iter().map(|d| d.detector.as_str()).collect();
+        assert_eq!(got_order, want_order);
+        assert!(v[1..].iter().all(|d| d.reason == "not-tried"));
+        // Present detectors never duplicate.
+        let mut full: Vec<HunkDeclined> = CHAIN_DETECTORS
+            .iter()
+            .map(|d| HunkDeclined {
+                detector: d.to_string(),
+                reason: "no-match".to_string(),
+            })
+            .collect();
+        let len = full.len();
+        complete_with_not_tried(&mut full);
+        assert_eq!(full.len(), len, "got: {full:?}");
+    }
+
+    #[test]
+    fn wi17_guard_with_numbers_names_overflow() {
+        // The pair-chain veto records the exact verdict inputs: the
+        // losing emission bytes, the ordinary span, and the allowance.
+        let mut v = Vec::new();
+        declined_guard_with_numbers(&mut v, "call_sweep", "byte", 120, 100, 0);
+        assert_eq!(
+            v,
+            declined(&[("call_sweep", "guard:byte:sem=120:ord=100:allow=0")]),
+            "got: {v:?}"
+        );
+        let mut v = Vec::new();
+        declined_guard_with_numbers(&mut v, "inherent_method_rename", "precision", 120, 100, 32);
+        assert_eq!(
+            v[0].reason, "guard:precision:sem=120:ord=100:allow=32",
+            "got: {v:?}"
+        );
+        assert!(reason_is_closed(&v[0].reason));
     }
 }
