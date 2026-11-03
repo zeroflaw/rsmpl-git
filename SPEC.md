@@ -9538,8 +9538,16 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     slot stays token-equal: the cut + bare paste carry the move while
     the attr/doc lines ride an ordinary plus-prefix leftover hunk above
     the paste (the T432b prefix shape — no new spelling, no engine
-    change). Removed / replaced attrs, two added attrs, `//!` / `/* */`
-    docs, and rename+attr (two deltas) stay ordinary — removed by
+    change). WI-14 slice 7 extends the same prefix shape to `fn`
+    move+rename with exactly one added leading block (single-line
+    `#[...]` / `///`, one balanced multi-line `#[...]` up to the cap,
+    or one added block atop an existing attr): the minus cut is bare
+    (span law satisfied), the inner rename pairs through the abstract
+    evolved matcher, and the paste carries the evolution template
+    (`+ fn <new>(...) { ... }`) with the added block as the ordinary
+    prefix. Removed / replaced attrs, two added attrs, `//!` / `/* */`
+    docs, removed+rename, replaced+rename, two-added+rename, and
+    non-`fn` rename+attr stay ordinary — removed/replaced by
     construction under the engine whole-span cut law (slice 4: `- I`
     matches the full item span including attrs, so a bare-span cut
     matches nothing while a full-span cut captures the attr a bare

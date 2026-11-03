@@ -17,10 +17,14 @@
 //! one added single `#[...]` attr (one line, or one balanced attr
 //! spanning up to `MAX_ATTR_LINES` lines — slice 5) or one `///` line.
 //! Removed / replaced attrs, two added attrs, multi-line docs,
-//! `/* */` / `//!` docs, and rename+attr (two deltas) all decline to
+//! `/* */` / `//!` docs, and non-`fn` rename+attr all decline to
 //! ordinary (pinned below; slice 4 proves the removed mirror needs
 //! engine work — the whole-span cut law — so it stays ordinary by
-//! construction). Later WI-14 slices own those axes.
+//! construction). Slice 7 extends the added axis to `fn` move+rename
+//! (bare minus, one added leading block, renamed item): the inner
+//! rename pairs through the abstract evolved matcher in
+//! `move_evolve.rs` via `added_attr_block_len` below. Later WI-14
+//! slices own the remaining axes.
 
 use syn::spanned::Spanned;
 
@@ -67,6 +71,38 @@ fn is_balanced_single_attr(lines: &[&str]) -> bool {
         }
     }
     depth == 0
+}
+
+/// Leading added attr/doc block length (WI-14 slice 7, evolved reuse):
+/// `Some(k)` when the first `k` span lines form exactly one added block —
+/// one single-line `///` outer-doc line, one single-line `#[...]` attr,
+/// or one balanced multi-line `#[...]` attr (`k <= MAX_ATTR_LINES`) —
+/// else `None`. The caller re-parses the remaining lines and proves the
+/// pairing through its own matcher, so `Some` never fires alone:
+/// two-added shapes fail the downstream inner match (the leftover inner
+/// keeps one attr against a bare minus), and replaced/removed shapes
+/// never reach here (their attr counts differ by zero, not plus one).
+pub(crate) fn added_attr_block_len(span_lines: &[&str]) -> Option<usize> {
+    if span_lines.len() < 2 {
+        return None;
+    }
+    let first = span_lines[0].trim_start();
+    if first.starts_with("///") {
+        return Some(1);
+    }
+    if first.starts_with("#[")
+        && first.trim_end().ends_with(']')
+        && first.matches("#[").count() == 1
+    {
+        return Some(1);
+    }
+    let max_k = MAX_ATTR_LINES.min(span_lines.len() - 1);
+    for k in 2..=max_k {
+        if is_balanced_single_attr(&span_lines[..k]) {
+            return Some(k);
+        }
+    }
+    None
 }
 
 /// True when `body[first..=last]` (0-based hunk-body lines) is a parsed
@@ -581,8 +617,13 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_attr_stays_ordinary() {
-        // Two deltas (rename + attr add) never join in slices 1-2.
+    fn rename_plus_attr_fn_fires_with_ordinary_prefix() {
+        // WI-14 slice 7: bare `fn foo` moves a.rs -> b.rs as
+        // `#[inline] fn bar`. The minus cut is bare (span law
+        // satisfied); the attr rides an ordinary T432b prefix while
+        // the inner rename pairs through the abstract evolved matcher
+        // — so the paste carries the evolution template, not a bare
+        // bind (unlike the pure attr-added slices 1-3/5).
         let big = big_fn("foo");
         let renamed = big.replacen("fn foo()", "fn bar()", 1);
         let a_old = format!("fn keep() {{}}\n{big}");
@@ -591,10 +632,180 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
-        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used);
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("rename+attr fn move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
         assert!(
-            out.is_none() || !out.unwrap().join("").contains("# bind="),
-            "rename+attr must not claim a move"
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved template, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[inline]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+fn bar() {"),
+            "plus fn lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_doc_fn_fires_with_ordinary_prefix() {
+        // Doc twin of the slice-7 shape: bare `fn foo` moves as
+        // `/// Moved helper.` + `fn bar` (one added doc + rename).
+        let big = big_fn("foo");
+        let renamed = big.replacen("fn foo()", "fn bar()", 1);
+        let a_old = format!("fn keep() {{}}\n{big}");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("/// Moved helper.\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("rename+doc fn move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved template, got:\n{text}"
+        );
+        assert!(
+            text.contains("+/// Moved helper.\n"),
+            "doc rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_multiline_attr_fn_fires() {
+        // Multi-line twin: bare `fn foo` moves as balanced 3-line
+        // attr + `fn bar`; the attr block rides one ordinary prefix.
+        let big = big_fn("foo");
+        let renamed = big.replacen("fn foo()", "fn bar()", 1);
+        let a_old = format!("fn keep() {{}}\n{big}");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(\n    clippy::all,\n)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("rename+multi-line-attr fn move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved template, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[allow(\n"),
+            "attr head rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_attr_atop_existing_fires() {
+        // Atop-existing twin: `#[allow]+foo` moves as
+        // `#[inline]+#[allow]+bar` — the leading block strips, the
+        // trailing attr proves equal through the inner match.
+        let big = big_fn("foo");
+        let minus_item = format!("#[allow(dead_code)]\n{big}");
+        let renamed = big.replacen("fn foo()", "fn bar()", 1);
+        let plus_item = format!("#[inline]\n#[allow(dead_code)]\n{renamed}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("rename+attr atop-existing must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("+#[inline]\n"),
+            "added attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_two_attrs_stays_ordinary() {
+        // Exactly one added block: `fn foo` -> two attrs + `fn bar`
+        // stays ordinary (inner re-parse keeps one attr vs bare).
+        let big = big_fn("foo");
+        let renamed = big.replacen("fn foo()", "fn bar()", 1);
+        let a_old = format!("fn keep() {{}}\n{big}");
+        let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[inline]\n#[allow(dead_code)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "two-added+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_replaced_attr_stays_ordinary() {
+        // Replaced axis with rename: `#[old]+foo` -> `#[new]+bar`
+        // stays ordinary (attr counts differ by zero, never plus one).
+        let big = big_fn("foo");
+        let minus_item = format!("#[allow(dead_code)]\n{big}");
+        let renamed = big.replacen("fn foo()", "fn bar()", 1);
+        let plus_item = format!("#[allow(unused_variables)]\n{renamed}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "replaced+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_removed_attr_stays_ordinary() {
+        // Removed axis with rename: `#[old]+foo` -> bare `bar` stays
+        // ordinary (deferred: stripping the minus side is engine
+        // territory, same wall as slice 4's bare removed mirror).
+        let big = big_fn("foo");
+        let minus_item = format!("#[allow(dead_code)]\n{big}");
+        let renamed = big.replacen("fn foo()", "fn bar()", 1);
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = renamed.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "removed+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_attr_struct_stays_ordinary() {
+        // Non-fn kinds stay ordinary on the rename+attr axis (slice 7
+        // is fn-only; struct/enum/etc. ride a later slice).
+        let mut strukt = String::from("struct Old {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let renamed = strukt.replacen("struct Old", "struct New", 1);
+        let a_old = format!("fn keep() {{}}\n{strukt}");
+        let a_minus: String = strukt.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[derive(Clone)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "struct rename+attr must stay ordinary (fn-only slice)"
         );
     }
 

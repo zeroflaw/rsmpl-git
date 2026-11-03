@@ -269,7 +269,30 @@ pub(crate) fn find_evolved_hits(
         let syn::Item::Fn(plus) = it else {
             continue;
         };
-        if fn_evolved_match(&minus, plus).is_none() {
+        if fn_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.sig.ident.to_string();
+            let Some(prefix) = header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 7: move+rename with exactly one added leading
+        // attr/doc block (`fn foo` -> `#[inline] fn bar` across files).
+        // The minus cut is bare (span law satisfied); the added block
+        // rides the existing T432b ordinary prefix while the inner
+        // renamed item pairs through the abstract matcher — so the hit
+        // starts past the block (`s - 1 + k`). Pure attr-added without
+        // a rename never claims here (the stripped inner is identical,
+        // and the abstract matcher owns nothing identical); two-added,
+        // replaced, and removed shapes fail the count or the inner
+        // match and stay ordinary.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -277,11 +300,24 @@ pub(crate) fn find_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.sig.ident.to_string();
-        let Some(prefix) = header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemFn>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if fn_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.sig.ident.to_string();
+        let Some(prefix) = header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }
