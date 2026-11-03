@@ -84,7 +84,8 @@ pub(crate) fn within_strict(body_len: usize, ordinary_len: usize) -> bool {
 /// detectors keep T375. WI-17 slice 1 records the veto with the
 /// verdict numbers via `prov::declined_guard_with_numbers`
 /// (`guard:<kind>:sem=X:ord=Y:allow=Z`, SPEC D.2); the bare
-/// `precision-guard`/`byte-guard` spellings are retired on this path.
+/// `precision-guard`/`byte-guard` spellings are retired on this path;
+/// WI-17 slice 2 retired them on every remaining veto path too.
 pub(crate) fn pair_section_gate(
     detector: &str,
     emission: &str,
@@ -100,19 +101,6 @@ pub(crate) fn pair_section_gate(
         )
     } else {
         within_strict(emission.len(), ordinary)
-    }
-}
-
-/// WI-17 slice 1: retired — pair-chain gate vetoes now carry the
-/// verdict numbers via `prov::declined_guard_with_numbers`
-/// (`guard:<kind>:sem=X:ord=Y:allow=Z`, SPEC D.2). Kept for the
-/// partition/partial arms' prose until their slice unifies them.
-#[allow(dead_code)]
-pub(crate) fn pair_gate_reason(detector: &str) -> &'static str {
-    if guard_for(detector) == Guard::Precision {
-        "precision-guard"
-    } else {
-        "byte-guard"
     }
 }
 
@@ -369,11 +357,11 @@ mod tests {
             100,
             2
         ));
-        assert_eq!(
-            pair_gate_reason("inherent_method_rename"),
-            "precision-guard"
-        );
-        assert_eq!(pair_gate_reason("call_sweep"), "byte-guard");
+        // WI-17 slice 2: the retired `pair_gate_reason` helper is gone —
+        // the kind rides `guard_for` (the veto text carries it as
+        // `guard:<kind>:` with the WI-7 numbers at the call site).
+        assert_eq!(guard_for("inherent_method_rename"), Guard::Precision);
+        assert_eq!(guard_for("call_sweep"), Guard::Strict);
     }
 
     #[test]

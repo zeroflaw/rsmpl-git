@@ -61,7 +61,7 @@ pub struct HunkProvenance {
 /// failed), `not-tried` (the detector never ran on this hunk —
 /// absence, not silence). Bare `byte-guard`/`precision-guard` are the
 /// pre-WI-17 spellings of `guard:byte`/`guard:precision` (kept
-/// parseable, no longer emitted on the wired paths).
+/// parseable, no longer emitted anywhere since slice 2).
 /// Detector-internal guard vetoes surface as `no-match` — reasons are
 /// chain-level, never detector-inferred (SPEC D.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -171,10 +171,9 @@ pub(crate) fn attempt<T>(
 
 /// WI-15c chain guard-veto recorder: the detector fired but the
 /// section/hunk guard priced it out. Call at the veto branch only.
-/// WI-17 slice 1: prefer [`declined_guard_with_numbers`] on newly
-/// wired paths (the closed `guard:` form with the WI-7 numbers);
-/// this bare form stays for the not-yet-unified arms (partition,
-/// partial, per-hunk) and is pinned parseable by `reason_is_closed`.
+/// WI-17 slice 2: non-guard vetoes only (`crlf-content`,
+/// `stranded-joint`, `cross-kind-member`) — every guard veto rides
+/// [`declined_guard_with_numbers`] (closed `guard:` form, SPEC D.2).
 pub(crate) fn declined_guard(
     declined: &mut Vec<HunkDeclined>,
     detector: &str,

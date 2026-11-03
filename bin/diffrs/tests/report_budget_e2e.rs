@@ -475,7 +475,11 @@ fn wi17_guard_veto_carries_verdict_numbers() {
     // WI-17 slice 1 guard numbers: every `guard:` reason on the
     // pair-chain path carries the exact verdict inputs (`sem`, `ord`,
     // `allow`), so the overflow (`sem > ord + allow`) is computable
-    // from the report alone. This pin owns the taxonomy shape over
+    // from the report alone. NOTE (WI-17 slice 2 review): the fixture
+    // below fires (allowance admits it), so the `guard:` loop is empty
+    // by design — the non-vacuous veto pin is `per_hunk.rs`
+    // `wi17_slice2_item_rename_veto_carries_verdict_numbers`.
+    // This pin owns the taxonomy shape over
     // whatever the fixture below raises (fire or veto): no bare veto
     // without numbers on the pair-chain path, and every reason closed.
     let dir = init_repo();
@@ -541,5 +545,49 @@ fn wi17_guard_veto_carries_verdict_numbers() {
                 assert!(s > o + a, "guard veto must name its overflow: {reason}");
             }
         }
+    }
+}
+#[test]
+fn wi17_slice2_no_bare_guard_vetoes() {
+    // WI-17 slice 2 surface invariant: no bare `byte-guard` /
+    // `precision-guard` reason is emitted on any input. Guard vetoes
+    // are rare by design (the WI-7 allowance admits proved singles),
+    // so this battery pins the negative over shapes that record
+    // declines on every unified path (whole-single, pair-chain,
+    // partition, partial, per-hunk); the non-vacuous veto-shape pin
+    // lives inline in `per_hunk.rs` (forced `hunk_len=0` veto).
+    for (before, after) in [
+        (
+            "fn m() {\n    // hello\n    let x = 1;\n}\n",
+            "fn m() {\n    // hello world\n    let x = 1;\n}\n",
+        ),
+        (
+            "fn m() {\n    old_a_variable_with_a_long_name();\n    old_a_variable_with_a_long_name();\n}\n",
+            "fn m() {\n    new_a_variable_with_a_long_name();\n    new_a_variable_with_a_long_name();\n}\n",
+        ),
+        (
+            "fn m() {\n    a();\n}\n",
+            "fn m() {\n    a_very_long_function_name_that_goes_on_and_on_and_on();\n}\n",
+        ),
+    ] {
+        let dir = init_repo();
+        write(dir.path(), "src/f.rs", before);
+        commit_all(dir.path());
+        write(dir.path(), "src/f.rs", after);
+        let out = run(dir.path(), &["--format", "json"]);
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            !stdout.contains("\"byte-guard\""),
+            "bare byte-guard emitted: {stdout}"
+        );
+        assert!(
+            !stdout.contains("\"precision-guard\""),
+            "bare precision-guard emitted: {stdout}"
+        );
     }
 }

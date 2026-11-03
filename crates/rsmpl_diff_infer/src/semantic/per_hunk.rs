@@ -27,7 +27,7 @@ pub(crate) fn compress_balanced_pair_body(
     used_rules: &mut Vec<String>,
     declined: &mut Vec<super::HunkDeclined>,
 ) -> Option<(String, &'static str)> {
-    use super::{attempt, declined_guard};
+    use super::{attempt, declined_guard_with_numbers};
     if minuses.len() != pluses.len() || minuses.is_empty() {
         return None;
     }
@@ -49,7 +49,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), detector));
             }
-            declined_guard(declined, detector, "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                detector,
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-1: whole-line bare-call single under the precision
@@ -64,7 +71,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_sweep"));
             }
-            declined_guard(declined, "call_sweep", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_sweep",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-2: whole-line method-to-method single under the
@@ -79,7 +93,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_method"));
             }
-            declined_guard(declined, "method_to_method", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_to_method",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-3: whole-line method-to-function single under the
@@ -94,7 +115,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_fn"));
             }
-            declined_guard(declined, "method_to_fn", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_to_fn",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slices 4-5: whole-line (slice-4) and `let`-init
@@ -110,7 +138,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "general_expr"));
             }
-            declined_guard(declined, "general_expr", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "general_expr",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-2 slice 1: bare-type literal single (one type subterm
@@ -129,7 +164,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "type_sweep"));
             }
-            declined_guard(declined, "type_sweep", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "type_sweep",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-3 slice 1: single-pair use-prefix single under the
@@ -145,7 +187,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "use_prefix"));
             }
-            declined_guard(declined, "use_prefix", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "use_prefix",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-3 slice 3: single-pair macro-rename single under the
@@ -161,7 +210,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "macro_rename"));
             }
-            declined_guard(declined, "macro_rename", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "macro_rename",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-6: bare-call arg-template wrap single (whole-line
@@ -179,7 +235,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
-            declined_guard(declined, "call_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-7: method-arg-template wrap single (whole-line
@@ -197,7 +260,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
-            declined_guard(declined, "method_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-10: whole-line bare-call perm single (whole-line
@@ -213,7 +283,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
-            declined_guard(declined, "call_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-11: whole-line method perm single (whole-line +
@@ -229,7 +306,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
-            declined_guard(declined, "method_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-12: bare-call trailing-literal single (whole-line
@@ -245,7 +329,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_literal"));
             }
-            declined_guard(declined, "call_literal", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_literal",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-13: method same-literal single (whole-line
@@ -264,7 +355,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_same_literal"));
             }
-            declined_guard(declined, "method_same_literal", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_same_literal",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-14: sub-line bare-call single under the precision
@@ -281,7 +379,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_sweep"));
             }
-            declined_guard(declined, "call_sweep", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_sweep",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-15: sub-line method-to-method single under the
@@ -298,7 +403,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_method"));
             }
-            declined_guard(declined, "method_to_method", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_to_method",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-16: sub-line method-to-function single under the
@@ -317,7 +429,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_fn"));
             }
-            declined_guard(declined, "method_to_fn", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_to_fn",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-17: sub-line bare perm single under the precision
@@ -334,7 +453,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
-            declined_guard(declined, "call_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-18: sub-line method perm single under the precision
@@ -353,7 +479,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
-            declined_guard(declined, "method_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-19: sub-line general-expression single under the
@@ -370,7 +503,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "general_expr"));
             }
-            declined_guard(declined, "general_expr", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "general_expr",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-22: sub-line method-arg-template wrap single under
@@ -394,7 +534,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
-            declined_guard(declined, "method_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-23: sub-line bare-arg-template wrap single under
@@ -419,7 +566,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
-            declined_guard(declined, "call_arg_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_arg_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-20: sub-line bare trailing-literal single under
@@ -436,7 +590,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_literal"));
             }
-            declined_guard(declined, "call_literal", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "call_literal",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-21: sub-line method same-literal single under
@@ -456,7 +617,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_same_literal"));
             }
-            declined_guard(declined, "method_same_literal", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "method_same_literal",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-1 (repeat family): single-pair full-strip fold
@@ -472,7 +640,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "repeat_fold"));
             }
-            declined_guard(declined, "repeat_fold", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "repeat_fold",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         // WI-7 slice-2 (let-template family): single-pair method
@@ -492,7 +667,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "let_template"));
             }
-            declined_guard(declined, "let_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "let_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         if let Some(single) = attempt(
@@ -504,7 +686,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "let_template"));
             }
-            declined_guard(declined, "let_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "let_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
         if let Some(single) = attempt(
@@ -516,7 +705,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "let_template"));
             }
-            declined_guard(declined, "let_template", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "let_template",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
     }
@@ -580,7 +776,14 @@ pub(crate) fn compress_balanced_pair_body(
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "verbatim"));
             }
-            declined_guard(declined, "verbatim", "precision-guard");
+            declined_guard_with_numbers(
+                declined,
+                "verbatim",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
             used_rules.truncate(checkpoint);
         }
     }
@@ -629,14 +832,25 @@ pub(crate) fn compress_balanced_pair_body(
             } else {
                 // WI-15c: the candidate fired but the hunk guard priced
                 // it out — the guard owns the veto, not the shape.
-                let reason = if minuses.len() == 1
+                // WI-17 slice 2: the veto carries the WI-7 numbers in
+                // the closed `guard:` form (same branches as `wins`).
+                let (kind, allow) = if minuses.len() == 1
                     && matches!(super::guard_for(detector), super::Guard::Precision)
                 {
-                    "precision-guard"
+                    let filtered_single = minuses[0].starts_with([' ', '\t'])
+                        && (detector == "sig_evolution" || detector == "fn_slot_sweep");
+                    if filtered_single {
+                        (
+                            "precision",
+                            super::guard::precision_allowance(4, super::filter_header_excess(body)),
+                        )
+                    } else {
+                        ("precision", super::guard::precision_allowance(1, 0))
+                    }
                 } else {
-                    "byte-guard"
+                    ("byte", 0)
                 };
-                declined_guard(declined, detector, reason);
+                declined_guard_with_numbers(declined, detector, kind, body.len(), hunk_len, allow);
                 used_rules.truncate(checkpoint);
                 None
             }
@@ -645,5 +859,70 @@ pub(crate) fn compress_balanced_pair_body(
             used_rules.truncate(checkpoint);
             None
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::super::HunkDeclined;
+    #[test]
+    fn wi17_slice2_item_rename_veto_carries_verdict_numbers() {
+        // WI-17 slice 2: the per-hunk composed-guard veto records the
+        // WI-7 numbers in the closed `guard:` form — never a bare
+        // `precision-guard`. `hunk_len=0` forces the lossy branch on a
+        // real `item_rename` candidate (const rename needs no other
+        // arm: def/call/method/type/use/macro/template/let/verbatim
+        // singles all decline the const shape first).
+        let pre = "const OLD_A: usize = 1001;\n";
+        let mut used_rules = Vec::new();
+        let mut declined: Vec<HunkDeclined> = Vec::new();
+        let out = super::compress_balanced_pair_body(
+            &["const OLD_A: usize = 1001;"],
+            &["const NEW_A: usize = 1001;"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            0,
+            &mut used_rules,
+            &mut declined,
+        );
+        assert!(out.is_none(), "forced loss must veto, got: {out:?}");
+        assert!(
+            !declined.is_empty(),
+            "the chain must record its trial, got none"
+        );
+        for d in &declined {
+            assert!(
+                d.reason != "precision-guard" && d.reason != "byte-guard",
+                "bare guard veto emitted: {d:?}"
+            );
+        }
+        let veto = declined
+            .iter()
+            .find(|d| d.detector == "item_rename" && d.reason.starts_with("guard:precision:"))
+            .expect("item_rename must veto with numbered guard, got: {declined:?}");
+        let body = veto.reason.clone();
+        let sem: usize = body
+            .split("sem=")
+            .nth(1)
+            .unwrap()
+            .split(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let allow: usize = body.split("allow=").nth(1).unwrap().parse().unwrap();
+        assert_eq!(
+            allow,
+            super::super::guard::precision_allowance(1, 0),
+            "got: {veto:?}"
+        );
+        assert!(
+            sem > 16,
+            "veto must name its overflow (sem={sem}), got: {veto:?}"
+        );
+        assert!(
+            body.contains("ord=0"),
+            "forced hunk_len=0 prices ord=0, got: {veto:?}"
+        );
     }
 }

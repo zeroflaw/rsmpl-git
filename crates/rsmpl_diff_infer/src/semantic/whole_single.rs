@@ -10,7 +10,7 @@
 //! single → impl-header → attr-replace → use-prefix → macro-rename.
 
 use super::prov::{
-    declined_guard, push_section_prov, reheader_rename, HunkDeclined, HunkProvenance,
+    declined_guard_with_numbers, push_section_prov, reheader_rename, HunkDeclined, HunkProvenance,
 };
 use super::{attempt, guard_for, Guard};
 
@@ -19,7 +19,7 @@ use super::{attempt, guard_for, Guard};
 /// per-detector). `ordinary` is the normalized section length, `allow`
 /// the arm's precision allowance. Rename-prelude sections compare the
 /// re-headered final bytes; the decline path truncates the reserved
-/// rule and records `precision-guard` provenance on every arm.
+/// rule and records numbered `guard:precision` provenance on every arm.
 #[allow(clippy::too_many_arguments)]
 fn emit_if_within(
     emission: &str,
@@ -52,11 +52,19 @@ fn emit_if_within(
                 );
                 return Some(final_text);
             }
+            // WI-17 slice 2: veto carries the WI-7 numbers (losing bytes).
+            declined_guard_with_numbers(
+                declined,
+                detector,
+                "precision",
+                final_text.len(),
+                ordinary,
+                allow,
+            );
         } else {
             used_rules.truncate(checkpoint);
             return None;
         }
-        declined_guard(declined, detector, "precision-guard");
         used_rules.truncate(checkpoint);
         None
     } else if emission.len() <= ordinary + allow {
@@ -65,7 +73,15 @@ fn emit_if_within(
         );
         Some(emission.to_string())
     } else {
-        declined_guard(declined, detector, "precision-guard");
+        // WI-17 slice 2: veto carries the WI-7 numbers (losing bytes).
+        declined_guard_with_numbers(
+            declined,
+            detector,
+            "precision",
+            emission.len(),
+            ordinary,
+            allow,
+        );
         used_rules.truncate(checkpoint);
         None
     }

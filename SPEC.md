@@ -7781,7 +7781,7 @@ computable from the report alone), `totality:<found>:<want>`
 opaque hit, ambiguous anti-unification), `precondition:<name>` (named
 failed shape premise); the pre-WI-17 bare `byte-guard` /
 `precision-guard` spellings stay parseable but are no longer emitted
-on the pair-chain path. Detector-internal guard vetoes surface as
+anywhere (WI-17 slice 2 unified every guard veto path). Detector-internal guard vetoes surface as
 `no-match` — reasons are never detector-inferred. Text mode prints
 the same trial to stderr as one `declined: <file> <detector>
 <reason>` line per entry (stdout stays the patch byte-identical).

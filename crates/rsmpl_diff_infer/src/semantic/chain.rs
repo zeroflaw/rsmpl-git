@@ -879,8 +879,16 @@ pub(crate) fn compress_section(
                     );
                     return Some(final_text);
                 }
+                // WI-17 slice 2: veto carries the WI-7 numbers (strict: allow 0).
+                declined_guard_with_numbers(
+                    declined,
+                    part_detector,
+                    "byte",
+                    final_text.len(),
+                    super::guard::normalized_section_len(section),
+                    0,
+                );
             }
-            declined_guard(declined, part_detector, "byte-guard");
             used_rules.truncate(part_checkpoint);
         } else if super::guard::within_strict(
             part.len(),
@@ -899,7 +907,15 @@ pub(crate) fn compress_section(
             );
             return Some(part);
         } else {
-            declined_guard(declined, part_detector, "byte-guard");
+            // WI-17 slice 2: veto carries the WI-7 numbers (strict: allow 0).
+            declined_guard_with_numbers(
+                declined,
+                part_detector,
+                "byte",
+                part.len(),
+                super::guard::normalized_section_len(section),
+                0,
+            );
             used_rules.truncate(part_checkpoint);
         }
     }
@@ -935,8 +951,16 @@ pub(crate) fn compress_section(
                     );
                     return Some(final_text);
                 }
+                // WI-17 slice 2: veto carries the WI-7 numbers.
+                declined_guard_with_numbers(
+                    declined,
+                    "partial",
+                    "precision",
+                    final_text.len(),
+                    ordinary,
+                    super::guard::precision_allowance(n_claimed, 0),
+                );
             }
-            declined_guard(declined, "partial", "precision-guard");
             used_rules.truncate(partial_checkpoint);
         } else if super::guard::within_precision(partial.len(), ordinary, n_claimed, 0) {
             push_section_prov(
@@ -952,7 +976,15 @@ pub(crate) fn compress_section(
             );
             return Some(partial);
         } else {
-            declined_guard(declined, "partial", "precision-guard");
+            // WI-17 slice 2: veto carries the WI-7 numbers.
+            declined_guard_with_numbers(
+                declined,
+                "partial",
+                "precision",
+                partial.len(),
+                ordinary,
+                super::guard::precision_allowance(n_claimed, 0),
+            );
             used_rules.truncate(partial_checkpoint);
         }
     }
