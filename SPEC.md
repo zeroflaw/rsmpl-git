@@ -7993,7 +7993,9 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   `fn` arm, whose gates apply per pair) or a single-delta `impl`
   header rename below (WI-19c: self-ty `impl Old` → `impl New` with no
   `for`, or trait-side `impl OldTr for SameTy` → `impl NewTr for
-  SameTy` with the self-ty byte-equal; the double-delta line, both
+  SameTy` with the self-ty byte-equal; a byte-equal `impl<…>` generic
+  prefix and byte-equal-prefix qualified trait tails compose like the
+  bare header; the double-delta line, both
   sides changed, is never a single). Nested `struct`/`enum`/`union`/
   `mod` items (mod-nested, block-level) classify like top-level ones
   (WI-19c: leading whitespace tolerated; the bare spelling is

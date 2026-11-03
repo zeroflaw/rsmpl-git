@@ -407,7 +407,7 @@ pub(crate) fn parse_impl_double_delta(
 /// Strip the `impl` head word, leaving the generic prefix (if any) or the
 /// trait side. `impl Foo` (any single space/tab run) and `impl<T> Foo`
 /// admit; anything else (`implements`, bare `impl`) declines.
-fn strip_impl_head(s: &str) -> Option<&str> {
+pub(crate) fn strip_impl_head(s: &str) -> Option<&str> {
     let rest = s.strip_prefix("impl")?;
     if rest.starts_with('<') {
         return Some(rest);
@@ -450,7 +450,7 @@ fn split_for(rest: &str) -> Option<(&str, &str)> {
 }
 
 /// True for a single unqualified ident (no paths, no `!`, no generics).
-fn is_bare_ident(s: &str) -> bool {
+pub(crate) fn is_bare_ident(s: &str) -> bool {
     !s.is_empty()
         && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
         && super::ident_len(s) == Some(s.len())
@@ -460,7 +460,7 @@ fn is_bare_ident(s: &str) -> bool {
 /// `impl`-rest, returning (prefix, remainder). No generics → (`""`, rest).
 /// A `<` that never closes to depth 0 followed by whitespace declines
 /// (`None`) rather than guessing.
-fn strip_impl_generics(rest: &str) -> Option<(&str, &str)> {
+pub(crate) fn strip_impl_generics(rest: &str) -> Option<(&str, &str)> {
     if !rest.starts_with('<') {
         return Some(("", rest));
     }
@@ -491,7 +491,7 @@ fn strip_impl_generics(rest: &str) -> Option<(&str, &str)> {
 /// Split a trait-side pair into (old_tail, new_tail) when both sides are
 /// bare idents or qualified paths with byte-equal leading segments.
 /// Returns the renamed tails, or `None` when the shapes differ.
-fn split_qualified_tail(old_tr: &str, new_tr: &str) -> Option<(String, String)> {
+pub(crate) fn split_qualified_tail(old_tr: &str, new_tr: &str) -> Option<(String, String)> {
     let (old_pre, old_last) = qualified_prefix_tail(old_tr)?;
     let (new_pre, new_last) = qualified_prefix_tail(new_tr)?;
     if old_pre != new_pre {
@@ -505,7 +505,7 @@ fn split_qualified_tail(old_tr: &str, new_tr: &str) -> Option<(String, String)> 
 
 /// Split `path` into (prefix, tail) at the last `::`. Bare idents yield
 /// (`""`, ident). Empty tails, empty segments, and generic tails decline.
-fn qualified_prefix_tail(path: &str) -> Option<(&str, &str)> {
+pub(crate) fn qualified_prefix_tail(path: &str) -> Option<(&str, &str)> {
     match path.rfind("::") {
         None => Some(("", path)),
         Some(at) => {

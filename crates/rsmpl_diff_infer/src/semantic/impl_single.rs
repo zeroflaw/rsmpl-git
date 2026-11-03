@@ -24,18 +24,18 @@ use super::{ident_len, item_emission_header, unique_rule};
 fn parse_impl_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
     let old = old_line.trim();
     let new = new_line.trim();
-    let old_rest = old
-        .strip_prefix("impl ")
-        .or_else(|| old.strip_prefix("impl\t"))?;
-    let new_rest = new
-        .strip_prefix("impl ")
-        .or_else(|| new.strip_prefix("impl\t"))?;
-    // No generics before the header item (`impl<T> …` declines — the
-    // first ident would be a param, not the renamed item).
-    if old_rest.starts_with('<') || new_rest.starts_with('<') {
+    // Shared joint head discipline: `impl Foo`, `impl\tFoo`, and
+    // `impl<T> Foo` admit; anything else declines.
+    let old_rest = super::item_joint_impl::strip_impl_head(old)?;
+    let new_rest = super::item_joint_impl::strip_impl_head(new)?;
+    // Generic prefix (when present) must compare byte-equal across the
+    // pair (proven, never invented); unclosed prefixes decline.
+    let (old_gen, old_rest) = super::item_joint_impl::strip_impl_generics(old_rest)?;
+    let (new_gen, new_rest) = super::item_joint_impl::strip_impl_generics(new_rest)?;
+    if old_gen != new_gen {
         return None;
     }
-    if contains_word(old, "for") || contains_word(new, "for") {
+    if contains_word(old_rest, "for") || contains_word(new_rest, "for") {
         parse_impl_trait_side(old_rest, new_rest)
     } else {
         parse_impl_self_ty(old_rest, new_rest)
@@ -71,22 +71,14 @@ fn parse_impl_trait_side(old_rest: &str, new_rest: &str) -> Option<(String, Stri
     if old_ty != new_ty {
         return None;
     }
-    // Qualified/negated trait paths decline (`!Tr`, `crate::Tr` keep
-    // ordinary — the last-segment discipline is the follow path's).
-    if old_tr.contains([' ', '\t', '!', ':']) || new_tr.contains([' ', '\t', '!', ':']) {
-        return None;
-    }
-    let old_len = ident_len(old_tr)?;
-    let new_len = ident_len(new_tr)?;
-    let old_ident = &old_tr[..old_len];
-    let new_ident = &new_tr[..new_len];
+    // Shared joint tail discipline: bare idents or qualified paths with
+    // a byte-equal prefix and a renamed tail (`!`/generic tails decline
+    // inside the helper — the follow path's last-segment law).
+    let (old_ident, new_ident) = super::item_joint_impl::split_qualified_tail(old_tr, new_tr)?;
     if old_ident.is_empty() || new_ident.is_empty() || old_ident == new_ident {
         return None;
     }
-    if old_tr[old_len..] != new_tr[new_len..] {
-        return None;
-    }
-    Some((old_ident.to_string(), new_ident.to_string()))
+    Some((old_ident, new_ident))
 }
 
 /// Split an `impl`-rest at the single `for` word: `Tr for Ty …` →
@@ -296,34 +288,135 @@ mod tests {
             &mut used
         )
         .is_none());
-        // Qualified trait paths decline (last-segment discipline is
-        // the follow path's, never a def-only single).
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn impl_generic_self_ty_single_fires_verified() {
+        // Generic prefix (byte-equal) composes: the bare-pair emission
+        // rewrites the header, proven by the scratch re-apply.
+        let pre = "struct Old;\nstruct Foo;\nimpl<T> Old<T> {\n    fn f(&self) {}\n}\n";
+        let mut used = Vec::new();
+        let out = section_body(
+            "f.rs",
+            Some(pre),
+            "impl<T> Old<T> {",
+            "impl<T> New<T> {",
+            &[3],
+            &mut used,
+        )
+        .expect("generic self-ty single must fire");
+        assert!(out.contains("- impl Old\n"), "got:\n{out}");
+        assert!(out.contains("+ impl New\n"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "struct Old;\nstruct Foo;\nimpl<T> New<T> {\n    fn f(&self) {}\n}\n"
+        );
+    }
+
+    #[test]
+    fn impl_qualified_trait_side_single_fires_verified() {
+        // Qualified trait tail (byte-equal prefix) composes like bare.
+        let pre = "struct Foo;\nimpl crate::Printable for Foo {\n}\n";
+        let mut used = Vec::new();
+        let out = section_body(
+            "f.rs",
+            Some(pre),
+            "impl crate::Printable for Foo {",
+            "impl crate::Labeled for Foo {",
+            &[2],
+            &mut used,
+        )
+        .expect("qualified trait-side single must fire");
+        assert!(out.contains("- impl Printable\n"), "got:\n{out}");
+        assert!(out.contains("+ impl Labeled\n"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "struct Foo;\nimpl crate::Labeled for Foo {\n}\n"
+        );
+    }
+
+    #[test]
+    fn impl_generic_trait_side_single_fires_verified() {
+        // Generic prefix on a trait-side header composes, alone and with
+        // a qualified trait tail.
+        let pre = "struct Foo;\nimpl<T> Printable for Foo {\n}\n";
+        let mut used = Vec::new();
+        let out = section_body(
+            "f.rs",
+            Some(pre),
+            "impl<T> Printable for Foo {",
+            "impl<T> Labeled for Foo {",
+            &[2],
+            &mut used,
+        )
+        .expect("generic trait-side single must fire");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "struct Foo;\nimpl<T> Labeled for Foo {\n}\n");
+        let combo = "struct Foo;\nimpl<T> crate::Printable for Foo {\n}\n";
+        let mut used = Vec::new();
+        let out = section_body(
+            "f.rs",
+            Some(combo),
+            "impl<T> crate::Printable for Foo {",
+            "impl<T> crate::Labeled for Foo {",
+            &[2],
+            &mut used,
+        )
+        .expect("generic+qualified trait-side single must fire");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = std::collections::HashMap::from([("f.rs".to_string(), combo.to_string())]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "struct Foo;\nimpl<T> crate::Labeled for Foo {\n}\n"
+        );
+    }
+
+    #[test]
+    fn impl_header_prefix_mismatch_declines() {
+        // Generic prefix must compare byte-equal: never invent params.
+        let gpre = "struct Old;\nimpl<T> Old<T> {\n}\n";
+        let mut used = Vec::new();
+        assert!(section_body(
+            "f.rs",
+            Some(gpre),
+            "impl<T> Old<T> {",
+            "impl<U> New<T> {",
+            &[2],
+            &mut used
+        )
+        .is_none());
+        // Qualified prefix must compare byte-equal.
         let qpre = "struct Foo;\nimpl crate::Printable for Foo {\n}\n";
         assert!(section_body(
             "f.rs",
             Some(qpre),
             "impl crate::Printable for Foo {",
-            "impl crate::Labeled for Foo {",
+            "impl other::Labeled for Foo {",
             &[2],
             &mut used
         )
         .is_none());
-        assert!(used.is_empty());
-    }
-
-    #[test]
-    fn impl_generic_params_decline() {
-        // `impl<T>` prefix: the first ident is a param, not the type.
-        let mut used = Vec::new();
+        // Bare-vs-qualified shape mismatch declines.
         assert!(section_body(
             "f.rs",
             Some(PRE),
-            "impl<T> Old<T> {",
-            "impl<T> New<T> {",
-            &[3],
+            "impl Printable for Foo {",
+            "impl crate::Labeled for Foo {",
+            &[6],
             &mut used
         )
         .is_none());
+        assert!(used.is_empty());
     }
 
     #[test]
