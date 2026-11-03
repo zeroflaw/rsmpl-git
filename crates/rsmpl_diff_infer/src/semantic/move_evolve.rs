@@ -345,7 +345,26 @@ pub(crate) fn find_struct_evolved_hits(
         let syn::Item::Struct(plus) = it else {
             continue;
         };
-        if struct_evolved_match(&minus, plus).is_none() {
+        if struct_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = struct_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 8: struct move+rename with exactly one added
+        // leading attr/doc block (`struct Big` -> `#[derive] struct Small`).
+        // Mirrors the slice-7 `fn` arm: the count gate, the kind-agnostic
+        // block measure, the stripped inner re-parse through the same
+        // evolved matcher (vis-or-name delta required), and the hit past
+        // the block so the attr rides the T432b ordinary prefix.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -353,11 +372,24 @@ pub(crate) fn find_struct_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = struct_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemStruct>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if struct_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = struct_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }
@@ -530,7 +562,22 @@ pub(crate) fn find_enum_evolved_hits(
         let syn::Item::Enum(plus) = it else {
             continue;
         };
-        if enum_evolved_match(&minus, plus).is_none() {
+        if enum_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = enum_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 8: enum move+rename with exactly one added leading
+        // attr/doc block. Mirrors the struct arm above.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -538,11 +585,24 @@ pub(crate) fn find_enum_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = enum_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemEnum>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if enum_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = enum_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }
@@ -658,7 +718,22 @@ pub(crate) fn find_union_evolved_hits(
         let syn::Item::Union(plus) = it else {
             continue;
         };
-        if union_evolved_match(&minus, plus).is_none() {
+        if union_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = union_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 8: union move+rename with exactly one added leading
+        // attr/doc block. Mirrors the struct/enum arms above.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -666,11 +741,24 @@ pub(crate) fn find_union_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = union_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemUnion>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if union_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = union_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }

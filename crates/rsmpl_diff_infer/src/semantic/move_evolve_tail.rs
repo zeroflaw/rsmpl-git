@@ -65,7 +65,23 @@ pub(crate) fn find_type_evolved_hits(
         let syn::Item::Type(plus) = it else {
             continue;
         };
-        if type_evolved_match(&minus, plus).is_none() {
+        if type_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = type_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 8: type move+rename with exactly one added leading
+        // attr/doc block. Same composition as the `fn`/struct arms: count
+        // gate, kind-agnostic block measure, stripped inner re-parse.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -73,11 +89,24 @@ pub(crate) fn find_type_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = type_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemType>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if type_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = type_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }
@@ -197,7 +226,22 @@ pub(crate) fn find_const_evolved_hits(
         let syn::Item::Const(plus) = it else {
             continue;
         };
-        if const_evolved_match(&minus, plus).is_none() {
+        if const_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = const_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 8: const move+rename with exactly one added leading
+        // attr/doc block. Mirrors the type arm above.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -205,11 +249,24 @@ pub(crate) fn find_const_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = const_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemConst>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if const_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = const_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }
@@ -338,7 +395,29 @@ pub(crate) fn find_static_evolved_hits(
         let syn::Item::Static(plus) = it else {
             continue;
         };
-        if static_evolved_match(&minus, plus).is_none() {
+        if static_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = static_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((
+                s - 1,
+                e - 1,
+                prefix,
+                name,
+                matches!(plus.mutability, syn::StaticMutability::Mut(_)),
+            ));
+            continue;
+        }
+        // WI-14 slice 8: static move+rename with exactly one added leading
+        // attr/doc block. Mirrors the const arm (mutability rides the
+        // inner match verbatim like vis).
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -346,16 +425,29 @@ pub(crate) fn find_static_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = static_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
+            continue;
+        };
+        let Ok(inner) = syn::parse_str::<syn::ItemStatic>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if static_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = static_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
             continue;
         };
         out.push((
-            s - 1,
+            s - 1 + k,
             e - 1,
             prefix,
             name,
-            matches!(plus.mutability, syn::StaticMutability::Mut(_)),
+            matches!(inner.mutability, syn::StaticMutability::Mut(_)),
         ));
     }
     out
@@ -498,7 +590,23 @@ pub(crate) fn find_mod_evolved_hits(
         let syn::Item::Mod(plus) = it else {
             continue;
         };
-        if mod_evolved_match(&minus, plus).is_none() {
+        if mod_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = mod_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 8: empty-mod move+rename with exactly one added
+        // leading attr/doc block. Mirrors the other arms; the shared
+        // `move_cut_eligible` gate still declines content-bearing mods.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -506,11 +614,24 @@ pub(crate) fn find_mod_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = mod_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemMod>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if mod_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = mod_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }

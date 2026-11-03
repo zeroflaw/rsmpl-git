@@ -17,14 +17,14 @@
 //! one added single `#[...]` attr (one line, or one balanced attr
 //! spanning up to `MAX_ATTR_LINES` lines — slice 5) or one `///` line.
 //! Removed / replaced attrs, two added attrs, multi-line docs,
-//! `/* */` / `//!` docs, and non-`fn` rename+attr all decline to
-//! ordinary (pinned below; slice 4 proves the removed mirror needs
-//! engine work — the whole-span cut law — so it stays ordinary by
-//! construction). Slice 7 extends the added axis to `fn` move+rename
-//! (bare minus, one added leading block, renamed item): the inner
-//! rename pairs through the abstract evolved matcher in
-//! `move_evolve.rs` via `added_attr_block_len` below. Later WI-14
-//! slices own the remaining axes.
+//! `/* */` / `//!` docs all decline to ordinary (pinned below; slice 4
+//! proves the removed mirror needs engine work — the whole-span cut law
+//! — so it stays ordinary by construction). Slices 7–8 extend the added
+//! axis to move+rename (bare minus, one added leading block, renamed
+//! item): `fn` in slice 7, every other move-eligible kind in slice 8 —
+//! the inner rename pairs through the abstract evolved matcher in
+//! `move_evolve.rs` / `move_evolve_tail.rs` via `added_attr_block_len`
+//! below. Later WI-14 slices own the remaining axes.
 
 use syn::spanned::Spanned;
 
@@ -788,9 +788,11 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_attr_struct_stays_ordinary() {
-        // Non-fn kinds stay ordinary on the rename+attr axis (slice 7
-        // is fn-only; struct/enum/etc. ride a later slice).
+    fn rename_plus_attr_struct_fires_with_ordinary_prefix() {
+        // WI-14 slice 8: `struct Old` moves a.rs -> b.rs as
+        // `#[derive(Clone)] struct New`. The minus cut is bare; the attr
+        // rides an ordinary T432b prefix while the inner rename pairs
+        // through the abstract struct evolved matcher.
         let mut strukt = String::from("struct Old {\n");
         for i in 0..40 {
             strukt.push_str(&format!("    f{i}: u32,\n"));
@@ -803,10 +805,24 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("struct rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "struct rename+attr must stay ordinary (fn-only slice)"
+            text.contains("struct New"),
+            "paste must carry the evolved template, got:\n{text}"
         );
+        assert!(
+            text.contains("+#[derive(Clone)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+struct New {"),
+            "plus struct lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1080,6 +1096,252 @@ mod tests {
         assert!(
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
             "multi-line removed attr must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_attr_enum_fires_with_ordinary_prefix() {
+        // WI-14 slice 8: `enum Old` -> `#[derive] enum New` fires through
+        // the enum evolved matcher with the attr as ordinary prefix.
+        let mut en = String::from("enum Old {\n");
+        for i in 0..40 {
+            en.push_str(&format!("    V{i}(u32),\n"));
+        }
+        en.push_str("}\n");
+        let renamed = en.replacen("enum Old", "enum New", 1);
+        let a_old = format!("fn keep() {{}}\n{en}");
+        let a_minus: String = en.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[derive(Clone)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("enum rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("enum New"), "paste must evolve, got:\n{text}");
+        assert!(
+            text.contains("+#[derive(Clone)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_attr_union_fires_with_ordinary_prefix() {
+        // WI-14 slice 8: `union Old` -> `#[derive] union New` fires.
+        let mut un = String::from("union Old {\n");
+        for i in 0..40 {
+            un.push_str(&format!("    f{i}: u32,\n"));
+        }
+        un.push_str("}\n");
+        let renamed = un.replacen("union Old", "union New", 1);
+        let a_old = format!("fn keep() {{}}\n{un}");
+        let a_minus: String = un.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[derive(Clone, Copy)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("union rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("union New"),
+            "paste must evolve, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[derive(Clone, Copy)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_attr_type_fires_with_ordinary_prefix() {
+        // WI-14 slice 8 tail: `type Old = ...` -> `#[allow] type New`.
+        // Long aliased type keeps the pair T375-clearing.
+        let mut ty = String::from("type Old = (");
+        for i in 0..30 {
+            ty.push_str(&format!("u32, [u8; {i}], "));
+        }
+        ty.push_str("u64);\n");
+        let renamed = ty.replacen("type Old", "type New", 1);
+        let a_old = format!("fn keep() {{}}\n{ty}");
+        let a_minus: String = ty.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(dead_code)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("type rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("type New"), "paste must evolve, got:\n{text}");
+        assert!(
+            text.contains("+#[allow(dead_code)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_attr_const_fires_with_ordinary_prefix() {
+        // WI-14 slice 8 tail: `const OLD` -> `#[allow] const NEW`.
+        let co = "const OLD: [u32; 64] = [1; 64];\n";
+        let renamed = co.replacen("OLD", "NEW", 1);
+        let a_old = format!("fn keep() {{}}\n{co}");
+        let a_minus: String = co.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(dead_code)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("const rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("const NEW"),
+            "paste must evolve, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[allow(dead_code)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_attr_static_fires_with_ordinary_prefix() {
+        // WI-14 slice 8 tail: `static OLD` -> `#[allow] static NEW`.
+        let st = "static OLD: [u32; 64] = [1; 64];\n";
+        let renamed = st.replacen("OLD", "NEW", 1);
+        let a_old = format!("fn keep() {{}}\n{st}");
+        let a_minus: String = st.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(dead_code)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("static rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("static NEW"),
+            "paste must evolve, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[allow(dead_code)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_attr_mod_stays_ordinary_tiny() {
+        // WI-14 slice 8: empty-`mod` rename+attr carries the finder arm
+        // (same composition as the other kinds) but stays ordinary under
+        // the T375 byte guard — a 1-line `mod old;` plus one attr line
+        // can never price the cut+paste below the ordinary hunks.
+        // Content-bearing mods decline earlier via `move_cut_eligible`.
+        let modu = "mod old {}\n";
+        let renamed = modu.replacen("mod old", "mod new", 1);
+        let a_old = format!("fn keep() {{}}\n{modu}");
+        let a_minus: String = modu.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(dead_code)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "tiny mod rename+attr must stay ordinary (T375)"
+        );
+    }
+
+    #[test]
+    fn rename_plus_two_attrs_struct_stays_ordinary() {
+        // Exactly one added block: `struct Old` -> two attrs +
+        // `struct New` stays ordinary (inner keeps one attr vs bare).
+        let mut strukt = String::from("struct Old {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let renamed = strukt.replacen("struct Old", "struct New", 1);
+        let a_old = format!("fn keep() {{}}\n{strukt}");
+        let a_minus: String = strukt.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[inline]\n#[allow(dead_code)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "struct two-added+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_replaced_attr_struct_stays_ordinary() {
+        // Replaced axis with rename on struct stays ordinary (counts
+        // differ by zero, never plus one).
+        let mut strukt = String::from("struct Old {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let minus_item = format!("#[allow(dead_code)]\n{strukt}");
+        let renamed = strukt.replacen("struct Old", "struct New", 1);
+        let plus_item = format!("#[allow(unused)]\n{renamed}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "struct replaced+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_removed_attr_struct_stays_ordinary() {
+        // Removed axis with rename on struct stays ordinary (engine
+        // span law: the minus side carries the attr).
+        let mut strukt = String::from("struct New {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let mut old = strukt.clone().replacen("struct New", "struct Old", 1);
+        old = format!("#[allow(dead_code)]\n{old}");
+        let a_old = format!("fn keep() {{}}\n{old}");
+        let a_minus: String = old.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = strukt.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "struct removed+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_attr_trait_stays_ordinary() {
+        // Trait axis stays engine-owned: even the empty-trait rename
+        // with one added attr declines (the cut cannot carry
+        // method-bearing traits, and the trait finder is untouched).
+        let tr = "trait Old {}\ntrait New2 {}\n";
+        let _ = tr;
+        let minus_item = "trait Old {}\n";
+        let plus_item = "#[allow(dead_code)]\ntrait New {}\n";
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "trait rename+attr must stay ordinary (engine-owned)"
         );
     }
 }
