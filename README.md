@@ -225,6 +225,8 @@ context would be larger, so these are lower bounds.)
 | 46-fn-joint-arg-add (rename+param-add joint: fn def + 2 arg-adding call sites, 2 hunks under one shared rule, WI-4b) | 194 B / 11 ln | 153 B / 9 ln | 21% |
 | 47-joint-impl-rename (trait+self-type double-delta joint: trait def + struct def + composed `impl` header, 2 hunks under one shared rule, WI-3) | 267 B / 11 ln | 184 B / 11 ln | 31% |
 | 48-mixed-hunk-partition (2 multi runs — call sweep + general-expr sweep in one hunk, WI-4) | 214 B / 12 ln | 158 B / 11 ln | 26% |
+| 49-raise-wide (fn rename + 200 anchored calls across 20 files, 1 hunk with `# follow=uses`, WI-21 scale) | 16305 B / 726 ln | 95 B / 6 ln | 99% |
+| 50-raise-deep (300-item file, 50 mixed hunks — call/let/comment, WI-21 scale) | 4562 B / 153 ln | 2913 B / 153 ln | 36% |
 
 Diet spelling (`# sweep`, inferred metavars, terse renames) keeps fan-out
 edits at 50–90% and single-ident edits byte-positive — plus semantic

@@ -1,0 +1,726 @@
+diff --git a/def.rs b/def.rs
+--- a/def.rs
++++ b/def.rs
+@@ -1 +1 @@
+-pub fn old_name(x: i32) -> i32 {
++pub fn new_name(x: i32) -> i32 {
+diff --git a/u00.rs b/u00.rs
+--- a/u00.rs
++++ b/u00.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c0() -> i32 {
+-    old_name(0)
++    new_name(0)
+@@ -6 +6 @@ fn c1() -> i32 {
+-    old_name(1)
++    new_name(1)
+@@ -9 +9 @@ fn c2() -> i32 {
+-    old_name(2)
++    new_name(2)
+@@ -12 +12 @@ fn c3() -> i32 {
+-    old_name(3)
++    new_name(3)
+@@ -15 +15 @@ fn c4() -> i32 {
+-    old_name(4)
++    new_name(4)
+@@ -18 +18 @@ fn c5() -> i32 {
+-    old_name(5)
++    new_name(5)
+@@ -21 +21 @@ fn c6() -> i32 {
+-    old_name(6)
++    new_name(6)
+@@ -24 +24 @@ fn c7() -> i32 {
+-    old_name(7)
++    new_name(7)
+@@ -27 +27 @@ fn c8() -> i32 {
+-    old_name(8)
++    new_name(8)
+@@ -30 +30 @@ fn c9() -> i32 {
+-    old_name(9)
++    new_name(9)
+diff --git a/u01.rs b/u01.rs
+--- a/u01.rs
++++ b/u01.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c10() -> i32 {
+-    old_name(10)
++    new_name(10)
+@@ -6 +6 @@ fn c11() -> i32 {
+-    old_name(11)
++    new_name(11)
+@@ -9 +9 @@ fn c12() -> i32 {
+-    old_name(12)
++    new_name(12)
+@@ -12 +12 @@ fn c13() -> i32 {
+-    old_name(13)
++    new_name(13)
+@@ -15 +15 @@ fn c14() -> i32 {
+-    old_name(14)
++    new_name(14)
+@@ -18 +18 @@ fn c15() -> i32 {
+-    old_name(15)
++    new_name(15)
+@@ -21 +21 @@ fn c16() -> i32 {
+-    old_name(16)
++    new_name(16)
+@@ -24 +24 @@ fn c17() -> i32 {
+-    old_name(17)
++    new_name(17)
+@@ -27 +27 @@ fn c18() -> i32 {
+-    old_name(18)
++    new_name(18)
+@@ -30 +30 @@ fn c19() -> i32 {
+-    old_name(19)
++    new_name(19)
+diff --git a/u02.rs b/u02.rs
+--- a/u02.rs
++++ b/u02.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c20() -> i32 {
+-    old_name(20)
++    new_name(20)
+@@ -6 +6 @@ fn c21() -> i32 {
+-    old_name(21)
++    new_name(21)
+@@ -9 +9 @@ fn c22() -> i32 {
+-    old_name(22)
++    new_name(22)
+@@ -12 +12 @@ fn c23() -> i32 {
+-    old_name(23)
++    new_name(23)
+@@ -15 +15 @@ fn c24() -> i32 {
+-    old_name(24)
++    new_name(24)
+@@ -18 +18 @@ fn c25() -> i32 {
+-    old_name(25)
++    new_name(25)
+@@ -21 +21 @@ fn c26() -> i32 {
+-    old_name(26)
++    new_name(26)
+@@ -24 +24 @@ fn c27() -> i32 {
+-    old_name(27)
++    new_name(27)
+@@ -27 +27 @@ fn c28() -> i32 {
+-    old_name(28)
++    new_name(28)
+@@ -30 +30 @@ fn c29() -> i32 {
+-    old_name(29)
++    new_name(29)
+diff --git a/u03.rs b/u03.rs
+--- a/u03.rs
++++ b/u03.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c30() -> i32 {
+-    old_name(30)
++    new_name(30)
+@@ -6 +6 @@ fn c31() -> i32 {
+-    old_name(31)
++    new_name(31)
+@@ -9 +9 @@ fn c32() -> i32 {
+-    old_name(32)
++    new_name(32)
+@@ -12 +12 @@ fn c33() -> i32 {
+-    old_name(33)
++    new_name(33)
+@@ -15 +15 @@ fn c34() -> i32 {
+-    old_name(34)
++    new_name(34)
+@@ -18 +18 @@ fn c35() -> i32 {
+-    old_name(35)
++    new_name(35)
+@@ -21 +21 @@ fn c36() -> i32 {
+-    old_name(36)
++    new_name(36)
+@@ -24 +24 @@ fn c37() -> i32 {
+-    old_name(37)
++    new_name(37)
+@@ -27 +27 @@ fn c38() -> i32 {
+-    old_name(38)
++    new_name(38)
+@@ -30 +30 @@ fn c39() -> i32 {
+-    old_name(39)
++    new_name(39)
+diff --git a/u04.rs b/u04.rs
+--- a/u04.rs
++++ b/u04.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c40() -> i32 {
+-    old_name(40)
++    new_name(40)
+@@ -6 +6 @@ fn c41() -> i32 {
+-    old_name(41)
++    new_name(41)
+@@ -9 +9 @@ fn c42() -> i32 {
+-    old_name(42)
++    new_name(42)
+@@ -12 +12 @@ fn c43() -> i32 {
+-    old_name(43)
++    new_name(43)
+@@ -15 +15 @@ fn c44() -> i32 {
+-    old_name(44)
++    new_name(44)
+@@ -18 +18 @@ fn c45() -> i32 {
+-    old_name(45)
++    new_name(45)
+@@ -21 +21 @@ fn c46() -> i32 {
+-    old_name(46)
++    new_name(46)
+@@ -24 +24 @@ fn c47() -> i32 {
+-    old_name(47)
++    new_name(47)
+@@ -27 +27 @@ fn c48() -> i32 {
+-    old_name(48)
++    new_name(48)
+@@ -30 +30 @@ fn c49() -> i32 {
+-    old_name(49)
++    new_name(49)
+diff --git a/u05.rs b/u05.rs
+--- a/u05.rs
++++ b/u05.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c50() -> i32 {
+-    old_name(50)
++    new_name(50)
+@@ -6 +6 @@ fn c51() -> i32 {
+-    old_name(51)
++    new_name(51)
+@@ -9 +9 @@ fn c52() -> i32 {
+-    old_name(52)
++    new_name(52)
+@@ -12 +12 @@ fn c53() -> i32 {
+-    old_name(53)
++    new_name(53)
+@@ -15 +15 @@ fn c54() -> i32 {
+-    old_name(54)
++    new_name(54)
+@@ -18 +18 @@ fn c55() -> i32 {
+-    old_name(55)
++    new_name(55)
+@@ -21 +21 @@ fn c56() -> i32 {
+-    old_name(56)
++    new_name(56)
+@@ -24 +24 @@ fn c57() -> i32 {
+-    old_name(57)
++    new_name(57)
+@@ -27 +27 @@ fn c58() -> i32 {
+-    old_name(58)
++    new_name(58)
+@@ -30 +30 @@ fn c59() -> i32 {
+-    old_name(59)
++    new_name(59)
+diff --git a/u06.rs b/u06.rs
+--- a/u06.rs
++++ b/u06.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c60() -> i32 {
+-    old_name(60)
++    new_name(60)
+@@ -6 +6 @@ fn c61() -> i32 {
+-    old_name(61)
++    new_name(61)
+@@ -9 +9 @@ fn c62() -> i32 {
+-    old_name(62)
++    new_name(62)
+@@ -12 +12 @@ fn c63() -> i32 {
+-    old_name(63)
++    new_name(63)
+@@ -15 +15 @@ fn c64() -> i32 {
+-    old_name(64)
++    new_name(64)
+@@ -18 +18 @@ fn c65() -> i32 {
+-    old_name(65)
++    new_name(65)
+@@ -21 +21 @@ fn c66() -> i32 {
+-    old_name(66)
++    new_name(66)
+@@ -24 +24 @@ fn c67() -> i32 {
+-    old_name(67)
++    new_name(67)
+@@ -27 +27 @@ fn c68() -> i32 {
+-    old_name(68)
++    new_name(68)
+@@ -30 +30 @@ fn c69() -> i32 {
+-    old_name(69)
++    new_name(69)
+diff --git a/u07.rs b/u07.rs
+--- a/u07.rs
++++ b/u07.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c70() -> i32 {
+-    old_name(70)
++    new_name(70)
+@@ -6 +6 @@ fn c71() -> i32 {
+-    old_name(71)
++    new_name(71)
+@@ -9 +9 @@ fn c72() -> i32 {
+-    old_name(72)
++    new_name(72)
+@@ -12 +12 @@ fn c73() -> i32 {
+-    old_name(73)
++    new_name(73)
+@@ -15 +15 @@ fn c74() -> i32 {
+-    old_name(74)
++    new_name(74)
+@@ -18 +18 @@ fn c75() -> i32 {
+-    old_name(75)
++    new_name(75)
+@@ -21 +21 @@ fn c76() -> i32 {
+-    old_name(76)
++    new_name(76)
+@@ -24 +24 @@ fn c77() -> i32 {
+-    old_name(77)
++    new_name(77)
+@@ -27 +27 @@ fn c78() -> i32 {
+-    old_name(78)
++    new_name(78)
+@@ -30 +30 @@ fn c79() -> i32 {
+-    old_name(79)
++    new_name(79)
+diff --git a/u08.rs b/u08.rs
+--- a/u08.rs
++++ b/u08.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c80() -> i32 {
+-    old_name(80)
++    new_name(80)
+@@ -6 +6 @@ fn c81() -> i32 {
+-    old_name(81)
++    new_name(81)
+@@ -9 +9 @@ fn c82() -> i32 {
+-    old_name(82)
++    new_name(82)
+@@ -12 +12 @@ fn c83() -> i32 {
+-    old_name(83)
++    new_name(83)
+@@ -15 +15 @@ fn c84() -> i32 {
+-    old_name(84)
++    new_name(84)
+@@ -18 +18 @@ fn c85() -> i32 {
+-    old_name(85)
++    new_name(85)
+@@ -21 +21 @@ fn c86() -> i32 {
+-    old_name(86)
++    new_name(86)
+@@ -24 +24 @@ fn c87() -> i32 {
+-    old_name(87)
++    new_name(87)
+@@ -27 +27 @@ fn c88() -> i32 {
+-    old_name(88)
++    new_name(88)
+@@ -30 +30 @@ fn c89() -> i32 {
+-    old_name(89)
++    new_name(89)
+diff --git a/u09.rs b/u09.rs
+--- a/u09.rs
++++ b/u09.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c90() -> i32 {
+-    old_name(90)
++    new_name(90)
+@@ -6 +6 @@ fn c91() -> i32 {
+-    old_name(91)
++    new_name(91)
+@@ -9 +9 @@ fn c92() -> i32 {
+-    old_name(92)
++    new_name(92)
+@@ -12 +12 @@ fn c93() -> i32 {
+-    old_name(93)
++    new_name(93)
+@@ -15 +15 @@ fn c94() -> i32 {
+-    old_name(94)
++    new_name(94)
+@@ -18 +18 @@ fn c95() -> i32 {
+-    old_name(95)
++    new_name(95)
+@@ -21 +21 @@ fn c96() -> i32 {
+-    old_name(96)
++    new_name(96)
+@@ -24 +24 @@ fn c97() -> i32 {
+-    old_name(97)
++    new_name(97)
+@@ -27 +27 @@ fn c98() -> i32 {
+-    old_name(98)
++    new_name(98)
+@@ -30 +30 @@ fn c99() -> i32 {
+-    old_name(99)
++    new_name(99)
+diff --git a/u10.rs b/u10.rs
+--- a/u10.rs
++++ b/u10.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c100() -> i32 {
+-    old_name(100)
++    new_name(100)
+@@ -6 +6 @@ fn c101() -> i32 {
+-    old_name(101)
++    new_name(101)
+@@ -9 +9 @@ fn c102() -> i32 {
+-    old_name(102)
++    new_name(102)
+@@ -12 +12 @@ fn c103() -> i32 {
+-    old_name(103)
++    new_name(103)
+@@ -15 +15 @@ fn c104() -> i32 {
+-    old_name(104)
++    new_name(104)
+@@ -18 +18 @@ fn c105() -> i32 {
+-    old_name(105)
++    new_name(105)
+@@ -21 +21 @@ fn c106() -> i32 {
+-    old_name(106)
++    new_name(106)
+@@ -24 +24 @@ fn c107() -> i32 {
+-    old_name(107)
++    new_name(107)
+@@ -27 +27 @@ fn c108() -> i32 {
+-    old_name(108)
++    new_name(108)
+@@ -30 +30 @@ fn c109() -> i32 {
+-    old_name(109)
++    new_name(109)
+diff --git a/u11.rs b/u11.rs
+--- a/u11.rs
++++ b/u11.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c110() -> i32 {
+-    old_name(110)
++    new_name(110)
+@@ -6 +6 @@ fn c111() -> i32 {
+-    old_name(111)
++    new_name(111)
+@@ -9 +9 @@ fn c112() -> i32 {
+-    old_name(112)
++    new_name(112)
+@@ -12 +12 @@ fn c113() -> i32 {
+-    old_name(113)
++    new_name(113)
+@@ -15 +15 @@ fn c114() -> i32 {
+-    old_name(114)
++    new_name(114)
+@@ -18 +18 @@ fn c115() -> i32 {
+-    old_name(115)
++    new_name(115)
+@@ -21 +21 @@ fn c116() -> i32 {
+-    old_name(116)
++    new_name(116)
+@@ -24 +24 @@ fn c117() -> i32 {
+-    old_name(117)
++    new_name(117)
+@@ -27 +27 @@ fn c118() -> i32 {
+-    old_name(118)
++    new_name(118)
+@@ -30 +30 @@ fn c119() -> i32 {
+-    old_name(119)
++    new_name(119)
+diff --git a/u12.rs b/u12.rs
+--- a/u12.rs
++++ b/u12.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c120() -> i32 {
+-    old_name(120)
++    new_name(120)
+@@ -6 +6 @@ fn c121() -> i32 {
+-    old_name(121)
++    new_name(121)
+@@ -9 +9 @@ fn c122() -> i32 {
+-    old_name(122)
++    new_name(122)
+@@ -12 +12 @@ fn c123() -> i32 {
+-    old_name(123)
++    new_name(123)
+@@ -15 +15 @@ fn c124() -> i32 {
+-    old_name(124)
++    new_name(124)
+@@ -18 +18 @@ fn c125() -> i32 {
+-    old_name(125)
++    new_name(125)
+@@ -21 +21 @@ fn c126() -> i32 {
+-    old_name(126)
++    new_name(126)
+@@ -24 +24 @@ fn c127() -> i32 {
+-    old_name(127)
++    new_name(127)
+@@ -27 +27 @@ fn c128() -> i32 {
+-    old_name(128)
++    new_name(128)
+@@ -30 +30 @@ fn c129() -> i32 {
+-    old_name(129)
++    new_name(129)
+diff --git a/u13.rs b/u13.rs
+--- a/u13.rs
++++ b/u13.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c130() -> i32 {
+-    old_name(130)
++    new_name(130)
+@@ -6 +6 @@ fn c131() -> i32 {
+-    old_name(131)
++    new_name(131)
+@@ -9 +9 @@ fn c132() -> i32 {
+-    old_name(132)
++    new_name(132)
+@@ -12 +12 @@ fn c133() -> i32 {
+-    old_name(133)
++    new_name(133)
+@@ -15 +15 @@ fn c134() -> i32 {
+-    old_name(134)
++    new_name(134)
+@@ -18 +18 @@ fn c135() -> i32 {
+-    old_name(135)
++    new_name(135)
+@@ -21 +21 @@ fn c136() -> i32 {
+-    old_name(136)
++    new_name(136)
+@@ -24 +24 @@ fn c137() -> i32 {
+-    old_name(137)
++    new_name(137)
+@@ -27 +27 @@ fn c138() -> i32 {
+-    old_name(138)
++    new_name(138)
+@@ -30 +30 @@ fn c139() -> i32 {
+-    old_name(139)
++    new_name(139)
+diff --git a/u14.rs b/u14.rs
+--- a/u14.rs
++++ b/u14.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c140() -> i32 {
+-    old_name(140)
++    new_name(140)
+@@ -6 +6 @@ fn c141() -> i32 {
+-    old_name(141)
++    new_name(141)
+@@ -9 +9 @@ fn c142() -> i32 {
+-    old_name(142)
++    new_name(142)
+@@ -12 +12 @@ fn c143() -> i32 {
+-    old_name(143)
++    new_name(143)
+@@ -15 +15 @@ fn c144() -> i32 {
+-    old_name(144)
++    new_name(144)
+@@ -18 +18 @@ fn c145() -> i32 {
+-    old_name(145)
++    new_name(145)
+@@ -21 +21 @@ fn c146() -> i32 {
+-    old_name(146)
++    new_name(146)
+@@ -24 +24 @@ fn c147() -> i32 {
+-    old_name(147)
++    new_name(147)
+@@ -27 +27 @@ fn c148() -> i32 {
+-    old_name(148)
++    new_name(148)
+@@ -30 +30 @@ fn c149() -> i32 {
+-    old_name(149)
++    new_name(149)
+diff --git a/u15.rs b/u15.rs
+--- a/u15.rs
++++ b/u15.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c150() -> i32 {
+-    old_name(150)
++    new_name(150)
+@@ -6 +6 @@ fn c151() -> i32 {
+-    old_name(151)
++    new_name(151)
+@@ -9 +9 @@ fn c152() -> i32 {
+-    old_name(152)
++    new_name(152)
+@@ -12 +12 @@ fn c153() -> i32 {
+-    old_name(153)
++    new_name(153)
+@@ -15 +15 @@ fn c154() -> i32 {
+-    old_name(154)
++    new_name(154)
+@@ -18 +18 @@ fn c155() -> i32 {
+-    old_name(155)
++    new_name(155)
+@@ -21 +21 @@ fn c156() -> i32 {
+-    old_name(156)
++    new_name(156)
+@@ -24 +24 @@ fn c157() -> i32 {
+-    old_name(157)
++    new_name(157)
+@@ -27 +27 @@ fn c158() -> i32 {
+-    old_name(158)
++    new_name(158)
+@@ -30 +30 @@ fn c159() -> i32 {
+-    old_name(159)
++    new_name(159)
+diff --git a/u16.rs b/u16.rs
+--- a/u16.rs
++++ b/u16.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c160() -> i32 {
+-    old_name(160)
++    new_name(160)
+@@ -6 +6 @@ fn c161() -> i32 {
+-    old_name(161)
++    new_name(161)
+@@ -9 +9 @@ fn c162() -> i32 {
+-    old_name(162)
++    new_name(162)
+@@ -12 +12 @@ fn c163() -> i32 {
+-    old_name(163)
++    new_name(163)
+@@ -15 +15 @@ fn c164() -> i32 {
+-    old_name(164)
++    new_name(164)
+@@ -18 +18 @@ fn c165() -> i32 {
+-    old_name(165)
++    new_name(165)
+@@ -21 +21 @@ fn c166() -> i32 {
+-    old_name(166)
++    new_name(166)
+@@ -24 +24 @@ fn c167() -> i32 {
+-    old_name(167)
++    new_name(167)
+@@ -27 +27 @@ fn c168() -> i32 {
+-    old_name(168)
++    new_name(168)
+@@ -30 +30 @@ fn c169() -> i32 {
+-    old_name(169)
++    new_name(169)
+diff --git a/u17.rs b/u17.rs
+--- a/u17.rs
++++ b/u17.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c170() -> i32 {
+-    old_name(170)
++    new_name(170)
+@@ -6 +6 @@ fn c171() -> i32 {
+-    old_name(171)
++    new_name(171)
+@@ -9 +9 @@ fn c172() -> i32 {
+-    old_name(172)
++    new_name(172)
+@@ -12 +12 @@ fn c173() -> i32 {
+-    old_name(173)
++    new_name(173)
+@@ -15 +15 @@ fn c174() -> i32 {
+-    old_name(174)
++    new_name(174)
+@@ -18 +18 @@ fn c175() -> i32 {
+-    old_name(175)
++    new_name(175)
+@@ -21 +21 @@ fn c176() -> i32 {
+-    old_name(176)
++    new_name(176)
+@@ -24 +24 @@ fn c177() -> i32 {
+-    old_name(177)
++    new_name(177)
+@@ -27 +27 @@ fn c178() -> i32 {
+-    old_name(178)
++    new_name(178)
+@@ -30 +30 @@ fn c179() -> i32 {
+-    old_name(179)
++    new_name(179)
+diff --git a/u18.rs b/u18.rs
+--- a/u18.rs
++++ b/u18.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c180() -> i32 {
+-    old_name(180)
++    new_name(180)
+@@ -6 +6 @@ fn c181() -> i32 {
+-    old_name(181)
++    new_name(181)
+@@ -9 +9 @@ fn c182() -> i32 {
+-    old_name(182)
++    new_name(182)
+@@ -12 +12 @@ fn c183() -> i32 {
+-    old_name(183)
++    new_name(183)
+@@ -15 +15 @@ fn c184() -> i32 {
+-    old_name(184)
++    new_name(184)
+@@ -18 +18 @@ fn c185() -> i32 {
+-    old_name(185)
++    new_name(185)
+@@ -21 +21 @@ fn c186() -> i32 {
+-    old_name(186)
++    new_name(186)
+@@ -24 +24 @@ fn c187() -> i32 {
+-    old_name(187)
++    new_name(187)
+@@ -27 +27 @@ fn c188() -> i32 {
+-    old_name(188)
++    new_name(188)
+@@ -30 +30 @@ fn c189() -> i32 {
+-    old_name(189)
++    new_name(189)
+diff --git a/u19.rs b/u19.rs
+--- a/u19.rs
++++ b/u19.rs
+@@ -1 +1 @@
+-use crate::def::old_name;
++use crate::def::new_name;
+@@ -3 +3 @@ fn c190() -> i32 {
+-    old_name(190)
++    new_name(190)
+@@ -6 +6 @@ fn c191() -> i32 {
+-    old_name(191)
++    new_name(191)
+@@ -9 +9 @@ fn c192() -> i32 {
+-    old_name(192)
++    new_name(192)
+@@ -12 +12 @@ fn c193() -> i32 {
+-    old_name(193)
++    new_name(193)
+@@ -15 +15 @@ fn c194() -> i32 {
+-    old_name(194)
++    new_name(194)
+@@ -18 +18 @@ fn c195() -> i32 {
+-    old_name(195)
++    new_name(195)
+@@ -21 +21 @@ fn c196() -> i32 {
+-    old_name(196)
++    new_name(196)
+@@ -24 +24 @@ fn c197() -> i32 {
+-    old_name(197)
++    new_name(197)
+@@ -27 +27 @@ fn c198() -> i32 {
+-    old_name(198)
++    new_name(198)
+@@ -30 +30 @@ fn c199() -> i32 {
+-    old_name(199)
++    new_name(199)

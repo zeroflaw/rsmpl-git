@@ -10099,7 +10099,7 @@ stripping is deliberate. Equalities per origin close the contract:
   keep different directives and stay divergent.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(144), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
+(144), all example benches (32 applyrs, 50 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
