@@ -19,7 +19,7 @@ use crate::matcher_attr_delta::{
     AttrDelta as GeneralAttrDelta,
 };
 use crate::matcher_fn::delete_lines;
-use crate::matcher_general::{in_scope, match_expr, render, Collector, MatchCx};
+use crate::matcher_general::{in_scope, match_expr, render, Collector};
 use crate::matcher_general_tails::substitute_general_plus;
 use crate::matcher_types::match_type;
 use rsmpl_patch::{AttrsPolicy, ErrorCode, RsmplHunk, StructuredError};
@@ -60,12 +60,17 @@ const MAX_GENERAL_REPEAT_DEPTH: usize = 64;
 /// general-expression rule (bottom-up fold). Symbol seeds are pre-bound
 /// paths, not matchable fragments, so they are skipped — like the
 /// call-matcher fold in `matcher_expr`.
+#[allow(clippy::too_many_arguments)]
 fn fold_general_bindings(
     bindings: &mut HashMap<String, String>,
     compiled: &CompiledPattern,
     pat_expr: &syn::Expr,
     plus_raw: &str,
     reverse: &HashMap<String, String>,
+    symbols: &HashMap<String, String>,
+    fallback_syntax: bool,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
+    seed_canons: &HashMap<String, String>,
     depth: usize,
     rule: &str,
 ) -> Result<(), StructuredError> {
@@ -89,7 +94,17 @@ fn fold_general_bindings(
         }
         if let Some(current) = bindings.get(&name).cloned() {
             let rewritten = rewrite_nested_general(
-                &current, compiled, pat_expr, plus_raw, reverse, depth, rule,
+                &current,
+                compiled,
+                pat_expr,
+                plus_raw,
+                reverse,
+                symbols,
+                fallback_syntax,
+                symbol_graph,
+                seed_canons,
+                depth,
+                rule,
             )?;
             bindings.insert(name, rewritten);
         }
@@ -103,12 +118,22 @@ fn fold_general_bindings(
 /// output is never re-scanned, so self-reproducing rules apply exactly one
 /// level and terminate by construction. Unparseable fragments are kept
 /// verbatim (conservative, like the call-matcher fold).
+///
+/// NOTE (WI-4 slice 1): the fold applies the outer hunk's symbol posture
+/// inside each nested fragment (pre-bound seeds; resolved checks reuse the
+/// hunk graph), so a nested whole-path symbol verifies exactly like a
+/// top-level one.
+#[allow(clippy::too_many_arguments)]
 fn rewrite_nested_general(
     text: &str,
     compiled: &CompiledPattern,
     pat_expr: &syn::Expr,
     plus_raw: &str,
     reverse: &HashMap<String, String>,
+    symbols: &HashMap<String, String>,
+    fallback_syntax: bool,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
+    seed_canons: &HashMap<String, String>,
     depth: usize,
     rule: &str,
 ) -> Result<String, StructuredError> {
@@ -145,7 +170,15 @@ fn rewrite_nested_general(
         {
             continue;
         }
-        let mut cx = MatchCx::with_reverse(text, &index, reverse.clone());
+        let mut cx = crate::matcher_symbol::symbol_cx(
+            text,
+            &index,
+            reverse.clone(),
+            symbols,
+            fallback_syntax,
+            symbol_graph,
+            seed_canons,
+        );
         if !match_expr(pat_expr, tgt, &mut cx) {
             continue;
         }
@@ -160,6 +193,10 @@ fn rewrite_nested_general(
             pat_expr,
             plus_raw,
             reverse,
+            symbols,
+            fallback_syntax,
+            symbol_graph,
+            seed_canons,
             depth + 1,
             rule,
         )?;
@@ -186,6 +223,7 @@ pub fn apply_general_hunk(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
 ) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
     let (shape, minus_sub, plus_raw, plus_body, minus_attrs, plus_attrs, had_semi) = match &compiled
         .kind
@@ -218,6 +256,43 @@ pub fn apply_general_hunk(
         ))),
     };
     let rule = hunk.rule_name();
+
+    // WI-4 slice 1: whole-path `# symbol` posture (SPEC 19.3). Seeds are
+    // pre-bound into every candidate context (the plus side emits the
+    // concrete seed, exactly the call-hunk posture); bare symbols verify
+    // their minus-side seeds here, per-site checks run in
+    // `matcher_symbol` through each candidate `MatchCx`.
+    let symbols = compiled.table.symbols.clone();
+    let fallback_syntax = hunk.fallback_syntax();
+    let mut seed_canons: HashMap<String, String> = HashMap::new();
+    if !symbols.is_empty() && !fallback_syntax {
+        let Some((graph, _file)) = symbol_graph else {
+            // Mirror the call-matcher gate (SPEC 19.3): no index, no proof.
+            let sym = symbols.keys().next().cloned().unwrap_or_default();
+            return Err(StructuredError::new(
+                ErrorCode::SymbolConflict,
+                format!("symbol `{sym}` could not be resolved (no semantic environment in v0.1)"),
+            )
+            .with_rule(&rule)
+            .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
+            .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
+        };
+        seed_canons = crate::matcher_symbol::seed_canons_for(&symbols, &minus_sub, graph, &rule)?;
+    }
+    // Sequences never carry symbols in slice 1 (compile-time C14 owns
+    // this; the loud arm below is defense-in-depth so the sequence
+    // delegate can never bind a symbol placeholder blindly).
+    if matches!(shape, GeneralShape::Sequence) && !symbols.is_empty() {
+        return Err(StructuredError::new(
+            ErrorCode::PatternConflict,
+            "this general statement-sequence hunk cannot use `# symbol` — sequences ride concrete paths in slice 1 (see SPEC 19.3)",
+        )
+        .with_rule(&rule)
+        .with_repair(StructuredError::fix_pattern_repair(
+            "C14",
+            "write the full concrete path instead",
+        )));
+    }
 
     // Attribute shape validation up front (clear errors, no guessing).
     if shape != GeneralShape::Stmt && (!minus_attrs.is_empty() || !plus_attrs.is_empty()) {
@@ -401,7 +476,15 @@ pub fn apply_general_hunk(
                 ) {
                     continue;
                 }
-                let mut cx = MatchCx::with_reverse(original, index, reverse.clone());
+                let mut cx = crate::matcher_symbol::symbol_cx(
+                    original,
+                    index,
+                    reverse.clone(),
+                    &symbols,
+                    fallback_syntax,
+                    symbol_graph,
+                    &seed_canons,
+                );
                 if !crate::matcher_general_ctrl::match_local(pat_local, tgt, &mut cx) {
                     continue;
                 }
@@ -712,7 +795,15 @@ pub fn apply_general_hunk(
                 ) {
                     continue;
                 }
-                let mut cx = MatchCx::with_reverse(original, index, reverse.clone());
+                let mut cx = crate::matcher_symbol::symbol_cx(
+                    original,
+                    index,
+                    reverse.clone(),
+                    &symbols,
+                    fallback_syntax,
+                    symbol_graph,
+                    &seed_canons,
+                );
                 if !match_expr(&pat_expr, tgt, &mut cx) {
                     continue;
                 }
@@ -726,6 +817,10 @@ pub fn apply_general_hunk(
                         &pat_expr,
                         &plus_raw,
                         &reverse,
+                        &symbols,
+                        fallback_syntax,
+                        symbol_graph,
+                        &seed_canons,
                         0,
                         &rule,
                     )?;
@@ -841,7 +936,15 @@ pub fn apply_general_hunk(
                 ) {
                     continue;
                 }
-                let mut cx = MatchCx::with_reverse(original, index, reverse.clone());
+                let mut cx = crate::matcher_symbol::symbol_cx(
+                    original,
+                    index,
+                    reverse.clone(),
+                    &symbols,
+                    fallback_syntax,
+                    symbol_graph,
+                    &seed_canons,
+                );
                 if !match_type(&pat_ty, tgt, &mut cx) {
                     continue;
                 }
@@ -936,8 +1039,9 @@ mod wi18_slice12_tests {
             plus: "y".to_string(),
         };
         let mut edits = Vec::<TextEdit>::new();
-        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
-            .expect_err("wrong kind must fail");
+        let err =
+            super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits, None)
+                .expect_err("wrong kind must fail");
         assert_eq!(err.message, "expected generalized stmt/expr/type pattern");
         let (code, w) = repair_of(&err);
         assert_eq!(code, "general-dispatch-template");
@@ -953,8 +1057,9 @@ mod wi18_slice12_tests {
             panic!("LET_SHAPE must compile to General");
         }
         let mut edits = Vec::<TextEdit>::new();
-        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
-            .expect_err("invalid let must fail");
+        let err =
+            super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits, None)
+                .expect_err("invalid let must fail");
         assert!(
             err.message.starts_with("invalid `let` pattern"),
             "got: {}",
@@ -985,8 +1090,9 @@ mod wi18_slice12_tests {
             panic!("LET_SHAPE must compile to General");
         }
         let mut edits = Vec::<TextEdit>::new();
-        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
-            .expect_err("non-let stmt must fail");
+        let err =
+            super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits, None)
+                .expect_err("non-let stmt must fail");
         assert_eq!(
             err.message,
             "general statement patterns must be `let` statements in v1"
@@ -1009,8 +1115,9 @@ mod wi18_slice12_tests {
             panic!("LET_SHAPE must compile to General");
         }
         let mut edits = Vec::<TextEdit>::new();
-        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
-            .expect_err("invalid expr must fail");
+        let err =
+            super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits, None)
+                .expect_err("invalid expr must fail");
         assert!(
             err.message.starts_with("invalid expression pattern"),
             "got: {}",
@@ -1034,8 +1141,9 @@ mod wi18_slice12_tests {
             panic!("LET_SHAPE must compile to General");
         }
         let mut edits = Vec::<TextEdit>::new();
-        let err = super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
-            .expect_err("invalid type must fail");
+        let err =
+            super::apply_general_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits, None)
+                .expect_err("invalid type must fail");
         assert!(
             err.message.starts_with("invalid type pattern"),
             "got: {}",
@@ -1044,5 +1152,202 @@ mod wi18_slice12_tests {
         let (code, w) = repair_of(&err);
         assert_eq!(code, "general-type-invalid-template");
         assert!(w.contains("`- Vec<T>`"), "got: {w}");
+    }
+}
+
+#[cfg(test)]
+mod wi4_slice1_tests {
+    // WI-4 slice 1: whole-path `# symbol` in General Stmt/Expr/Type hunks.
+    // Fires exactly (fallback) or by crate-graph proof (resolved, short
+    // spellings via imports included, vendored copies excluded);
+    // unresolvable seeds fail loud.
+    use std::collections::HashMap;
+
+    use super::apply_general_hunk;
+    use crate::edits::TextEdit;
+
+    fn compiled_of(patch_text: &str) -> (rsmpl_patch::RsmplHunk, rsmpl_pattern::CompiledPattern) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("test patch compiles");
+        (hunk, compiled)
+    }
+
+    fn run(
+        patch_text: &str,
+        src: &str,
+        graph: Option<(&crate::CrateGraph, &str)>,
+    ) -> Result<(usize, String), rsmpl_patch::StructuredError> {
+        let (hunk, compiled) = compiled_of(patch_text);
+        let parsed: syn::File = syn::parse_str(src).expect("src parses");
+        let index = crate::lines::LineIndex::new(src);
+        let mut edits = Vec::<TextEdit>::new();
+        let (n, _) = apply_general_hunk(&parsed, src, &index, &hunk, &compiled, &mut edits, graph)?;
+        let out = crate::edits::apply_edits(src, edits).expect("edits apply");
+        Ok((n, out))
+    }
+
+    const LET_FALLBACK: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n- let x = Old(E);\n+ let x = New(E);\n";
+    const LET_RESOLVED: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n- let x = Old(E);\n+ let x = New(E);\n";
+
+    #[test]
+    fn wi4_let_init_fallback_fires_exact() {
+        let src = "pub fn old_api(x: i32) -> i32 { x }\nfn f() {\n    let x = crate::old_api(1);\n    let _ = x;\n}\n";
+        let (n, out) = run(LET_FALLBACK, src, None).expect("fallback fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::new_api(1);"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_let_init_fallback_short_spelling_misses() {
+        // Exact full-path text under fallback (SPEC 19.3): a bare
+        // `old_api` site with an import does not match.
+        let src = "use crate::old_api;\nfn f() {\n    let x = old_api(1);\n    let _ = x;\n}\n";
+        let res = run(LET_FALLBACK, src, None);
+        assert!(res.is_ok(), "compiles and runs, matching nothing");
+        assert_eq!(res.unwrap().0, 0);
+    }
+
+    #[test]
+    fn wi4_let_init_resolved_fires_via_import() {
+        let files: HashMap<String, String> = [
+            (
+                "src/lib.rs".to_string(),
+                "pub mod a;\npub fn old_api(x: i32) -> i32 { x }\npub fn new_api(x: i32) -> i32 { x }\n".to_string(),
+            ),
+            (
+                "src/a.rs".to_string(),
+                "use crate::old_api;\nfn f() {\n    let x = old_api(1);\n    let _ = x;\n}\n".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let graph = crate::CrateGraph::build(&files);
+        let src = files["src/a.rs"].clone();
+        let (n, out) = run(LET_RESOLVED, &src, Some((&graph, "src/a.rs"))).expect("resolved fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::new_api(1);"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_let_init_resolved_vendored_copy_skipped() {
+        let files: HashMap<String, String> = [
+            (
+                "src/lib.rs".to_string(),
+                "pub mod vendored;\npub fn old_api(x: i32) -> i32 { x }\n".to_string(),
+            ),
+            (
+                "src/vendored.rs".to_string(),
+                "pub fn old_api(x: i32) -> i32 { x }\nfn g() {\n    let x = old_api(1);\n    let _ = x;\n}\n".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let graph = crate::CrateGraph::build(&files);
+        let src = files["src/vendored.rs"].clone();
+        let (n, _) = run(LET_RESOLVED, &src, Some((&graph, "src/vendored.rs")))
+            .expect("runs, matching nothing");
+        assert_eq!(n, 0, "vendored copy must not match");
+    }
+
+    #[test]
+    fn wi4_unresolvable_seed_fails_loud() {
+        let files: HashMap<String, String> =
+            [("src/lib.rs".to_string(), "fn f() {}\n".to_string())]
+                .into_iter()
+                .collect();
+        let graph = crate::CrateGraph::build(&files);
+        let src = "fn f() {\n    let x = crate::missing(1);\n    let _ = x;\n}\n";
+        let err = run(LET_RESOLVED, src, Some((&graph, "src/lib.rs"))).expect_err("must fail");
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::SymbolConflict);
+        assert!(
+            err.message.contains("resolves to no definition"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn wi4_general_type_fires() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# root=type\n# fallback=syntax\n# symbol Old=crate::Old\n# symbol New=crate::New\n- Old\n+ New\n";
+        let src = "pub struct Old;\npub struct New;\nfn f(x: crate::Old) -> crate::Old { x }\n";
+        let (n, out) = run(patch, src, None).expect("type fires");
+        assert_eq!(n, 2, "annotation + return type");
+        assert!(
+            out.contains("fn f(x: crate::New) -> crate::New"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn wi4_nested_generic_type_fires() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# root=type\n# fallback=syntax\n# symbol Old=crate::Old\n# symbol New=crate::New\n- Vec<Old>\n+ Vec<New>\n";
+        let src =
+            "pub struct Old;\npub struct New;\nfn f(x: Vec<crate::Old>) -> Vec<crate::Old> { x }\n";
+        let (n, out) = run(patch, src, None).expect("nested type fires");
+        assert_eq!(n, 2);
+        assert!(
+            out.contains("fn f(x: Vec<crate::New>) -> Vec<crate::New>"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn wi4_general_expr_callee_fires() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# expr E\n- E + Old(1)\n+ E + New(1)\n";
+        let src = "fn f(a: i32) -> i32 {\n    let y = a + crate::old_api(1);\n    y\n}\n";
+        let (n, out) = run(patch, src, None).expect("expr fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("a + crate::new_api(1)"), "got:\n{out}");
+    }
+}
+
+#[cfg(test)]
+mod wi4_slice1_plus_only_tests {
+    // Plus-only symbols name the rewrite target (never verified): the
+    // minus side matches concretely and the plus emits the seed.
+    use super::apply_general_hunk;
+    use crate::edits::TextEdit;
+
+    #[test]
+    fn wi4_plus_only_symbol_emits_seed() {
+        let patch_text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol New=crate::new_api\n# expr E\n- let x = E;\n+ let x = New(E);\n";
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("plus-only compiles");
+        let src = "fn f() {\n    let x = foo(1);\n    let _ = x;\n}\n";
+        let parsed: syn::File = syn::parse_str(src).expect("src parses");
+        let index = crate::lines::LineIndex::new(src);
+        let mut edits = Vec::<TextEdit>::new();
+        // Bare symbol needs a graph present (same law as call hunks),
+        // but the plus-only seed is never resolved — an empty graph
+        // suffices and the minus side matches concretely.
+        let files: std::collections::HashMap<String, String> =
+            [("src/lib.rs".to_string(), "fn f() {}\n".to_string())]
+                .into_iter()
+                .collect();
+        let graph = crate::CrateGraph::build(&files);
+        let (n, _) = apply_general_hunk(
+            &parsed,
+            src,
+            &index,
+            &hunk,
+            &compiled,
+            &mut edits,
+            Some((&graph, "src/lib.rs")),
+        )
+        .expect("plus-only fires");
+        assert_eq!(n, 1);
+        let out = crate::edits::apply_edits(src, edits).expect("edits apply");
+        assert!(
+            out.contains("let x = crate::new_api(foo(1));"),
+            "got:\n{out}"
+        );
     }
 }

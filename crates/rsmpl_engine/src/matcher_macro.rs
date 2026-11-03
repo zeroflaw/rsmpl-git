@@ -717,7 +717,8 @@ fn match_macro_name(
     // The minus pattern here is raw hunk text, so a declared macro-name
     // metavariable appears under its declared spelling (`M`), not the
     // `__RSMPL_` placeholder used in substituted classifier output.
-    // (`# symbol` is call-shape-only per C14, so no symbol arms here.)
+    // (WI-4 slice 1: macro shapes still reject `# symbol` at C14, so no
+    // symbol arms here.)
     let declared = reverse_map.get(pattern).cloned().or_else(|| {
         let bare = pattern.trim_start_matches('$');
         reverse_map

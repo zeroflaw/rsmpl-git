@@ -44,6 +44,7 @@ use syn::visit::{self, Visit};
 use crate::edits::fragments_equal;
 use crate::lines::LineIndex;
 use crate::matcher_types::{match_path, match_turbofish, match_type};
+use crate::CrateGraph;
 use rsmpl_patch::Scope;
 
 /// A match candidate with original byte range + line span.
@@ -138,6 +139,18 @@ pub(crate) struct MatchCx<'a> {
     pub(crate) reverse: HashMap<String, String>,
     /// declared name -> bound original text.
     pub(crate) bindings: HashMap<String, String>,
+    /// WI-4 slice 1: declared `# symbol` name -> seed path (`Old` ->
+    /// `crate::old_api`). Symbol placeholders never bind site text; the
+    /// per-site verdict lives in `matcher_symbol`.
+    pub(crate) symbols: HashMap<String, String>,
+    /// WI-4 slice 1: true when `# fallback=syntax` carries the hunk
+    /// (exact full-path text, no resolution).
+    pub(crate) fallback_syntax: bool,
+    /// WI-4 slice 1: crate graph + containing file for resolved
+    /// per-site checks (`None` in fallback mode and unit probes).
+    pub(crate) symbol_graph: Option<(&'a CrateGraph, &'a str)>,
+    /// WI-4 slice 1: verified minus-side seed -> canonical definition.
+    pub(crate) seed_canons: HashMap<String, String>,
     /// WI-5b: absorbed trailing-block tails in match order. `match_block`
     /// pushes one entry per trailing `...` (empty for a zero-tail match);
     /// substitution replays them into the plus `...` slots in order, or
@@ -157,6 +170,10 @@ impl<'a> MatchCx<'a> {
             index,
             reverse,
             bindings: HashMap::new(),
+            symbols: HashMap::new(),
+            fallback_syntax: true,
+            symbol_graph: None,
+            seed_canons: HashMap::new(),
             block_tails: Vec::new(),
         }
     }
@@ -253,7 +270,12 @@ pub(crate) fn match_expr(pat: &syn::Expr, tgt: &syn::Expr, cx: &mut MatchCx) -> 
         {
             let id = ep.path.segments[0].ident.to_string();
             if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
-                return cx.bind_span(&name, tgt.span());
+                // WI-4 slice 1: whole-path symbols never take the
+                // bind-anything arm; they fall through to the structural
+                // `Path` arm below (`match_path` owns the symbol verdict).
+                if !cx.symbols.contains_key(&name) {
+                    return cx.bind_span(&name, tgt.span());
+                }
             }
         }
     }
@@ -424,6 +446,11 @@ pub(crate) fn opt_expr_eq(
 fn method_name_matches(pat: &syn::Ident, tgt: &syn::Ident, cx: &mut MatchCx) -> bool {
     let id = pat.to_string();
     if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
+        // WI-4 slice 1: method idents reject symbols at compile time;
+        // defense-in-depth never binds one here.
+        if cx.symbols.contains_key(&name) {
+            return false;
+        }
         return cx.bind(&name, &tgt.to_string());
     }
     pat == tgt
@@ -434,6 +461,11 @@ fn match_member(pat: &syn::Member, tgt: &syn::Member, cx: &mut MatchCx) -> bool 
         (syn::Member::Named(a), syn::Member::Named(b)) => {
             let id = a.to_string();
             if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
+                // WI-4 slice 1: field/label slots reject symbols at
+                // compile time; defense-in-depth never binds one here.
+                if cx.symbols.contains_key(&name) {
+                    return false;
+                }
                 return cx.bind(&name, &b.to_string());
             }
             a == b
@@ -1061,7 +1093,7 @@ mod tests {
                 reason: "replacement attributes differ from matched attributes",
                 suggestion: ATTR_SUGGESTION,
             },
-            // C13: `# symbol` without `# fallback=syntax` (call-matcher gate; general shapes never reach it — C14 rejects them at compile).
+            // C13: `# symbol` without `# fallback=syntax` (call-matcher gate; general shapes with symbols verify at the general-hunk driver instead — C14 admits whole-path uses).
             Row {
                 patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# symbol Old=crate::old_api\n# expr E\n- Old(E)\n+ crate::new_api(E)\n",
                 file: "fn a() {\n    crate::old_api(1);\n}\n",
@@ -1069,15 +1101,17 @@ mod tests {
                 reason: "resolves to no definition in this crate",
                 suggestion: Some("add `# fallback=syntax` to allow syntactic matching"),
             },
-            // C14: `# symbol` in a general shape fails even with fallback
-            // (call-shape-only, SPEC 18.6) — single symbol keeps the pin
-            // deterministic regardless of gate iteration order.
+            // C14: `# symbol` in a macro hunk fails even with fallback
+            // (SPEC 18.6) — single symbol keeps the pin deterministic
+            // regardless of gate iteration order. General whole-path
+            // uses are admitted since WI-4 slice 1 (see the pattern
+            // gate tests); macro shapes still reject.
             Row {
-                patch: "@@ -1,4 +1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n",
-                file: "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
+                patch: "@@ -1,3 +1,3 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- foo!(Old(E))\n+ foo!(New(E))\n",
+                file: "fn a() {\n    foo!(crate::old_api(1));\n}\n",
                 code: "RSMPL_PATTERN_CONFLICT",
-                reason: "only supported in call shapes",
-                suggestion: Some("use a call-shape hunk or a concrete path pattern"),
+                reason: "this macro hunk cannot use `# symbol`",
+                suggestion: Some("use a call-shape or general whole-path hunk"),
             },
         ];
         assert_eq!(

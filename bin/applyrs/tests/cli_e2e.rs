@@ -393,23 +393,21 @@ fn symbol_fallback_rejects_bare_path() {
 }
 #[test]
 fn symbol_in_general_shape_is_pattern_conflict() {
-    // T24/C14: `# symbol` is call-shape-only — a general-expression hunk
-    // with symbols fails at compile even with `# fallback=syntax` set.
+    // WI-4 slice 1/C14: a general-expression hunk with a PREFIX symbol
+    // (`Old::…`) fails at compile even with `# fallback=syntax` set —
+    // whole-path uses compile, prefix uses ride concrete paths.
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
         "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
     );
-    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n";
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- E + Old::compute(1)\n+ E + New::compute(1)\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
-    assert!(
-        stderr.contains("only supported in call shapes"),
-        "got: {stderr}"
-    );
+    assert!(stderr.contains("path prefix"), "got: {stderr}");
 }
 
 #[test]
@@ -453,7 +451,7 @@ fn symbol_in_macro_shape_is_pattern_conflict() {
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
     assert!(
-        stderr.contains("only supported in call shapes"),
+        stderr.contains("this macro hunk cannot use `# symbol`"),
         "got: {stderr}"
     );
 }

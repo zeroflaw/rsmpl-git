@@ -728,13 +728,14 @@ fn general_coverage_diagnostics_are_pinned() {
             ),
             "`# returns=none` requires a function-item pattern",
         ),
-        // C14: `# symbol` in a general shape (call-shape-only even
-        // with `# fallback=syntax`, where the constraint is unenforceable).
+        // C14: `# symbol` in a macro hunk (whole-path positions in
+        // general Stmt/Expr/Type are admitted since WI-4 slice 1 —
+        // this arm pins what still rejects).
         (
             format!(
-                "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n"
+                "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- foo!(Old(E))\n+ foo!(New(E))\n"
             ),
-            "`# symbol` is only supported in call shapes in v0.1",
+            "this macro hunk cannot use `# symbol`",
         ),
     ];
     assert_eq!(
@@ -1828,5 +1829,123 @@ fn arm_addition_minus_present_declines() {
     assert!(
         !matches!(kind, Some(PatternKind::ArmAddition { .. })),
         "pair must not route to ArmAddition"
+    );
+}
+
+// WI-4 slice 1: whole-path `# symbol` positions in General Stmt/Expr/Type
+// compile; prefix, turbofish, qself, method-ident, binding, field, and
+// sequence uses reject with the position named (C14).
+#[test]
+fn wi4_slice1_general_symbol_positions_compile() {
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    // Stmt (let-init callee + bare annotation), Expr (general callee),
+    // Type (bare path + nested generic arg).
+    for (shape, minus, plus) in [
+        ("stmt", "let x = Old(E);", "let x = New(E);"),
+        ("stmt-annot", "let x: Old = E;", "let x: New = E;"),
+        ("expr", "E + Old(1)", "E + New(1)"),
+        ("type", "Old", "New"),
+        ("type-nested", "Vec<Old>", "Vec<New>"),
+    ] {
+        let extra = if shape.starts_with("type") {
+            "# root=type\n".to_string()
+        } else {
+            String::new()
+        };
+        let patch = format!(
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n{extra}# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- {minus}\n+ {plus}\n"
+        );
+        let kind = compile(&hunk_of(&patch))
+            .expect("{shape} whole-path symbol must compile")
+            .kind;
+        assert!(
+            matches!(kind, PatternKind::General { .. }),
+            "{shape} must stay General, got: {kind:?}"
+        );
+    }
+    // Unused symbols stay inert (consistent with call hunks).
+    let unused = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n- E + 1\n+ E + 2\n"
+    );
+    assert!(
+        compile(&hunk_of(&unused)).is_ok(),
+        "unused symbols must stay inert"
+    );
+}
+
+#[test]
+fn wi4_slice1_general_symbol_slots_reject() {
+    let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+    // (minus, plus, position needle).
+    // NOTE: a symbol nested in a `let`-annotation (`Vec<Old>`) stays C8
+    // (the pre-existing pattern-interior gate owns it — checked here as
+    // a boundary pin); the same nesting as a standalone type hunk is a
+    // whole-path use and compiles (pinned above).
+    for (minus, plus, needle) in [
+        (
+            "let x = Old::compute(E);",
+            "let x = New::compute(E);",
+            "path prefix",
+        ),
+        (
+            "let x = Old::<u8>(E);",
+            "let x = New::<u8>(E);",
+            "path prefix",
+        ),
+        ("let Old = E;", "let New = E;", "pattern interior"),
+        (
+            "let y = S { Old: E };",
+            "let y = S { Old: E };",
+            "field/label slot",
+        ),
+        ("let x = E.old(1);", "let x = E.new(1);", "method ident"),
+    ] {
+        let patch = format!(
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n# symbol old=crate::old_api\n- {minus}\n+ {plus}\n"
+        );
+        let err = compile(&hunk_of(&patch)).expect_err("slot must reject: {minus}");
+        assert_eq!(
+            err.code,
+            rsmpl_patch::ErrorCode::PatternConflict,
+            "wrong code for {minus}:\n{}",
+            err.render()
+        );
+        assert!(
+            err.render().contains(needle),
+            "want {needle:?} for {minus}:\n{}",
+            err.render()
+        );
+    }
+    // qself tail (needs concrete shape to reach the parse probe).
+    let qself = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- let x = <Old as Tr>::foo(E);\n+ let x = <New as Tr>::foo(E);\n"
+    );
+    let err = compile(&hunk_of(&qself)).expect_err("qself must reject");
+    assert!(
+        err.render().contains("qself"),
+        "want qself needle:\n{}",
+        err.render()
+    );
+    // Statement sequences ride concrete paths in slice 1.
+    let seq = format!(
+        "{head}@@ -2,2 +2,2 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- let a = Old(1);\n- let b = E;\n+ let a = New(1);\n+ let b = E;\n"
+    );
+    let err = compile(&hunk_of(&seq)).expect_err("sequence must reject");
+    assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+    assert!(
+        err.render().contains("statement-sequence"),
+        "want sequence label:\n{}",
+        err.render()
+    );
+    // Boundary: a symbol nested in a `let`-annotation generic arg stays
+    // C8 (pre-existing pattern-interior gate, not C14).
+    let annot_nested = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- let x: Vec<Old> = E;\n+ let x: Vec<New> = E;\n"
+    );
+    let err = compile(&hunk_of(&annot_nested)).expect_err("nested annotation must reject");
+    assert!(
+        err.render().contains("embedded metavariables elsewhere"),
+        "want the C8 gate:\n{}",
+        err.render()
     );
 }

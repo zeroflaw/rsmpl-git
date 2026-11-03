@@ -9,7 +9,7 @@
 //! the evolution-paste template in `pattern_evolution`.
 
 use rsmpl_patch::{AttrsPolicy, Directive, ErrorCode, MetavarKind, RsmplHunk, StructuredError};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::expr_pattern::ExprPatternKind;
 use crate::metavar::MetavarTable;
@@ -682,17 +682,23 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             "`# returns=none` requires a function-item pattern",
         )));
     }
-    // C14 (T24): `# symbol` is call-shape-only in v0.1. Call-callee,
+    // C14 (T24, WI-4 slice 1): `# symbol` positions in v0.1. Call-callee,
     // call-argument, and method-receiver symbols match by exact full-path
-    // text through seeded bindings (SPEC 19.3); every other shape either
-    // ignores the constraint or mis-substitutes (general-expr/let/type
-    // shapes bind anything and emit the raw name, macro names match
-    // loosely), so fail fast instead of corrupting (SPEC 2.6).
+    // text through seeded bindings (SPEC 19.3); General Stmt/Expr/Type
+    // whole-path symbols match the same way through the general matcher
+    // (a single-segment path naming the symbol, never a `::` prefix or
+    // suffix, generic args, `qself`, method ident, or binding). Every
+    // other shape either ignores the constraint or mis-substitutes
+    // (general sequences, macro names, `let`-pattern interiors), so fail
+    // fast instead of corrupting (SPEC 2.6).
     if !table.symbols.is_empty()
         && !matches!(
             kind,
             PatternKind::Expr {
                 minus: ExprPatternKind::Call { .. } | ExprPatternKind::MethodCall { .. },
+                ..
+            } | PatternKind::General {
+                shape: GeneralShape::Stmt | GeneralShape::Expr | GeneralShape::Type,
                 ..
             }
         )
@@ -739,13 +745,30 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!(
-                "`# symbol` is only supported in call shapes in v0.1 (call-callee, call-argument, and method-receiver symbols match by exact full-path text, SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape hunk or a concrete path pattern",
+                "`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general whole-path positions (general-expression, general `let`-statement, general-type) in v0.1 — symbols match by exact full-path text (SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape or general whole-path hunk, or a concrete path pattern",
             ),
         )
         .with_repair(StructuredError::fix_pattern_repair(
             "C14",
-            "use a call-shape hunk or a concrete path pattern",
+            "use a call-shape or general whole-path hunk, or a concrete path pattern",
         )));
+    }
+
+    // WI-4 slice 1: position check for the admitted General+symbol hunks.
+    // Whole-path only (see `check_general_symbol_positions`); the parse
+    // and adjacency probes name the offending position.
+    if !table.symbols.is_empty() {
+        if let PatternKind::General {
+            shape, minus_sub, ..
+        } = &kind
+        {
+            if matches!(
+                shape,
+                GeneralShape::Stmt | GeneralShape::Expr | GeneralShape::Type
+            ) {
+                check_general_symbol_positions(minus_sub, &table.symbols)?;
+            }
+        }
     }
 
     // T147: a `# symbol` naming the *method ident* of a method call can
@@ -805,8 +828,7 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // T169: non-default `# attrs=` on call/method-call/macro shapes is
     // never read — `matcher_expr`/`matcher_macro` ignore the policy
     // (envelopes live on the enclosing statement, outside the rewritten
-    // span). Fail fast instead of implying a constraint (SPEC 2.6).
-    // Explicit `# attrs=preserve` stays allowed: it is indistinguishable
+    // span). Fail fast instead of implying a constraint (SPEC 2.6).    // Explicit `# attrs=preserve` stays allowed: it is indistinguishable
     // from the default and harmless.
     if hunk.attrs_policy() != AttrsPolicy::Preserve
         && matches!(
@@ -889,6 +911,221 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         repeated,
         root,
     })
+}
+
+/// WI-4 slice 1: whole-path position check for an admitted General
+/// Stmt/Expr/Type hunk carrying `# symbol`.
+///
+/// Every declared symbol must occur in the substituted minus pattern as
+/// the SOLE segment of a path: no `::` prefix (`Old::suffix`) or suffix
+/// (`X::Old`), no generic args (`Old::<T>`, `Old<T>`), no `qself`
+/// (`<T as Tr>::Old`), no method ident (`R.Old`), and never inside a
+/// `let`/`for`/closure pattern (binding positions bind; they never
+/// verify). Violations reject with the position named (C14); the general
+/// matcher only ever sees whole-path uses. Prefix, turbofish, `qself`,
+/// sequence, `use`-prefix, and field-type positions ride concrete paths
+/// until a later WI-4 slice.
+fn check_general_symbol_positions(
+    minus_sub: &str,
+    symbols: &HashMap<String, String>,
+) -> Result<(), StructuredError> {
+    // Mask literals so backticked `` `Old` ``, strings, and chars never
+    // read as positions (same masking the placeholder pipeline uses).
+    let (masked, _) = crate::quote_utils::mask_literal_spans(minus_sub).map_err(|e| {
+        StructuredError::new(ErrorCode::PatternConflict, format!("invalid pattern: {e}"))
+            .with_repair(StructuredError::fix_pattern_repair(
+                "general-symbol-mask-template",
+                "write a parseable `let` statement, expression, or type pattern (see SPEC 18.6)",
+            ))
+    })?;
+    for name in symbols.keys() {
+        let token = format!("__RSMPL_{name}");
+        for (start, end) in ident_occurrences(&masked, &token) {
+            let prev = masked[..start].trim_end();
+            let next = masked[end..].trim_start();
+            if prev.ends_with("::") {
+                return Err(symbol_pos_err(format!(
+                    "`{name}` names a path segment of a longer path — prefix/segment symbols ride concrete paths in slice 1 (write the full path)"
+            )));
+            }
+            if prev.ends_with('.') && !prev.ends_with("..") {
+                // A single `.` is a method/field slot (`R.Old`); `..`
+                // is a range bound (`..Old`, `Old..10`) and stays legal.
+                return Err(symbol_pos_err(format!(
+                    "`{name}` names a method ident; method idents already match exactly — remove that `# symbol` line (symbols verify whole paths, SPEC 19.3)"
+                )));
+            }
+            if next.starts_with("::") {
+                return Err(symbol_pos_err(format!(
+                    "`{name}` names a path prefix (`{name}::…`) — prefix symbols ride concrete paths in slice 1 (write the full path)"
+            )));
+            }
+            // A single `:` names a struct field, label, or other
+            // non-path slot (`S { Old: … }`, `'a: Old`); symbols only
+            // name whole paths.
+            if next.starts_with(':') {
+                return Err(symbol_pos_err(format!(
+                    "`{name}` names a field/label slot, not a path — field and label positions ride concrete paths in slice 1"
+            )));
+            }
+            // Abutting `<` is generic args (`Old<T>`); spaced `<` is a
+            // comparison (`Old < x`) and stays legal.
+            if masked[end..].starts_with('<') {
+                return Err(symbol_pos_err(format!(
+                    "`{name}` carries generic args — turbofish/parameterized symbols ride concrete paths in slice 1 (write the full path)"
+            )));
+            }
+        }
+    }
+    // Parse probes: `qself` tails and binding (`Pat`) interiors need
+    // syntax, never text adjacency. Try each General root in router order.
+    let mut visitor = SymbolPosVisitor::new(symbols);
+    if let Ok(stmt) = syn::parse_str::<syn::Stmt>(&masked) {
+        use syn::visit::Visit;
+        visitor.visit_stmt(&stmt);
+    } else if let Ok(expr) = syn::parse_str::<syn::Expr>(&masked) {
+        use syn::visit::Visit;
+        visitor.visit_expr(&expr);
+    } else if let Ok(ty) = syn::parse_str::<syn::Type>(&masked) {
+        use syn::visit::Visit;
+        visitor.visit_type(&ty);
+    }
+    if let Some(err) = visitor.error {
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// C14 position error for a General+symbol hole (same code + repair
+/// shape as the C14 gate above, with the offending position named).
+fn symbol_pos_err(reason: String) -> StructuredError {
+    StructuredError::new(ErrorCode::PatternConflict, reason).with_repair(
+        StructuredError::fix_pattern_repair("C14", "write the full concrete path instead"),
+    )
+}
+
+/// Whole-token byte ranges of `token` in `text` (ident-boundary gated,
+/// char-boundary safe).
+fn ident_occurrences(text: &str, token: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + token.len() <= bytes.len() {
+        if text.is_char_boundary(i)
+            && text.is_char_boundary(i + token.len())
+            && &text[i..i + token.len()] == token
+        {
+            let before_ok = i == 0 || !is_symbol_ident_char(bytes[i - 1] as char);
+            let after_ok = i + token.len() == bytes.len()
+                || !is_symbol_ident_char(bytes[i + token.len()] as char);
+            if before_ok && after_ok {
+                out.push((i, i + token.len()));
+                i += token.len();
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn is_symbol_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Parse-level half of the WI-4 slice-1 classifier: `qself` tails and
+/// pattern interiors need syntax, never text adjacency.
+struct SymbolPosVisitor {
+    tokens: Vec<String>,
+    error: Option<StructuredError>,
+}
+
+impl SymbolPosVisitor {
+    fn new(symbols: &HashMap<String, String>) -> Self {
+        Self {
+            tokens: symbols.keys().map(|n| format!("__RSMPL_{n}")).collect(),
+            error: None,
+        }
+    }
+
+    fn is_sym(&self, ident: &syn::Ident) -> bool {
+        let s = ident.to_string();
+        self.tokens.iter().any(|t| t == &s)
+    }
+
+    fn rendered_has_token(&self, rendered: &str) -> bool {
+        self.tokens
+            .iter()
+            .any(|t| !ident_occurrences(rendered, t).is_empty())
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for SymbolPosVisitor {
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        if self.error.is_none() && node.qself.is_some() {
+            let rendered = quote::quote!(#node).to_string();
+            if self.rendered_has_token(&rendered) {
+                self.error = Some(symbol_pos_err(
+                "`# symbol` in a `qself` tail (`<T as Tr>::…`) never resolves — qself sites are opaque; write the full concrete path".to_string(),
+            ));
+                return;
+            }
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
+        if self.error.is_none() && node.qself.is_some() {
+            let rendered = quote::quote!(#node).to_string();
+            if self.rendered_has_token(&rendered) {
+                self.error = Some(symbol_pos_err(
+                "`# symbol` in a `qself` tail (`<T as Tr>::…`) never resolves — qself sites are opaque; write the full concrete path".to_string(),
+            ));
+                return;
+            }
+        }
+        syn::visit::visit_type_path(self, node);
+    }
+
+    fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+        // `let Old = …`, closure params, `S { Old }` shorthand: binding
+        // positions bind; they never verify.
+        if self.error.is_none() && self.is_sym(&node.ident) {
+            self.error = Some(symbol_pos_err(
+            "`# symbol` in a pattern interior (binding position) never verifies — patterns bind; write the concrete path in an expression or type position".to_string(),
+        ));
+            return;
+        }
+        syn::visit::visit_pat_ident(self, node);
+    }
+
+    fn visit_pat(&mut self, node: &'ast syn::Pat) {
+        // Constant and structural subpatterns (`Some(Old)`, `S { f: Old }`,
+        // `Some::<Old>`, or-patterns): pattern interiors, never verified.
+        // Rendered-token matching covers segment idents and generic args
+        // alike. The type half of `x: Old` is a `Type`, not a `Pat`, so
+        // whole-path annotations keep passing through to the type matcher.
+        // (This syn's `Visit` has no `visit_pat_path`; `Pat::Path` is met
+        // here.)
+        if self.error.is_none() {
+            if let syn::Pat::Path(pp) = node {
+                let rendered = quote::quote!(#pp).to_string();
+                if self.rendered_has_token(&rendered) {
+                    if pp.qself.is_some() {
+                        self.error = Some(symbol_pos_err(
+                        "`# symbol` in a `qself` tail (`<T as Tr>::…`) never resolves — qself sites are opaque; write the full concrete path".to_string(),
+                    ));
+                    } else {
+                        self.error = Some(symbol_pos_err(
+                        "`# symbol` in a pattern interior (binding position) never verifies — patterns bind; write the concrete path in an expression or type position".to_string(),
+                    ));
+                    }
+                    return;
+                }
+            }
+        }
+        syn::visit::visit_pat(self, node);
+    }
 }
 
 /// Full minus pattern = removal lines + context lines, in hunk order.

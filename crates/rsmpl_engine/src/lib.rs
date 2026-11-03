@@ -40,6 +40,7 @@ mod matcher_member_del;
 mod matcher_member_evo;
 mod matcher_sequence;
 mod matcher_spelling;
+mod matcher_symbol;
 mod matcher_types;
 mod matcher_use;
 mod matcher_value;

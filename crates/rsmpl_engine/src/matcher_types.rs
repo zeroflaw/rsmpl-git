@@ -10,10 +10,43 @@
 use crate::matcher_general::{as_placeholder, render, render_eq, MatchCx};
 use syn::spanned::Spanned;
 
-/// Match pattern path segments against target segments. A whole-segment
-/// placeholder binds the target segment text; concrete segments must equal.
+/// Match pattern path segments against target segments. A whole-path
+/// `# symbol` (WI-4 slice 1: single-segment pattern path naming a
+/// symbol) verifies through `matcher_symbol` — exact full-path text
+/// under `# fallback=syntax`, crate-graph resolution otherwise — and
+/// never binds. A whole-segment placeholder binds the target segment
+/// text; concrete segments must equal.
 /// (`qself` equality lives in the `matcher_spelling` sibling, WI-7d.)
 pub(crate) fn match_path(pat: &syn::Path, tgt: &syn::Path, cx: &mut MatchCx) -> bool {
+    // WI-4 slice 1: whole-path symbols first (before the leading-`::`
+    // parity gate — resolution in `matcher_symbol` owns leading math).
+    if pat.segments.len() == 1 {
+        let id = pat.segments[0].ident.to_string();
+        if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
+            if cx.symbols.contains_key(&name) {
+                // Compile-time C14 rejects placeholder segments with
+                // generic args; defense-in-depth never matches them here.
+                if !matches!(pat.segments[0].arguments, syn::PathArguments::None) {
+                    return false;
+                }
+                if tgt
+                    .segments
+                    .iter()
+                    .any(|s| !matches!(s.arguments, syn::PathArguments::None))
+                {
+                    return false;
+                }
+                let segs: Vec<String> = tgt.segments.iter().map(|s| s.ident.to_string()).collect();
+                return crate::matcher_symbol::match_symbol_placeholder(
+                    cx,
+                    &name,
+                    tgt.leading_colon.is_some(),
+                    &segs,
+                )
+                .unwrap_or(false);
+            }
+        }
+    }
     if pat.leading_colon.is_some() != tgt.leading_colon.is_some() {
         return false;
     }
@@ -23,6 +56,12 @@ pub(crate) fn match_path(pat: &syn::Path, tgt: &syn::Path, cx: &mut MatchCx) -> 
     for (ps, ts) in pat.segments.iter().zip(tgt.segments.iter()) {
         let id = ps.ident.to_string();
         if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
+            // WI-4 slice 1: symbol placeholders never bind per-segment;
+            // whole-path uses are claimed above, prefix uses rejected at
+            // compile time.
+            if cx.symbols.contains_key(&name) {
+                return false;
+            }
             if !cx.bind(&name, &ts.ident.to_string()) {
                 return false;
             }
@@ -96,6 +135,11 @@ pub(crate) fn match_generic_arg(
         (syn::GenericArgument::Lifetime(_), syn::GenericArgument::Lifetime(_)) => true,
         (syn::GenericArgument::Type(pt), syn::GenericArgument::Type(tt)) => {
             if let Some(name) = single_placeholder_type(pt, cx) {
+                // WI-4 slice 1: whole-path symbols verify (e.g. `Vec<Old>`);
+                // never bind-anything.
+                if cx.symbols.contains_key(&name) {
+                    return crate::matcher_symbol::match_symbol_type(cx, &name, tt);
+                }
                 return cx.bind_span(&name, tt.span());
             }
             match_type(pt, tt, cx)
@@ -151,6 +195,11 @@ pub(crate) fn single_placeholder_type(t: &syn::Type, cx: &MatchCx) -> Option<Str
 
 pub(crate) fn match_type(pat: &syn::Type, tgt: &syn::Type, cx: &mut MatchCx) -> bool {
     if let Some(name) = single_placeholder_type(pat, cx) {
+        // WI-4 slice 1: whole-path symbols verify (e.g. a bare `Old`
+        // type); never bind-anything.
+        if cx.symbols.contains_key(&name) {
+            return crate::matcher_symbol::match_symbol_type(cx, &name, tgt);
+        }
         return cx.bind_span(&name, tgt.span());
     }
     match (pat, tgt) {

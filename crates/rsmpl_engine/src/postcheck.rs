@@ -796,6 +796,7 @@ pub(crate) fn verify_plus_pattern_at_spans(
             &synth,
             &plus_compiled,
             &mut throwaway,
+            None,
         )
         .ok()?,
         PatternKind::Macro { .. } => crate::matcher_macro::apply_macro_hunk(

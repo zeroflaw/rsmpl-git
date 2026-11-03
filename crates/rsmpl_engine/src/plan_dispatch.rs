@@ -236,6 +236,7 @@ pub(crate) fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
+            symbol_graph.map(|g| (g, path)),
         ),
         PatternKind::ItemCapture { .. } => matcher_fn::apply_item_delete(
             parsed,
