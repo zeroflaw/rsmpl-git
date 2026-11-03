@@ -1961,6 +1961,33 @@ mod tests {
     }
 
     #[test]
+    fn wi13_joint_body_two_pairs_apply_scoped() {
+        // WI-13 slice 2: header + two body pairs (mixed `let` + expr)
+        // apply as two span-scoped `body` edits plus the follow calls.
+        let pre =
+            "fn foo(x: i32) -> i32 {\n    let y = 1;\n    y + 1\n}\nfn m() {\n    foo(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n- y + 1\n+ y + 2\n";
+        let out = apply(patch, pre).expect("two-pair joint must apply");
+        assert_eq!(
+            out,
+            "fn bar(x: i32) -> i32 {\n    let y = 2;\n    y + 2\n}\nfn m() {\n    bar(1);\n}\n",
+            "two-pair joint must rename header, both body lines, and follow calls"
+        );
+    }
+
+    #[test]
+    fn wi13_joint_body_two_pairs_second_absent_fails_loud() {
+        // Per-pair gate: a missing second minus fails loud even when
+        // the first pair is present.
+        let pre =
+            "fn foo(x: i32) -> i32 {\n    let y = 1;\n    y + 1\n}\nfn m() {\n    foo(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n- y + 9\n+ y + 2\n";
+        let err = apply(patch, pre).expect_err("absent second pair must fail");
+        assert!(err.contains("not found in the file"), "got: {err}");
+        assert!(err.contains("fn-joint-body-absent-template"), "got: {err}");
+    }
+
+    #[test]
     fn wi20_joint_body_slot_evolution_stays_on_trailing_gate() {
         // Rename+slot-evolution+body is two evolutions: the helper
         // declines (headers not rename-only) and the single-shape parse

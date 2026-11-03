@@ -742,14 +742,17 @@ pub fn parse_fn_pattern(
     })
 }
 
-/// WI-20 slice 1: rename+single-expr-body joint shape (SPEC 14.7).
+/// WI-20 slice 1 + WI-13 slices 1–2: rename+body-pair joint shape
+/// (SPEC 14.7).
 ///
 /// A one-hunk joint carries the fn header pair in the proven single-line
-/// `{ ... }` form plus exactly one extra `-`/`+` body line pair (a
-/// whole-line general expression, e.g. `- x + 1` / `+ x + 2`). The body
-/// pair applies only inside the renamed definition's body (engine
-/// span-scoped `body` edit); a second in-body hit or any out-of-body hit
-/// is a hard match conflict, never a sweep.
+/// `{ ... }` form plus one (WI-20 / WI-13 slice 1) or two (WI-13 slice
+/// 2) extra `-`/`+` body line pairs (each a whole-line general
+/// expression, e.g. `- x + 1` / `+ x + 2`, or a plain same-binder `let`
+/// statement with an init). Each body pair applies only inside the
+/// renamed definition's body (engine span-scoped `body` edits); a second
+/// in-body hit or any out-of-body hit is a hard match conflict, never a
+/// sweep.
 ///
 /// `minus_raw`/`plus_raw` are the removal-only / addition-only texts (no
 /// context lines in the canonical shape). Returns `None` for every other
@@ -759,8 +762,11 @@ pub fn parse_fn_pattern(
 pub struct FnBodyJoint {
     pub minus: FnPattern,
     pub plus: FnPattern,
-    pub body_minus: String,
-    pub body_plus: String,
+    /// One or two whole-line body pairs (each `body_pair_holds`).
+    /// Single-pair joints carry exactly one entry (WI-20 / WI-13 slice
+    /// 1); two-pair joints carry two (WI-13 slice 2). Three or more
+    /// stay on the existing error/suppress paths.
+    pub bodies: Vec<(String, String)>,
 }
 
 /// Whitespace-insensitive concrete-slot equality for the joint header
@@ -827,17 +833,20 @@ pub fn try_parse_fn_body_joint(
 ) -> Option<FnBodyJoint> {
     let minus_lines: Vec<&str> = minus_raw.lines().collect();
     let plus_lines: Vec<&str> = plus_raw.lines().collect();
-    if minus_lines.len() != 2 || plus_lines.len() != 2 {
+    // Header first, body pairs after (the canonical emission order).
+    // One pair (WI-20 / WI-13 slice 1) or two pairs (WI-13 slice 2);
+    // three or more stay on the existing error/suppress paths.
+    if minus_lines.len() != plus_lines.len() || (minus_lines.len() != 2 && minus_lines.len() != 3) {
         return None;
     }
-    // Header first, body second (the canonical emission order).
-    let (hm, bm) = (minus_lines[0], minus_lines[1]);
-    let (hp, bp) = (plus_lines[0], plus_lines[1]);
+    let (hm, hp) = (minus_lines[0], plus_lines[0]);
     if !hm.contains("fn ") || !hp.contains("fn ") {
         return None;
     }
-    if bm.contains("fn ") || bp.contains("fn ") {
-        return None;
+    for line in minus_lines[1..].iter().chain(plus_lines[1..].iter()) {
+        if line.contains("fn ") {
+            return None;
+        }
     }
     let minus = parse_fn_pattern(hm, vis, qual, gen, wh, ty, ident, returns_none).ok()?;
     let plus = parse_fn_pattern(hp, vis, qual, gen, wh, ty, ident, false).ok()?;
@@ -859,28 +868,32 @@ pub fn try_parse_fn_body_joint(
     if !names_differ {
         return None;
     }
-    // One whole-line body pair, differing text: a general expression
+    // Whole-line body pairs, each differing text: a general expression
     // (WI-20) or a plain same-binder `let` statement with an init
-    // (WI-13 slice 1). Binder-changing `let` pairs decline (`None`) —
-    // binder renames belong to D11/D16 capture, out of scope here.
-    let (bm_t, bp_t) = (bm.trim(), bp.trim());
-    if bm_t.is_empty() || bp_t.is_empty() || bm_t == bp_t {
-        return None;
-    }
-    if !body_pair_holds(bm_t, bp_t) {
-        return None;
+    // (WI-13 slice 1), checked per pair (WI-13 slice 2 admits two).
+    // Binder-changing `let` pairs decline (`None`) — binder renames
+    // belong to D11/D16 capture, out of scope here.
+    let mut bodies: Vec<(String, String)> = Vec::new();
+    for (bm, bp) in minus_lines[1..].iter().zip(plus_lines[1..].iter()) {
+        let (bm_t, bp_t) = (bm.trim(), bp.trim());
+        if bm_t.is_empty() || bp_t.is_empty() || bm_t == bp_t {
+            return None;
+        }
+        if !body_pair_holds(bm_t, bp_t) {
+            return None;
+        }
+        bodies.push((bm_t.to_string(), bp_t.to_string()));
     }
     Some(FnBodyJoint {
         minus,
         plus,
-        body_minus: bm_t.to_string(),
-        body_plus: bp_t.to_string(),
+        bodies,
     })
 }
 
-/// WI-13 slice 1: the body-pair half of the joint gate (shared law with
-/// the raiser's `body_pair_ok`). Accepts one `syn::Expr` each side, or
-/// one plain same-binder `let` (`syn::Stmt::Local`, both with `init`,
+/// WI-13 slices 1–2: the per-pair half of the joint gate (shared law
+/// with the raiser's `body_pair_ok`). Accepts one `syn::Expr` each side,
+/// or one plain same-binder `let` (`syn::Stmt::Local`, both with `init`,
 /// no attributes, binder `pat` token-equal whitespace-insensitively).
 fn body_pair_holds(bm_t: &str, bp_t: &str) -> bool {
     if syn::parse_str::<syn::Expr>(bm_t).is_ok() && syn::parse_str::<syn::Expr>(bp_t).is_ok() {
@@ -1380,8 +1393,10 @@ mod tests {
             false,
         )
         .expect("header+expr joint must parse");
-        assert_eq!(joint.body_minus, "x + 1");
-        assert_eq!(joint.body_plus, "x + 2");
+        assert_eq!(
+            joint.bodies,
+            vec![("x + 1".to_string(), "x + 2".to_string())]
+        );
         assert!(joint.minus.body_ellipsis && joint.plus.body_ellipsis);
     }
 
@@ -1399,8 +1414,34 @@ mod tests {
             false,
         )
         .expect("header+same-binder-let joint must parse");
-        assert_eq!(joint.body_minus, "let y = 1;");
-        assert_eq!(joint.body_plus, "let y = 2;");
+        assert_eq!(
+            joint.bodies,
+            vec![("let y = 1;".to_string(), "let y = 2;".to_string())]
+        );
+    }
+
+    #[test]
+    fn wi13_body_joint_fires_on_two_pairs() {
+        // WI-13 slice 2: header + two body pairs (mixed expr + `let`).
+        let joint = try_parse_fn_body_joint(
+            "fn foo(x: i32) -> i32 { ... }\nlet y = 1;\ny + 1",
+            "fn bar(x: i32) -> i32 { ... }\nlet y = 2;\ny + 2",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .expect("header+two-pair joint must parse");
+        assert_eq!(
+            joint.bodies,
+            vec![
+                ("let y = 1;".to_string(), "let y = 2;".to_string()),
+                ("y + 1".to_string(), "y + 2".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -1418,10 +1459,11 @@ mod tests {
             "fn foo(x: i32) -> i32 { ... }\nx + 1",
             "fn bar(x: u32) -> i32 { ... }\nx + 2"
         ));
-        // Two body pairs are not the single-expr slice.
+        // Three body pairs stay on the existing paths (WI-13 slice 2
+        // admits exactly two).
         assert!(no(
-            "fn foo(x: i32) { ... }\nlet y = x + 1;\ny * 2",
-            "fn bar(x: i32) { ... }\nlet y = x + 2;\ny * 3"
+            "fn foo(x: i32) { ... }\nlet y = x + 1;\ny * 2\nfoo(y)",
+            "fn bar(x: i32) { ... }\nlet y = x + 2;\ny * 3\nbar(y)"
         ));
         // `let` without an init carries no init delta.
         assert!(no(
@@ -1432,6 +1474,12 @@ mod tests {
         assert!(no(
             "fn foo(x: i32) -> i32 { ... }\nlet y = 1;",
             "fn bar(x: i32) -> i32 { ... }\nlet z = 1;"
+        ));
+        // Per-pair veto: one binder-changing pair poisons a two-pair
+        // hunk even when the other pair is clean.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }\nlet y = 1;\ny + 1",
+            "fn bar(x: i32) -> i32 { ... }\nlet z = 1;\ny + 2"
         ));
         // Identical body text is no delta.
         assert!(no(

@@ -10,13 +10,14 @@ use crate::lines::LineIndex;
 
 use super::matcher_fn::{check_attrs, collect_fns, in_scope, minus_matches_strict, plan_sig_edits};
 
-/// WI-20 slice 1: apply a rename+single-expr-body joint hunk.
+/// WI-20 slice 1 + WI-13 slices 1–2: apply a rename+body-pair joint hunk.
 ///
 /// The header pair renames exactly like a plain fn rename (same matching
-/// gates); the body pair rewrites one whole line inside the renamed
+/// gates); each body pair rewrites one whole line inside the renamed
 /// definition's body only (edge-preserving indent, `body`-labelled
-/// edit). A body minus occurring zero times, more than once, or outside
-/// the renamed body is a hard `RSMPL_MATCH_CONFLICT` — never a sweep.
+/// edit per pair). A body minus occurring zero times, more than once,
+/// or outside the renamed body is a hard `RSMPL_MATCH_CONFLICT` —
+/// never a sweep.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_fn_body_joint(
     parsed: &syn::File,
@@ -72,9 +73,11 @@ pub(crate) fn apply_fn_body_joint(
             rule,
             false,
         )?;
-        new_edits.push(joint_body_edit(
-            original, index, c.item, joint, rule, &range_err,
-        )?);
+        for (body_minus, body_plus) in &joint.bodies {
+            new_edits.push(joint_body_edit(
+                original, index, c.item, body_minus, body_plus, rule, &range_err,
+            )?);
+        }
         edits.append(&mut new_edits);
         matched += 1;
         if hunk.allow() == rsmpl_patch::Allow::One && matched > 1 {
@@ -84,13 +87,14 @@ pub(crate) fn apply_fn_body_joint(
     Ok(matched)
 }
 
-/// Locate the joint body minus as exactly one whole line inside the
+/// Locate one joint body minus as exactly one whole line inside the
 /// renamed `ItemFn` block and build the indent-preserving `body` edit.
 fn joint_body_edit(
     original: &str,
     index: &LineIndex,
     item: &syn::ItemFn,
-    joint: &rsmpl_pattern::FnBodyJoint,
+    body_minus: &str,
+    body_plus: &str,
     rule: &str,
     range_err: &dyn Fn(u32) -> StructuredError,
 ) -> Result<TextEdit, StructuredError> {
@@ -100,7 +104,7 @@ fn joint_body_edit(
         let ls = index.line_start(n).ok_or_else(|| range_err(n))?;
         let le = index.line_start(n + 1).unwrap_or(original.len());
         let raw = &original[ls..le];
-        if raw.trim() == joint.body_minus {
+        if raw.trim() == body_minus {
             hits.push(n);
         }
     }
@@ -108,8 +112,7 @@ fn joint_body_edit(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!(
-                "joint body line `{}` not found in the file (the body minus must occur exactly once as a whole line)",
-                joint.body_minus
+                "joint body line `{body_minus}` not found in the file (the body minus must occur exactly once as a whole line)"
             ),
         )
         .with_rule(rule)
@@ -122,8 +125,7 @@ fn joint_body_edit(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!(
-                "joint body line `{}` matches {} lines (exactly one whole-line occurrence required)",
-                joint.body_minus,
+                "joint body line `{body_minus}` matches {} lines (exactly one whole-line occurrence required)",
                 hits.len()
             ),
         )
@@ -139,8 +141,7 @@ fn joint_body_edit(
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!(
-                "joint body line `{}` occurs outside the renamed function body (the body pair applies only inside that body)",
-                joint.body_minus
+                "joint body line `{body_minus}` occurs outside the renamed function body (the body pair applies only inside that body)"
             ),
         )
         .with_rule(rule)
@@ -156,6 +157,6 @@ fn joint_body_edit(
     let raw = &original[ls..le];
     let indent = raw.len() - raw.trim_start().len();
     let start = ls + indent;
-    let end = start + joint.body_minus.len();
-    Ok(TextEdit::new(start, end, joint.body_plus.clone()).with_label("body"))
+    let end = start + body_minus.len();
+    Ok(TextEdit::new(start, end, body_plus.to_string()).with_label("body"))
 }

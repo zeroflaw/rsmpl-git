@@ -22,16 +22,15 @@ pub(crate) fn def_hunk_text(rule: &str, fire: &Fire) -> String {
             out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
             out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
         }
-        Joint::Body {
-            body_minus,
-            body_plus,
-        } => {
+        Joint::Body { bodies } => {
             out.push_str("# sweep\n");
             out.push_str("# follow=uses\n");
             out.push_str(&format!("- {}\n", with_body_hole(&fire.def_minus)));
             out.push_str(&format!("+ {}\n", with_body_hole(&fire.def_plus)));
-            out.push_str(&format!("- {body_minus}\n"));
-            out.push_str(&format!("+ {body_plus}\n"));
+            for (body_minus, body_plus) in bodies {
+                out.push_str(&format!("- {body_minus}\n"));
+                out.push_str(&format!("+ {body_plus}\n"));
+            }
         }
         Joint::B1 { .. } => {
             out.push_str("# sweep\n");

@@ -47,14 +47,12 @@ pub(crate) enum Joint {
         call_minus: String,
         call_plus: String,
     },
-    /// WI-20 slice 1: rename-only header + one body-expression line
-    /// pair + callee-only calls → one follow hunk carrying the header
-    /// `...` pair plus the raw body pair lines (the engine applies the
-    /// body pair span-scoped inside the renamed body, `body`-labelled).
-    Body {
-        body_minus: String,
-        body_plus: String,
-    },
+    /// WI-20 slice 1 + WI-13 slices 1–2: rename-only header + one or two
+    /// body line pairs + callee-only calls → one follow hunk carrying
+    /// the header `...` pair plus the raw body pair lines (the engine
+    /// applies each body pair span-scoped inside the renamed body,
+    /// `body`-labelled per pair).
+    Body { bodies: Vec<(String, String)> },
 }
 
 /// A validated fire payload: the def pair plus its call claims, all in
