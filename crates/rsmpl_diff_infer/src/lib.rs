@@ -389,6 +389,30 @@ mod tests {
     }
 
     #[test]
+    fn crlf_gate_reports_precondition() {
+        // WI-17 slice 3: the CRLF section gate emits the closed
+        // `precondition:` form (bare `crlf-content` retired, still
+        // parseable) with the section's changed lines in sites.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n-fn a() {}\r\n-fn b() {}\r\n+fn c() {}\r\n+fn d() {}\r\n";
+        let mut prov = Vec::new();
+        let opt = semantic::infer_semantic_with_provenance(
+            std::slice::from_ref(&section.to_string()),
+            &pre_map(&[("f.rs", "fn a() {}\nfn b() {}\n")]),
+            &mut prov,
+        );
+        assert!(opt.is_none(), "must stay ordinary");
+        assert_eq!(prov.len(), 1, "one ordinary entry, got: {prov:?}");
+        assert!(
+            prov[0]
+                .declined
+                .iter()
+                .any(|d| d.detector == "section" && d.reason == "precondition:crlf-content"),
+            "gate named, got: {:?}",
+            prov[0].declined
+        );
+    }
+
+    #[test]
     fn gitlink_sections_are_stripped_and_named() {
         // T386: submodule sections (mode 160000) cannot round-trip —
         // `applyrs` cannot read the directory on the pre-image side —

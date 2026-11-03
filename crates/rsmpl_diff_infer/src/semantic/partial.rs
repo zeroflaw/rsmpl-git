@@ -573,6 +573,31 @@ mod tests {
     }
 
     #[test]
+    fn stranded_joint_gate_reports_veto() {
+        // WI-17 slice 3: the stranded-joint section gate emits the
+        // closed `veto:` form (bare `stranded-joint` retired, still
+        // parseable) with the stranded delta line in sites.
+        let pre = "struct Old {\n    x: u32,\n}\ntype A = Vec<u8>;\nfn f(s: Old) {\n}\n";
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-struct Old {\n+struct New {\n@@ -4,2 +4,2 @@\n-type A = Vec<u8>;\n+type A = Box<[u8]>;\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        let mut prov = Vec::new();
+        let opt = super::super::infer_semantic_with_provenance(
+            std::slice::from_ref(&section.to_string()),
+            &HashMap::from([("f.rs".to_string(), pre.to_string())]),
+            &mut prov,
+        );
+        assert!(opt.is_none(), "must stay ordinary");
+        assert_eq!(prov.len(), 1, "one ordinary entry, got: {prov:?}");
+        assert!(
+            prov[0]
+                .declined
+                .iter()
+                .any(|d| d.detector == "section" && d.reason == "veto:stranded-joint"),
+            "gate named, got: {:?}",
+            prov[0].declined
+        );
+    }
+
+    #[test]
     fn independent_evo_without_stranded_use_still_partitions() {
         // Same def + evolution but no use anywhere: independent singles
         // still partition (no over-suppression).
@@ -688,7 +713,7 @@ mod tests {
             prov[0]
                 .declined
                 .iter()
-                .any(|d| d.detector == "section" && d.reason == "cross-kind-member"),
+                .any(|d| d.detector == "section" && d.reason == "veto:cross-kind-member"),
             "gate named, got: {:?}",
             prov[0].declined
         );

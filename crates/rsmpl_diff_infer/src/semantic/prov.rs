@@ -57,11 +57,15 @@ pub struct HunkProvenance {
 /// candidate priced out by the byte guard, with the three WI-7
 /// numbers), `totality:<a>:<b>` (site-count mismatch), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
-/// anti-unification), `precondition:<name>` (a stated shape premise
-/// failed), `not-tried` (the detector never ran on this hunk —
-/// absence, not silence). Bare `byte-guard`/`precision-guard` are the
-/// pre-WI-17 spellings of `guard:byte`/`guard:precision` (kept
-/// parseable, no longer emitted anywhere since slice 2).
+/// anti-unification, joint-territory section gates),
+/// `precondition:<name>` (a stated shape premise failed, incl. the
+/// LF-only section premise), `not-tried` (the detector never ran on
+/// this hunk — absence, not silence). Bare `byte-guard` /
+/// `precision-guard` are the pre-WI-17 spellings of
+/// `guard:byte`/`guard:precision`, and the bare section-gate
+/// spellings (`crlf-content`, `stranded-joint`, `cross-kind-member`)
+/// the pre-WI-17 spellings of their `precondition:`/`veto:` forms
+/// (all kept parseable, none emitted anywhere since WI-17 slice 3).
 /// Detector-internal guard vetoes surface as `no-match` — reasons are
 /// chain-level, never detector-inferred (SPEC D.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -133,20 +137,19 @@ pub(crate) fn reason_not_tried() -> String {
 pub(crate) fn reason_guard(kind: &str, sem: usize, ord: usize, allow: usize) -> String {
     format!("guard:{kind}:sem={sem}:ord={ord}:allow={allow}")
 }
-/// WI-17 slice 1 constructor (wired by a later slice: totality vetoes
-/// with both counts).
+/// WI-17 slice 1 constructor (totality vetoes with both counts;
+/// still unwired — WI-17 slice 4 owns the found/want plumbing).
 #[allow(dead_code)]
 pub(crate) fn reason_totality(found: usize, want: usize) -> String {
     format!("totality:{found}:{want}")
 }
-/// WI-17 slice 1 constructor (wired by a later slice: named vetoes).
-#[allow(dead_code)]
+/// WI-17 slice 1 constructor (WI-17 slice 3: wired at the section
+/// gates via [`declined_veto`]).
 pub(crate) fn reason_veto(name: &str) -> String {
     format!("veto:{name}")
 }
-/// WI-17 slice 1 constructor (wired by a later slice: named
-/// preconditions).
-#[allow(dead_code)]
+/// WI-17 slice 1 constructor (WI-17 slice 3: wired at the section
+/// gates via [`declined_precondition`]).
 pub(crate) fn reason_precondition(name: &str) -> String {
     format!("precondition:{name}")
 }
@@ -169,19 +172,23 @@ pub(crate) fn attempt<T>(
     r
 }
 
-/// WI-15c chain guard-veto recorder: the detector fired but the
-/// section/hunk guard priced it out. Call at the veto branch only.
-/// WI-17 slice 2: non-guard vetoes only (`crlf-content`,
-/// `stranded-joint`, `cross-kind-member`) — every guard veto rides
-/// [`declined_guard_with_numbers`] (closed `guard:` form, SPEC D.2).
-pub(crate) fn declined_guard(
-    declined: &mut Vec<HunkDeclined>,
-    detector: &str,
-    reason: &'static str,
-) {
+/// WI-17 slice 3 section-gate veto recorder: a joint-territory gate
+/// (`stranded-joint`, `cross-kind-member`) stopped the section. Call
+/// at the gate branch only. Emits the closed `veto:` reason (SPEC D.2).
+pub(crate) fn declined_veto(declined: &mut Vec<HunkDeclined>, detector: &str, name: &str) {
     declined.push(HunkDeclined {
         detector: detector.to_string(),
-        reason: reason.to_string(),
+        reason: reason_veto(name),
+    });
+}
+
+/// WI-17 slice 3 section-gate precondition recorder: a stated input
+/// premise failed (`crlf-content` — LF-only sections). Call at the
+/// gate branch only. Emits the closed `precondition:` reason (SPEC D.2).
+pub(crate) fn declined_precondition(declined: &mut Vec<HunkDeclined>, detector: &str, name: &str) {
+    declined.push(HunkDeclined {
+        detector: detector.to_string(),
+        reason: reason_precondition(name),
     });
 }
 

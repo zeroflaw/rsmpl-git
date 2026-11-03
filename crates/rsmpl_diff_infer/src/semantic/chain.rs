@@ -12,8 +12,8 @@
 /// 2000-line gate (D5): pure move, call sites unchanged.
 pub(crate) use super::partition::try_partition_section;
 use super::prov::{
-    attempt, commit_prov, declined_guard, declined_guard_with_numbers, push_section_prov,
-    reheader_rename,
+    attempt, commit_prov, declined_guard_with_numbers, declined_precondition, declined_veto,
+    push_section_prov, reheader_rename,
 };
 use super::{HunkDeclined, HunkProvenance};
 
@@ -463,8 +463,9 @@ pub(crate) fn compress_section(
         return None;
     }
     if section.contains('\r') {
-        // WI-15c: the gate itself is the explanation.
-        declined_guard(declined, "section", "crlf-content");
+        // WI-15c: the gate itself is the explanation (WI-17 slice 3:
+        // LF-only input premise, `precondition:` form).
+        declined_precondition(declined, "section", "crlf-content");
         return None;
     }
     // WI-7a: rename sections compress their content hunks instead of
@@ -610,8 +611,9 @@ pub(crate) fn compress_section(
     // co-resident suppresses the bare rename single (WI-4a posture for
     // items) — the section stays wholly ordinary.
     if super::partial::section_has_stranded_item_joint(section, path, file_old) {
-        // WI-15c: the gate itself is the explanation.
-        declined_guard(declined, "section", "stranded-joint");
+        // WI-15c: the gate itself is the explanation (WI-17 slice 3:
+        // joint-territory veto form).
+        declined_veto(declined, "section", "stranded-joint");
         return None;
     }
     // WI-21 slice 4: a cross-kind member deletion (field delta under an
@@ -619,8 +621,9 @@ pub(crate) fn compress_section(
     // bare rename single like the stranded joint above — the section
     // stays wholly ordinary with the stranded delta in sites.
     if super::partial::section_has_cross_kind_deletion(section) {
-        // WI-15c: the gate itself is the explanation.
-        declined_guard(declined, "section", "cross-kind-member");
+        // WI-15c: the gate itself is the explanation (WI-17 slice 3:
+        // joint-territory veto form).
+        declined_veto(declined, "section", "cross-kind-member");
         return None;
     }
     // WI-4c: a vetoed fn joint suppresses its old callee name

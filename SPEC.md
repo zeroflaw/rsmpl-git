@@ -7766,7 +7766,8 @@ arms); composite drivers by driver name (`partition`, `partial`,
 `macro_rule_body`, `macro_enclosing`, `attr_sweep`, `verbatim`,
 `delete`, `definition_addition`, `definition_addition_follow`,
 `variant_addition_follow`, `use_regroup`); section gates by gate name
-(`section` with `crlf-content`, `stranded-joint`, or `cross-kind-member`). Every
+(`section` with `precondition:crlf-content`, `veto:stranded-joint`,
+or `veto:cross-kind-member`). Every
 detector the chain never attempted for the section records one
 `not-tried` entry in registry order appended after the attempts —
 absence is data, not silence. `reason` is chain-level under the
@@ -7779,9 +7780,13 @@ the precision allowance, so the overflow `sem > ord + allow` is
 computable from the report alone), `totality:<found>:<want>`
 (site-count mismatch), `veto:<name>` (named veto: off-diff use,
 opaque hit, ambiguous anti-unification), `precondition:<name>` (named
-failed shape premise); the pre-WI-17 bare `byte-guard` /
+failed shape premise, incl. the LF-only section premise); the pre-WI-17 bare `byte-guard` /
 `precision-guard` spellings stay parseable but are no longer emitted
-anywhere (WI-17 slice 2 unified every guard veto path). Detector-internal guard vetoes surface as
+anywhere (WI-17 slice 2 unified every guard veto path), and the bare
+section-gate spellings (`crlf-content`, `stranded-joint`,
+`cross-kind-member`) stay parseable but are no longer emitted anywhere
+either (WI-17 slice 3 unified every section-gate veto onto the closed
+`veto:` / `precondition:` forms). Detector-internal guard vetoes surface as
 `no-match` — reasons are never detector-inferred. Text mode prints
 the same trial to stderr as one `declined: <file> <detector>
 <reason>` line per entry (stdout stays the patch byte-identical).
