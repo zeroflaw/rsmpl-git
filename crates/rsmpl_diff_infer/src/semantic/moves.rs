@@ -108,21 +108,38 @@ pub(crate) fn try_move_sweep(
                 // WI-8a + WI-8 slices 1-9: no byte-identical run — the
                 // evolved-header cascade lives in `move_pair_evolve`
                 // (D5 split; push order preserved for run-dedup).
-                // E1 slice 1: stripped minus remainder vs bare plus run
-                // (removed bare; replaced bare composes via the plus-side
-                // added prefix check; rename twins stay ordinary).
+                // E1 slices 1-2: stripped minus remainder vs plus run
+                // (bare removed/replaced via byte runs; removed/replaced
+                // + rename via the stripped evolved delegation).
                 pairs.extend(super::move_attr_removed::removed_pairs_for_item(
                     item,
                     &parsed[..],
                     &plus_hunks[..],
                     (*msi, *mhi),
                 ));
-                pairs.extend(super::move_pair_evolve::evolved_pairs_for_item(
+                // Full-item evolved first: a plain rename with kept docs
+                // (12 `///` both sides) pairs here, and the stripped
+                // fallback below must not also claim a manufactured
+                // plus-added hit past the first doc (overlapping runs
+                // would veto the whole sweep in `plus_runs_hold`).
+                let full_evolved = super::move_pair_evolve::evolved_pairs_for_item(
                     item,
                     &parsed[..],
                     &plus_hunks[..],
                     (*msi, *mhi),
-                ));
+                );
+                let full_empty = full_evolved.is_empty();
+                pairs.extend(full_evolved);
+                // E1 slice 2 fallback: stripped evolved only when the
+                // whole item pairs nothing (true removed/replaced axis).
+                if full_empty {
+                    pairs.extend(super::move_attr_removed::removed_evolved_pairs_for_item(
+                        item,
+                        &parsed[..],
+                        &plus_hunks[..],
+                        (*msi, *mhi),
+                    ));
+                }
                 continue;
             }
             for (psi, phi, first, last) in hits {

@@ -39,15 +39,17 @@ pub(crate) fn find_item_targets(
     candidates.dedup();
     candidates
 }
-/// E1 slice 1: attr-stripped sub-span cut target (move-cut-only).
+/// E1 slices 1-2: attr-stripped sub-span cut target (move-cut-only).
 ///
-/// When a top-level item carries exactly one outer attr (`#[...]`
-/// single-line, single `///`, or one balanced multi-line), a cut citing
-/// exactly the stripped span (attr lines excluded, item end unchanged)
-/// matches here. The caller (`plan_cut`) captures/deletes only the
-/// stripped lines; the attr line rides an ordinary hunk the raiser emits
-/// alongside. Bare `- I` deletion never consults this (whole-item law
-/// stays).
+/// When a top-level item carries one or more outer attrs, a cut citing
+/// exactly the item-minus-first-attr span (first attr block excluded,
+/// item end unchanged) matches here. Slice 1 only exercised the single-
+/// attr case (`#[...]` single-line, single `///`, or one balanced
+/// multi-line); slice 2 widens to first-of-N (e.g. a removed `#[allow]`
+/// atop kept `///` docs — the stripped span starts at the second attr).
+/// The caller (`plan_cut`) captures/deletes only the stripped lines; the
+/// first attr block rides an ordinary hunk the raiser emits alongside.
+/// Bare `- I` deletion never consults this (whole-item law stays).
 pub(crate) fn find_stripped_item_target(
     parsed: &syn::File,
     old_start: u32,
@@ -58,11 +60,16 @@ pub(crate) fn find_stripped_item_target(
     }
     let old_end = old_start + old_len - 1;
     for c in collect_fns(parsed) {
-        if c.item.attrs.len() != 1 {
+        if c.item.attrs.is_empty() {
             continue;
         }
-        let attr_end = c.item.attrs[0].span().end().line as u32;
-        let stripped = attr_end + 1;
+        // Stripped start: second attr start when kept attrs remain, else
+        // the body line after the single attr (slice-1 shape).
+        let stripped = if c.item.attrs.len() > 1 {
+            c.item.attrs[1].span().start().line as u32
+        } else {
+            c.item.attrs[0].span().end().line as u32 + 1
+        };
         if stripped == old_start && c.end_line == old_end && c.start_line < stripped {
             return Some((stripped, c.end_line));
         }
@@ -88,13 +95,16 @@ pub(crate) fn find_stripped_item_target(
             syn::Item::Use(i) => &i.attrs,
             _ => continue,
         };
-        if attrs.len() != 1 {
+        if attrs.is_empty() {
             continue;
         }
         let s = it.span().start().line as u32;
         let e = it.span().end().line as u32;
-        let attr_end = attrs[0].span().end().line as u32;
-        let stripped = attr_end + 1;
+        let stripped = if attrs.len() > 1 {
+            attrs[1].span().start().line as u32
+        } else {
+            attrs[0].span().end().line as u32 + 1
+        };
         if stripped == old_start && e == old_end && s < stripped && stripped <= e {
             return Some((stripped, e));
         }
@@ -416,5 +426,20 @@ mod tests {
         let src = "#[inline]\n#[allow(dead_code)]\nfn foo() {}\n";
         let parsed: syn::File = syn::parse_str(src).expect("src parses");
         assert_eq!(super::find_stripped_item_target(&parsed, 3, 1), None);
+    }
+
+    #[test]
+    fn e1_stripped_first_of_n_attrs_matches_kept_docs() {
+        // E1 slice 2: first-of-N strip (removed `#[allow]` atop kept
+        // docs) — the cut cites the kept-docs span, the first block is
+        // left for the ordinary minus prefix.
+        let src = "#[allow(dead_code)]\n/// Kept docs.\nfn foo() {}\n";
+        let parsed: syn::File = syn::parse_str(src).expect("src parses");
+        assert_eq!(
+            super::find_stripped_item_target(&parsed, 2, 2),
+            Some((2, 3))
+        );
+        // The whole-item span still serves the normal path, never here.
+        assert_eq!(super::find_stripped_item_target(&parsed, 1, 3), None);
     }
 }

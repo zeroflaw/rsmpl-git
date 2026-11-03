@@ -29,8 +29,10 @@
 //! engine-owned). Slice 10 closes the added axis: the struct arm admits
 //! a vis delta riding with rename+attr, and the rename-only
 //! method-bearing trait twin is pinned ordinary. The remaining axes
-//! (removed/replaced + rename, interior attr deltas, method-bearing
-//! trait moves) stay ordinary by construction (owners: E1 follow-ups).
+//! (interior attr deltas, method-bearing trait moves) stay ordinary by
+//! construction (owners: E1 residue (b), E2). Removed/replaced + rename
+//! now fires via the E1 slice-2 stripped evolved delegation (owner:
+//! `move_attr_removed.rs` — fire pins below, shape pins there).
 
 use syn::spanned::Spanned;
 
@@ -756,9 +758,9 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_replaced_attr_stays_ordinary() {
-        // Replaced axis with rename: `#[old]+foo` -> `#[new]+bar`
-        // stays ordinary (attr counts differ by zero, never plus one).
+    fn rename_plus_replaced_attr_fn_fires_with_both_prefixes() {
+        // E1 slice 2: replaced + rename (`#[old]+foo` -> `#[new]+bar`)
+        // fires via the stripped evolved delegation (plus-added arm).
         let big = big_fn("foo");
         let minus_item = format!("#[allow(dead_code)]\n{big}");
         let renamed = big.replacen("fn foo()", "fn bar()", 1);
@@ -768,17 +770,29 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("replaced+rename fn move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "replaced+rename must stay ordinary"
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved template, got:\n{text}"
         );
+        assert!(
+            text.contains("-#[allow(dead_code)]\n"),
+            "old attr rides ordinary minus, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[allow(unused_variables)]\n"),
+            "new attr rides ordinary plus, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
-    fn rename_plus_removed_attr_stays_ordinary() {
-        // Removed axis with rename: `#[old]+foo` -> bare `bar` stays
-        // ordinary (deferred: stripping the minus side is engine
-        // territory, same wall as slice 4's bare removed mirror).
+    fn rename_plus_removed_attr_fn_fires_with_ordinary_prefix() {
+        // E1 slice 2: removed + rename (`#[old]+foo` -> bare `bar`)
+        // fires via the stripped evolved delegation (abstract arm).
         let big = big_fn("foo");
         let minus_item = format!("#[allow(dead_code)]\n{big}");
         let renamed = big.replacen("fn foo()", "fn bar()", 1);
@@ -787,10 +801,19 @@ mod tests {
         let b_plus: String = renamed.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("removed+rename fn move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "removed+rename must stay ordinary"
+            text.contains("+ fn bar(...) { ... }"),
+            "paste must carry the evolved template, got:\n{text}"
         );
+        assert!(
+            text.contains("-#[allow(dead_code)]\n"),
+            "removed attr rides ordinary minus, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1287,9 +1310,9 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_replaced_attr_struct_stays_ordinary() {
-        // Replaced axis with rename on struct stays ordinary (counts
-        // differ by zero, never plus one).
+    fn rename_plus_replaced_attr_struct_fires_with_both_prefixes() {
+        // E1 slice 2: struct replaced + rename fires via the stripped
+        // evolved delegation (plus-added arm).
         let mut strukt = String::from("struct Old {\n");
         for i in 0..40 {
             strukt.push_str(&format!("    f{i}: u32,\n"));
@@ -1303,16 +1326,25 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("struct replaced+rename must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "struct replaced+rename must stay ordinary"
+            text.contains("-#[allow(dead_code)]\n"),
+            "old attr rides ordinary minus, got:\n{text}"
         );
+        assert!(
+            text.contains("+#[allow(unused)]\n"),
+            "new attr rides ordinary plus, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
-    fn rename_plus_removed_attr_struct_stays_ordinary() {
-        // Removed axis with rename on struct stays ordinary (engine
-        // span law: the minus side carries the attr).
+    fn rename_plus_removed_attr_struct_fires_with_ordinary_prefix() {
+        // E1 slice 2: struct removed + rename fires via the stripped
+        // evolved delegation (abstract arm).
         let mut strukt = String::from("struct New {\n");
         for i in 0..40 {
             strukt.push_str(&format!("    f{i}: u32,\n"));
@@ -1325,10 +1357,15 @@ mod tests {
         let b_plus: String = strukt.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("struct removed+rename must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "struct removed+rename must stay ordinary"
+            text.contains("-#[allow(dead_code)]\n"),
+            "removed attr rides ordinary minus, got:\n{text}"
         );
+        validated_live(&text, &pre);
     }
 
     #[test]
@@ -1466,10 +1503,10 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_replaced_attr_trait_stays_ordinary() {
-        // Replaced attr + rename stays ordinary (engine span law: the
-        // counts are equal, never plus-one, so the arm never reached;
-        // same wall as slices 4/6).
+    fn rename_plus_replaced_attr_trait_fires_with_both_prefixes() {
+        // E1 slice 2: trait replaced + rename fires via the stripped
+        // evolved delegation (plus-added arm; kept docs ride the
+        // stripped inner on both sides).
         let (docs, minus_item_base) = padded_trait_old();
         let minus_item = format!("#[allow(dead_code)]\n{minus_item_base}");
         let plus_item = format!("#[allow(unused)]\n{docs}trait New {{}}\n");
@@ -1478,16 +1515,25 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait replaced+rename must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "trait replaced+rename must stay ordinary"
+            text.contains("-#[allow(dead_code)]\n"),
+            "old attr rides ordinary minus, got:\n{text}"
         );
+        assert!(
+            text.contains("+#[allow(unused)]\n"),
+            "new attr rides ordinary plus, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
-    fn rename_plus_removed_attr_trait_stays_ordinary() {
-        // Removed attr + rename stays ordinary (engine span law: the
-        // minus side carries the attr).
+    fn rename_plus_removed_attr_trait_fires_with_ordinary_prefix() {
+        // E1 slice 2: trait removed + rename fires via the stripped
+        // evolved delegation (abstract arm over the kept docs).
         let (docs, minus_item_base) = padded_trait_old();
         let minus_item = format!("#[allow(dead_code)]\n{minus_item_base}");
         let plus_item = format!("{docs}trait New {{}}\n");
@@ -1496,10 +1542,15 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait removed+rename must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "trait removed+rename must stay ordinary"
+            text.contains("-#[allow(dead_code)]\n"),
+            "removed attr rides ordinary minus, got:\n{text}"
         );
+        validated_live(&text, &pre);
     }
 
     #[test]

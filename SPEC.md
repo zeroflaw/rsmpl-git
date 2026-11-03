@@ -9569,16 +9569,18 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Two added attrs, `//!` /
-    `/* */` docs, removed+rename, replaced+rename, two-added+rename, and
-    interior (non-prefix) attr deltas stay ordinary — removed+rename /
-    replaced+rename need stripped evolved matchers (a later slice);
-    interior deltas stay ordinary by the prefix-only rule (an interior
-    attr would strand as uncovered non-blank and veto the sweep,
-    losing the companions' partial rescue). Removed / replaced bare at
-    prefix position fires via the E1 sub-span cut: `- I` cites the
-    stripped span (new `find_stripped_item_target`, move-cut-only) with
+    `/* */` docs, two-added+rename, and interior (non-prefix) attr deltas
+    stay ordinary — interior deltas stay ordinary by the prefix-only rule
+    (an interior attr would strand as uncovered non-blank and veto the
+    sweep, losing the companions' partial rescue). Removed / replaced
+    bare at prefix position fires via the E1 sub-span cut: `- I` cites
+    the stripped span (`find_stripped_item_target`, move-cut-only) with
     the old block as an ordinary minus prefix (removed) or ordinary
-    prefixes on both sides (replaced) around a bare `+ M1` paste.
+    prefixes on both sides (replaced) around a bare `+ M1` paste; the
+    removed/replaced + rename twins fire the same way with an evolved
+    paste (stripped remainder through the shared evolved cascade —
+    abstract arm for removed+rename, plus-added arm for replaced+rename;
+    first-of-N strip serves kept docs).
        Everything else (other item kinds, other attr deltas, vis+body combos
        without a signature delta, two-slot signature+body combos,
        trait-`impl` moves, shadowed-body
