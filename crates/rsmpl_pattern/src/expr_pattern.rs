@@ -114,15 +114,17 @@ impl ExprPattern {
                 continue;
             }
             if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                if let Some(rel) = text[i + 2..].find("*/") {
-                    out.push_str(&text[i..i + 2 + rel + 2]);
-                    i += 2 + rel + 2;
-                    continue;
+                if let Some(rest) = text.get(i + 2..) {
+                    if let Some(rel) = rest.find("*/") {
+                        out.push_str(&text[i..i + 2 + rel + 2]);
+                        i += 2 + rel + 2;
+                        continue;
+                    }
                 }
                 out.push_str(&text[i..]);
                 break;
             }
-            if c == '.' && i + 2 < bytes.len() && &text[i..i + 3] == "..." {
+            if c == '.' && text.get(i..i + 3) == Some("...") {
                 let id = format!("__RSMPL_ELLIPSIS_{ell_n}");
                 out.push_str(&id);
                 maps.ellipsis_ids.push(id);
@@ -130,8 +132,15 @@ impl ExprPattern {
                 i += 3;
                 continue;
             }
-            out.push(c);
-            i += 1;
+            // Verbatim copy (whole char — multibyte text passes through
+            // byte-identical, never a split byte).
+            match text[i..].chars().next() {
+                Some(ch) => {
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+                None => break,
+            }
         }
         // Replace declared metavars (longest names first) as whole tokens.
         let mut names: Vec<String> = table.kinds.keys().cloned().collect();
@@ -178,8 +187,15 @@ fn replace_ident_token(text: &str, name: &str, placeholder: &str, sigiled: bool)
             }
             i = j;
         } else {
-            out.push(c);
-            i += 1;
+            // Verbatim copy (whole char — multibyte text passes through
+            // byte-identical; pushing split bytes renders mojibake).
+            match text[i..].chars().next() {
+                Some(ch) => {
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+                None => break,
+            }
         }
     }
     out
@@ -790,6 +806,21 @@ mod tests {
     fn classifies_method_call() {
         let (kind, _, _) = classify_call_pattern("Receiver.old_method(Arg)", &table()).unwrap();
         assert!(matches!(kind, ExprPatternKind::MethodCall { .. }));
+    }
+
+    #[test]
+    fn placeholder_expr_passes_unicode_through_verbatim() {
+        // 82de782 smoke panic family (`expr_pattern.rs` window slicing):
+        // multibyte text rides through byte-identical, never a split
+        // byte; `"..é"` straddles `é` at the `[0..3]` window (pre-fix
+        // panic), while a genuine ASCII `...` after unicode still slots.
+        let (masked, _) = ExprPattern::placeholder_expr("foo(…é…)", &table());
+        assert!(masked.contains("…é…"), "got: {masked}");
+        let (masked, maps) = ExprPattern::placeholder_expr("..é", &table());
+        assert_eq!(masked, "..é", "got: {masked}");
+        assert!(maps.ellipsis_ids.is_empty());
+        let (masked, maps) = ExprPattern::placeholder_expr("é...", &table());
+        assert_eq!(maps.ellipsis_ids.len(), 1, "got: {masked}");
     }
 
     #[test]

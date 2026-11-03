@@ -7815,11 +7815,15 @@ on the engine's apply-time backstop. Mention-free workspaces raise
 byte-identical to the changed-files-only domain. Beneath `--check`
 sits the per-hunk reprobe floor (D18, WI-1b): `infer` scratch-applies
 every emitted semantic section against the pre-image map it already
-holds — section-local engine-apply plus post-compare per file, and a
-joint whole-patch T361 over the multi-section move intents (cut in A,
-paste in B) the local checks cannot prove alone — and degrades any
-failing section to its ordinary native text before the patch leaves
-the library, with `veto:reprobe-failed` provenance. Sections without
+holds — patch-level capture coherence first (a `# use=N` with no
+`# bind=N` anywhere in the emission degrades unconditionally; the
+engine rejects it on every tree, so no pre-image is needed and
+creates are covered), then section-local engine-apply plus
+post-compare per file, and a joint whole-patch T361 over the
+multi-section move intents (cut in A, paste in B) the local checks
+cannot prove alone — and degrades any failing section to its ordinary
+native text before the patch leaves the library, with
+`veto:reprobe-failed` provenance. Sections without
 a pre-image prove nothing and keep section-visible behavior, except
 that move cuts (`# bind=` / `# use=` / bare `- I`) never emit from
 section-visible evidence. A raise that passes the floor can still
@@ -10227,16 +10231,19 @@ posture (`rule=` present or not), both cross-checked from the applied tree rathe
 the report's own fields.
 Property harness (WI-19 slice 2, `crates/rsmpl_diff_infer/tests/property_cycle_authored.rs`):
 seeded authored-side mutations (fn rename, call sweep, `# optional` zero-match, `# repeat` fold, stale-range, overlap veto) applied via `apply_patch_to_tree` must never panic, Ok must deterministically reach the independently recomputed post, Err must carry a known SPEC 25 code.
-History gate (WI-20, `python3 tools/history_sweep.py --gate`): the local floor gate over the
-pinned range in `tools/history_gate.json` (`rev_range` + `floor` + `pinned_at`; sliding
-`HEAD~20..HEAD` window at landing, advancing either field is a deliberate commit). The gate
-reuses the sweep implementation unchanged (T346 convert + T361 `applyrs --check` + real-apply
-byte-compare): conversion/check failures fail (exit 2 naming commits), compressing commits
-below the floor fail (exit 2 naming the shortfall), within 2 above the floor warn on stderr.
-Non-compressing commits list their WI-17 declined top guard-veto reason (`no-guard-veto`
-where nothing nearly fired) as the ranked detector backlog. No CI wiring exists or is
-wanted (forbidden in this repo); run the gate by hand beside `example-benches/run.sh`. The
-floor measures regression over recent history, never universal raising quality.
+History smoke (D19, `python3 tools/history_sweep.py`): with no rev-range the
+runner sweeps the entire HEAD history, reusing the sweep implementation
+unchanged (T346 convert + T361 `applyrs --check` + real-apply byte-compare):
+conversion/check/apply failures fail (exit 2 naming the commit, the stage,
+and the first divergence). Compression (semantic-hunk counts per commit and
+in total) is printed as a report, never as a pass/fail: there is no floor,
+no pinned range, and no floor file. A failure is a bug report with a commit
+hash, owned by the WI-1 reprobe. Detector backlog comes from counted
+provenance over a stated recent range, run by hand — never from a gate
+artifact. No CI wiring exists or is wanted (forbidden in this repo); run
+the smoke by hand beside `example-benches/run.sh`. `--limit N` and explicit
+rev-ranges stay for development; `--self-test` checks the sweep predicates
+on a synthetic repo.
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): the laws stay hand-written here; the

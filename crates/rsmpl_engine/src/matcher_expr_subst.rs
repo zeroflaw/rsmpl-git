@@ -6,6 +6,15 @@
 
 use std::collections::HashMap;
 
+/// Advance one char (never split a multibyte sequence). Every other
+/// advance in the walkers below consumes ASCII bytes or helper-delimited
+/// spans, so stepping per char keeps each index a char boundary and
+/// every `text[i..]` slice panic-free. ASCII-arm tests stay byte-based:
+/// ASCII bytes never appear inside multibyte sequences.
+pub(crate) fn step_one_char(text: &str, i: usize) -> usize {
+    i + text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)
+}
+
 /// Substitute bound metavariables and `...` into the plus pattern.
 /// Each standalone `...` replays, in order, the target args the matching
 /// `- ...` absorbed (T157: the whole arg list is NOT replayed). An empty
@@ -95,15 +104,17 @@ fn replace_ellipsis_tokens(text: &str, replacements: &[String]) -> String {
             continue;
         }
         if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            if let Some(rel) = text[i + 2..].find("*/") {
-                out.push_str(&text[i..i + 2 + rel + 2]);
-                i += 2 + rel + 2;
-                continue;
+            if let Some(rest) = text.get(i + 2..) {
+                if let Some(rel) = rest.find("*/") {
+                    out.push_str(&text[i..i + 2 + rel + 2]);
+                    i += 2 + rel + 2;
+                    continue;
+                }
             }
             out.push_str(&text[i..]);
             break;
         }
-        if i + 2 < bytes.len() && &text[i..i + 3] == "..." {
+        if text.get(i..i + 3) == Some("...") {
             let before_ok = i == 0 || bytes[i - 1] != b'.';
             let after_ok = i + 3 >= bytes.len() || bytes[i + 3] != b'.';
             if before_ok && after_ok {
@@ -140,8 +151,11 @@ fn replace_ellipsis_tokens(text: &str, replacements: &[String]) -> String {
                 continue;
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // Verbatim copy (whole char, never a split byte — multibyte
+        // text passes through byte-identical).
+        let next = step_one_char(text, i);
+        out.push_str(&text[i..next]);
+        i = next;
     }
     out
 }
@@ -187,13 +201,15 @@ pub(crate) fn count_ellipsis_tokens(text: &str) -> usize {
             continue;
         }
         if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            if let Some(rel) = text[i + 2..].find("*/") {
-                i += 2 + rel + 2;
-                continue;
+            if let Some(rest) = text.get(i + 2..) {
+                if let Some(rel) = rest.find("*/") {
+                    i += 2 + rel + 2;
+                    continue;
+                }
             }
             break;
         }
-        if i + 2 < bytes.len() && &text[i..i + 3] == "..." {
+        if text.get(i..i + 3) == Some("...") {
             let before_ok = i == 0 || bytes[i - 1] != b'.';
             let after_ok = i + 3 >= bytes.len() || bytes[i + 3] != b'.';
             if before_ok && after_ok {
@@ -202,7 +218,7 @@ pub(crate) fn count_ellipsis_tokens(text: &str) -> usize {
                 continue;
             }
         }
-        i += 1;
+        i = step_one_char(text, i);
     }
     count
 }
@@ -241,16 +257,18 @@ pub(crate) fn plus_has_path_ellipsis(text: &str) -> bool {
             continue;
         }
         if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            if let Some(rel) = text[i + 2..].find("*/") {
-                i += 2 + rel + 2;
-                continue;
+            if let Some(rest) = text.get(i + 2..) {
+                if let Some(rel) = rest.find("*/") {
+                    i += 2 + rel + 2;
+                    continue;
+                }
             }
             return false;
         }
         if text[i..].starts_with("::...") || text[i..].starts_with("...::") {
             return true;
         }
-        i += 1;
+        i = step_one_char(text, i);
     }
     false
 }
@@ -283,4 +301,37 @@ fn replace_ident_token(text: &str, name: &str, replacement: &str) -> String {
         i += text[i..].chars().next().unwrap().len_utf8();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ascii_ellipsis_still_counts() {
+        assert_eq!(count_ellipsis_tokens("foo(...)"), 1);
+        assert_eq!(count_ellipsis_tokens("foo(....)"), 0);
+    }
+
+    #[test]
+    fn straddling_window_never_panics() {
+        // `"..é"`: the `[0..3]` window straddles `é` (bytes 2..4) — the
+        // 82de782 smoke panic (`matcher_expr_subst.rs:196`). None of
+        // these windows is an ASCII `...`, so the count is 0.
+        assert_eq!(count_ellipsis_tokens("..é"), 0);
+        assert_eq!(count_ellipsis_tokens("a…b"), 0);
+        assert!(!plus_has_path_ellipsis("a::…::b"));
+        assert!(!plus_has_path_ellipsis("..é..."));
+        // True arms still fire.
+        assert!(plus_has_path_ellipsis("a::...::b"));
+        assert_eq!(count_ellipsis_tokens("..é..."), 1);
+    }
+
+    #[test]
+    fn substitute_plus_passes_unicode_through_verbatim() {
+        let out = substitute_plus("f(…é…)", &HashMap::new(), &[], false);
+        assert_eq!(out, "f(…é…)");
+        let out = substitute_plus("..é", &HashMap::new(), &[], false);
+        assert_eq!(out, "..é");
+    }
 }

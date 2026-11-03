@@ -12,7 +12,10 @@
 //! the per-hunk soundness floor beneath `diffrs --check`'s end-to-end
 //! verdict.
 //!
-//! Three ordered checks per semantic file (first failure degrades):
+//! Four ordered checks per semantic file (first failure degrades):
+//! (a0) patch-level capture coherence — a `# use=N` with no `# bind=N`
+//! anywhere in the emission degrades unconditionally (the engine rejects
+//! it on every tree, so no pre-image is needed and creates are covered);
 //! (a) section-visible rule — no pre-image entry + a move cut/paste
 //! that cites minus-side content never emits (pure additions and the
 //! bare-`- I` delete spelling keep today's behavior); (b) engine-apply
@@ -28,7 +31,7 @@
 //! file-local leniency.
 //!
 //! Files the floor cannot prove anything about (no pre-image entry
-//! beyond rule (a), empty base, or a native section that does not apply
+//! beyond rules (a0)/(a), empty base, or a native section that does not apply
 //! to the pre-image — coordinate-unfaithful caller input, rename
 //! preludes) keep today's behavior: the floor never invents a failure
 //! it cannot derive from the pre-image.
@@ -90,6 +93,10 @@ pub(crate) fn reprobe_sections(
             }
         }
     }
+    // (a0) Patch-level capture coherence first: a dangling paste fails
+    // on every tree (no pre-image needed), so it degrades before the
+    // pre-image legs run — and covers creates, which skip those legs.
+    enforce_capture_coherence(&mut sections, &native_by_path, pre, prov);
     for path in file_order(&sections) {
         if !file_has_semantic(&sections, &path) {
             continue;
@@ -144,7 +151,91 @@ pub(crate) fn reprobe_sections(
             break;
         }
     }
+    // Bisection degrades gateable files only, so it can strand a paste
+    // whose bind side degraded while the paste side is exempt (creates
+    // skip the gate): re-enforce capture coherence on the final sections
+    // so no dangling `# use=` ever leaves the library.
+    enforce_capture_coherence(&mut sections, &native_by_path, pre, prov);
     *out = sections.join("");
+}
+
+/// Patch-level capture coherence (needs no pre-image, so it also covers
+/// creates): every `# use=N` must have a `# bind=N` somewhere in the
+/// emission. A dangling paste fails engine lowering with
+/// `RSMPL_CAPTURE_CONFLICT` on every tree, so its file degrades to
+/// ordinary unconditionally — this closes the create-time hole rule (a)
+/// leaves (new-file pastes cite no minus lines, and creates skip the
+/// joint gate). Joint moves (bind in one file, use in another) pass:
+/// the bind set is patch-scoped. Values split on commas/whitespace so
+/// multi-name spellings (`# bind=M1, M2`) are covered too.
+fn unbound_use_files(sections: &[String]) -> Vec<String> {
+    fn names_after<'a>(line: &'a str, prefix: &str) -> Vec<&'a str> {
+        line.strip_prefix(prefix)
+            .map(|v| {
+                v.split([',', ' ', '\t'])
+                    .filter(|n| !n.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+    let mut bound: HashSet<String> = HashSet::new();
+    let mut used: Vec<(String, String)> = Vec::new();
+    for sec in sections {
+        if sec.is_empty() {
+            continue;
+        }
+        let Some(path) = section_path(sec) else {
+            continue;
+        };
+        for line in sec.lines() {
+            for name in names_after(line, "# bind=") {
+                bound.insert(name.to_string());
+            }
+            for name in names_after(line, "# use=") {
+                used.push((path.clone(), name.to_string()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (path, name) in &used {
+        if !bound.contains(name) && !out.contains(path) {
+            out.push(path.clone());
+        }
+    }
+    out
+}
+
+/// Degrade every file whose `# use=` names are unbound anywhere in the
+/// emission (fixpoint: degrading one file can strand another file's
+/// paste whose bind lived in the degraded file). Files without a native
+/// fallback cannot degrade and are skipped.
+fn enforce_capture_coherence(
+    sections: &mut [String],
+    native_by_path: &HashMap<String, &str>,
+    pre: &HashMap<String, String>,
+    prov: &mut Vec<HunkProvenance>,
+) {
+    loop {
+        let flagged = unbound_use_files(sections);
+        if flagged.is_empty() {
+            break;
+        }
+        let mut progressed = false;
+        for path in flagged {
+            if !file_has_semantic(sections, &path) {
+                continue;
+            }
+            let Some(fallback) = native_by_path.get(&path) else {
+                continue;
+            };
+            let file_old = pre.get(&path).map(String::as_str);
+            degrade_file(sections, &path, fallback, file_old, prov);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
 }
 
 /// The file plus every other emitted file sharing one of its semantic
@@ -742,12 +833,13 @@ mod tests {
     }
 
     #[test]
-    fn section_visible_pure_addition_paste_survives() {
-        // A new-file paste cites no minus-side content, so the
-        // section-visible rule cannot falsify it: it keeps today's
-        // behavior (the `32-new-file-move` cycle shape — degrading it
-        // would trade a `--check`-clean paste for ordinary content and
-        // break the S/S′ canonical fixed point).
+    fn dangling_new_file_paste_degrades() {
+        // 2322538/7740230 smoke shape: a new-file paste whose `# use=M1`
+        // has no `# bind=M1` anywhere in the emission. The engine rejects
+        // such patches on every tree (`RSMPL_CAPTURE_CONFLICT`), so the
+        // floor degrades it to ordinary with `veto:reprobe-failed` even
+        // though creates skip the pre-image legs (rule (a) needs minus
+        // lines, which a pure-addition paste cites none of).
         let ordinary = "diff --git src/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1,1 @@\n+fn parse_pair() {}\n"
             .to_string();
         let paste =
@@ -769,9 +861,74 @@ mod tests {
             declined: Vec::new(),
         }];
         reprobe_sections(&native, &mut out, &pre, &mut prov);
-        assert_eq!(out, paste, "pure-addition paste must survive, got: {out:?}");
-        assert_eq!(prov.len(), 1, "got: {prov:?}");
-        assert_eq!(prov[0].rule, "r1");
+        assert_eq!(out, ordinary, "dangling paste must degrade, got: {out:?}");
+        assert!(prov.iter().all(|p| p.rule != "r1"));
+        let ord = prov
+            .iter()
+            .find(|p| p.detector == "ordinary" && p.file == "src/new.rs")
+            .expect("ordinary entry must exist");
+        assert!(
+            ord.declined
+                .iter()
+                .any(|d| d.detector == "reprobe" && d.reason == "veto:reprobe-failed"),
+            "got: {:?}",
+            ord.declined
+        );
+    }
+
+    #[test]
+    fn joint_bind_use_pair_passes_coherence() {
+        // The joint shape: bind in one file, use in another. The bind
+        // set is patch-scoped, so nothing is unbound and the floor
+        // leaves the emission alone (the legs own the verdict, not this
+        // check).
+        let cut = "diff --git src/old.rs\n@@ -1,1 @@ rule=r2\n# bind=M1\n- I\n".to_string();
+        let paste =
+            "diff --git src/new.rs\nnew file mode 100644\n@@ -0,0 @@ rule=r1\n# use=M1\n+ M1\n"
+                .to_string();
+        assert!(unbound_use_files(&[cut.clone(), paste.clone()]).is_empty());
+        // Dangling: the paste file is named, the cut file is not.
+        assert_eq!(unbound_use_files(&[paste]), vec!["src/new.rs".to_string()]);
+        // Multi-name values split on commas/whitespace.
+        let multi = "diff --git src/old.rs\n@@ -1,1 @@ rule=r2\n# bind=M1, M2\n- I\n".to_string();
+        let uses =
+            "diff --git src/new.rs\n@@ -1,1 @@ rule=r1\n# use=M1\n+ M1\n@@ -2,1 @@ rule=r2\n# use=M2\n+ M2\n"
+                .to_string();
+        assert!(unbound_use_files(&[multi, uses]).is_empty());
+        // No directives at all: nothing to check.
+        let plain = "diff --git src/a.rs\n@@ -1,1 @@ rule=r1\n- foo(E)\n+ bar(E)\n".to_string();
+        assert!(unbound_use_files(&[plain]).is_empty());
+    }
+
+    #[test]
+    fn coherence_cascades_when_degrade_strands_a_paste() {
+        // The 2322538 bisection shape: the gate degrades a bind side
+        // while its paste side is exempt, stranding the paste. The
+        // post-bisect sweep must cascade — file A dangles (`# use=M1`
+        // unbound) and carries M2's only bind, so degrading A strands
+        // file B's `# use=M2` and B degrades too.
+        let ord_a = "diff --git src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-x\n+y\n"
+            .to_string();
+        let sem_a =
+            "diff --git src/a.rs\n@@ -1,1 @@ rule=r1\n# bind=M2\n- I\n@@ -2,1 @@ rule=r2\n# use=M1\n+ M1\n"
+                .to_string();
+        let ord_b = "diff --git src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -1 +1 @@\n-p\n+q\n"
+            .to_string();
+        let sem_b = "diff --git src/b.rs\n@@ -1,1 @@ rule=r3\n# use=M2\n+ M2\n".to_string();
+        let native = [ord_a.clone(), ord_b.clone()];
+        let mut sections = vec![sem_a, sem_b];
+        let native_by_path: HashMap<String, &str> = native
+            .iter()
+            .filter_map(|s| section_path(s).map(|p| (p, s.as_str())))
+            .collect();
+        let pre = pre(&[]);
+        let mut prov = Vec::new();
+        enforce_capture_coherence(&mut sections, &native_by_path, &pre, &mut prov);
+        assert_eq!(
+            sections,
+            vec![ord_a, ord_b],
+            "both sides degrade, got: {sections:?}"
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ use rsmpl_patch::{ErrorCode, StructuredError};
 use rsmpl_pattern::{char_lit_len, string_end};
 
 use crate::matcher_expr::substitute_plus;
+use crate::matcher_expr_subst::step_one_char;
 
 /// Substitute bound metavariables into the plus pattern, restoring backtick
 /// literals (masked so substitution cannot touch them).
@@ -90,8 +91,9 @@ fn slot_block_ellipsis(text: &str) -> (String, Vec<(String, ())>) {
                     i += len;
                 }
                 None => {
-                    out.push(c);
-                    i += 1;
+                    let next = step_one_char(text, i);
+                    out.push_str(&text[i..next]);
+                    i = next;
                 }
             }
             continue;
@@ -104,10 +106,12 @@ fn slot_block_ellipsis(text: &str) -> (String, Vec<(String, ())>) {
             continue;
         }
         if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            if let Some(rel) = text[i + 2..].find("*/") {
-                push_masked_dots(&text[i..i + 2 + rel + 2], &mut out, &mut dots);
-                i += 2 + rel + 2;
-                continue;
+            if let Some(rest) = text.get(i + 2..) {
+                if let Some(rel) = rest.find("*/") {
+                    push_masked_dots(&text[i..i + 2 + rel + 2], &mut out, &mut dots);
+                    i += 2 + rel + 2;
+                    continue;
+                }
             }
             push_masked_dots(&text[i..], &mut out, &mut dots);
             break;
@@ -118,8 +122,11 @@ fn slot_block_ellipsis(text: &str) -> (String, Vec<(String, ())>) {
             i += 3;
             continue;
         }
-        out.push(c);
-        i += 1;
+        // Verbatim copy (whole char — multibyte text passes through
+        // byte-identical, never a split byte).
+        let next = step_one_char(text, i);
+        out.push_str(&text[i..next]);
+        i = next;
     }
     (out, dots)
 }
@@ -139,10 +146,12 @@ fn push_masked_dots(span: &str, out: &mut String, dots: &mut Vec<(String, ())>) 
 }
 
 /// True when the `...` at byte `i` stands alone (not part of a longer dot
-/// run), mirroring the substitution pass it feeds.
+/// run), mirroring the substitution pass it feeds. `str::get` keeps the
+/// window panic-free on multibyte text (a straddling window cannot be
+/// `...`, so it is simply not standalone).
 fn is_standalone_ellipsis(text: &str, i: usize) -> bool {
     let bytes = text.as_bytes();
-    if i + 2 >= bytes.len() || &text[i..i + 3] != "..." {
+    if text.get(i..i + 3) != Some("...") {
         return false;
     }
     let before_ok = i == 0 || bytes[i - 1] != b'.';
@@ -185,6 +194,23 @@ mod tests {
         let out = sub("if E { a(); ... }", &[""]);
         assert!(!out.contains("..."), "got: {out}");
         assert!(!out.contains("__RSMPL_TAIL_"), "got: {out}");
+    }
+
+    #[test]
+    fn unicode_text_passes_through_verbatim() {
+        // 82de782 smoke panic family: multibyte text must ride through
+        // byte-identical, never a split byte.
+        let (slotted, _) = slot_block_ellipsis("if E { log(\"…é…\"); }");
+        assert_eq!(slotted, "if E { log(\"…é…\"); }");
+    }
+
+    #[test]
+    fn straddling_window_is_not_a_slot() {
+        // `"..é..."`: the `[0..3]` window straddles `é` — pre-fix panic.
+        // Only the trailing ASCII `...` slots.
+        let (slotted, _) = slot_block_ellipsis("..é...");
+        assert!(slotted.contains("__RSMPL_TAIL_0"), "got: {slotted}");
+        assert!(!slotted.contains("__RSMPL_TAIL_1"), "got: {slotted}");
     }
 
     #[test]

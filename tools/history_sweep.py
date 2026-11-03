@@ -23,15 +23,23 @@ full-tree materialize).
 
 Usage:
     python3 tools/history_sweep.py [rev-range] [--limit N] [--jobs N]
-    python3 tools/history_sweep.py --gate [--jobs N]
     python3 tools/history_sweep.py --self-test
 
-  `--gate` runs the pinned WI-20 floor gate from tools/history_gate.json
-  (range + floor + pinned commit): conversion failures fail, compressing
-  below the floor fails, within 2 above the floor warns. No CI wiring
-  (forbidden in this repo) — run it by hand beside example-benches/run.sh.
-  `--self-test` builds a synthetic two-commit repo and checks the gate
-  predicates (compressing + ordinary arms) with no network.
+  With no rev-range the sweep processes the entire HEAD history
+  (`rev-list HEAD`): per commit, convert with the real `diffrs`
+  (`diffrs c~1`, empty-tree rev for the root), round-trip through
+  `applyrs --check`, then real-apply and byte-compare against the child
+  tree. Exit 0 iff every commit converts and re-applies; any failure
+  prints the commit hash, the failing stage, and the first divergence
+  and exits 2. Compression (semantic-hunk counts per commit and in
+  total) is printed as a report, never as a pass/fail: there is no
+  floor, no pinned window, and no floor file (D19 smoke, not a gate).
+  `--self-test` builds a synthetic three-commit repo and checks the
+  sweep predicates (compressing + ordinary arms, plus a failure arm:
+  a garbage patch must fail `applyrs --check`).
+
+  No CI wiring (forbidden in this repo) — run it by hand beside
+  example-benches/run.sh.
 
 Sem-hunk counts use the anchored diet predicate
 `@@ … rule=r` (all RSmPL hunks carry diet `r1…` ids); substring counts inflate
@@ -42,7 +50,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import json
 import os
 import shutil
 import stat
@@ -328,146 +335,10 @@ def run_sweep(
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def top_declined_reason(diffrs: Path, wt: Path, rev: str) -> str:
-    """Most frequent non-trivial declined reason for one ordinary commit.
-
-    Gate-only backlog signal (WI-20): `diffrs --format json` over the same
-    rev, tallying `hunks[].declined[]` detector:reason pairs. `no-match`
-    only tallies when nothing weightier declined; `not-tried` never wins
-    alone (`all-not-tried`); unparseable output is `unknown`, never fatal.
-    """
-    out = run([str(diffrs), "--repo", str(wt), rev, "--format", "json"])
-    if out.returncode != 0:
-        return "unknown"
-    try:
-        doc = json.loads(out.stdout.decode(errors="replace"))
-    except json.JSONDecodeError:
-        return "unknown"
-    counts: dict[str, int] = {}
-    fallback: dict[str, int] = {}
-    try:
-        hunks = doc.get("hunks", [])
-    except AttributeError:
-        return "unknown"
-    for h in hunks:
-        declined = h.get("declined", []) if isinstance(h, dict) else []
-        for d in declined:
-            if not isinstance(d, dict):
-                continue
-            det = str(d.get("detector", "?"))
-            reason = str(d.get("reason", "?"))
-            key = f"{det}:{reason}"
-            if reason in ("no-match", "not-tried"):
-                fallback[key] = fallback.get(key, 0) + 1
-            else:
-                counts[key] = counts.get(key, 0) + 1
-    if counts:
-        return max(sorted(counts), key=lambda k: counts[k])
-    # Only `no-match`/`not-tried` declined: nothing nearly fired, so name
-    # that honestly instead of crowning a bystander detector.
-    if fallback:
-        if any(not k.endswith(":not-tried") for k in fallback):
-            return "no-guard-veto"
-        return "all-not-tried"
-    return "no-hunks" if not hunks else "unknown"
-
-
-def gate_pin_path() -> Path:
-    return Path(__file__).resolve().parent / "history_gate.json"
-
-
-def run_gate(top: Path, jobs: int, bins: dict[str, Path]) -> int:
-    """WI-20 floor gate over the pinned range. Returns process exit code."""
-    pin_file = gate_pin_path()
-    try:
-        pin = json.loads(pin_file.read_text())
-        rev_range = str(pin["rev_range"])
-        floor = int(pin["floor"])
-    except (OSError, KeyError, ValueError, json.JSONDecodeError) as e:
-        print(f"error: unreadable gate pin {pin_file}: {e}", file=sys.stderr)
-        return 2
-    listed = list_commits(top, rev_range, None)
-    if listed is None:
-        return 2
-    commits, parents_of = listed
-    if not commits:
-        print("no commits in range", file=sys.stderr)
-        return 2
-    diffrs, applyrs = bins["diffrs"], bins["applyrs"]
-    head_out = run(["git", "-C", str(top), "rev-parse", "HEAD"])
-    head_full = head_out.stdout.decode().strip() if head_out.returncode == 0 else "unknown"
-    flat = run_sweep(top, commits, parents_of, diffrs, applyrs, jobs)
-    total_failures: list[str] = []
-    failed: set[str] = set()
-    compressing: list[tuple[str, int]] = []
-    ordinary: list[str] = []
-    for short, sem, failures in flat:
-        if failures:
-            failed.add(short)
-        total_failures.extend(failures)
-        if sem:
-            compressing.append((short, sem))
-        else:
-            ordinary.append(short)
-    print(f"gate range {rev_range} commits {len(commits)} tip {commits[-1][:7]} root {commits[0][:7]} (head {head_full[:7]})")
-    print(f"convert {len(commits) - len(failed)}/{len(commits)} floor {floor} compressing {len(compressing)}")
-    if total_failures:
-        print("failures:")
-        for f in total_failures:
-            print(f"  {f}")
-    if compressing:
-        print("compressing:")
-        for short, sem in sorted(compressing):
-            print(f"  {short} sem={sem}")
-    else:
-        print("compressing: none")
-    # Backlog signal: top declined reason per ordinary commit (one extra
-    # json raise each; gate-only cost, failures fall back to `unknown`).
-    if ordinary and not failed:
-        wt = Path(tempfile.mkdtemp(prefix="gate-ord-"))
-        try:
-            if git_ok(top, ["worktree", "add", "--detach", str(wt), commits[-1]]):
-                print("ordinary (top declined reason):")
-                full_of = {c[:7]: c for c in commits}
-                for short in sorted(ordinary):
-                    full = full_of.get(short, short)
-                    parent = parents_of.get(full)
-                    rev = f"{full}~1" if parent is not None else EMPTY_TREE
-                    if parent is None:
-                        reason = "root-commit"
-                    else:
-                        reason = top_declined_reason(diffrs, wt, rev)
-                    print(f"  {short} {reason}")
-            else:
-                print("ordinary: (worktree unavailable, reasons skipped)")
-                for short in sorted(ordinary):
-                    print(f"  {short} unknown")
-        finally:
-            with _wt_lock:
-                run(["git", "-C", str(top), "worktree", "remove", "--force", str(wt)])
-    if total_failures:
-        print(f"GATE FAIL: {len(total_failures)} conversion/check failure(s)", file=sys.stderr)
-        return 2
-    if len(compressing) < floor:
-        print(
-            f"GATE FAIL: compressing {len(compressing)} below floor {floor} "
-            f"(pinned at {pin.get('pinned_at', '?')})",
-            file=sys.stderr,
-        )
-        return 2
-    if len(compressing) - floor <= 2:
-        print(
-            f"warning: compressing {len(compressing)} within 2 of floor {floor} — do not lower the floor",
-            file=sys.stderr,
-        )
-    print(f"GATE PASS: convert {len(commits)}/{len(commits)} compressing {len(compressing)} >= floor {floor}")
-    return 0
-
-
 def run_self_test(top: Path, bins: dict[str, Path]) -> int:
-    """Synthetic two-commit gate check: one compressing rename, one ordinary."""
+    """Synthetic smoke check: one compressing rename, one ordinary, one failure arm."""
     diffrs, applyrs = bins["diffrs"], bins["applyrs"]
-    tmp = Path(tempfile.mkdtemp(prefix="gate-selftest-"))
+    tmp = Path(tempfile.mkdtemp(prefix="sweep-selftest-"))
     try:
         repo = tmp / "repo"
         repo.mkdir()
@@ -501,27 +372,15 @@ def run_self_test(top: Path, bins: dict[str, Path]) -> int:
         if len(sems) != 2 or not (sems[0] >= 1 and sems[1] == 0):
             print(f"SELF-TEST FAIL: expected [compressing, ordinary], got sems={sems}", file=sys.stderr)
             return 2
-        # Ordinary arm lists a declined reason.
-        wt = tmp / "wt"
-        if not git_ok(repo, ["worktree", "add", "--detach", str(wt), commits[-1]]):
-            print("SELF-TEST FAIL: worktree add failed", file=sys.stderr)
+        # Failure arm: a garbage patch must fail `applyrs --check`, proving
+        # the smoke's check stage can fail (an unappliable raise fails loud).
+        bad = tmp / "bad.rsmpl"
+        bad.write_text("this is not a patch\n")
+        checked = run([str(applyrs), "--file", str(bad), "--check", "--repo", str(repo)])
+        if checked.returncode == 0:
+            print("SELF-TEST FAIL: garbage patch passed --check", file=sys.stderr)
             return 2
-        try:
-            reason = top_declined_reason(diffrs, wt, f"{commits[-1]}~1")
-        finally:
-            with _wt_lock:
-                run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)])
-        if not reason or reason == "unknown":
-            print(f"SELF-TEST FAIL: ordinary arm reason={reason!r}", file=sys.stderr)
-            return 2
-        # Floor predicates: floor 1 passes, floor 3 fails.
-        if len([s for s in sems if s]) < 1:
-            print("SELF-TEST FAIL: floor-1 predicate", file=sys.stderr)
-            return 2
-        if not (len([s for s in sems if s]) < 3):
-            print("SELF-TEST FAIL: floor-3 predicate vacuous", file=sys.stderr)
-            return 2
-        print(f"SELF-TEST PASS: sems={sems} ordinary_reason={reason}")
+        print(f"SELF-TEST PASS: sems={sems} check_rejects_garbage")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -529,19 +388,15 @@ def run_self_test(top: Path, bins: dict[str, Path]) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("rev_range", nargs="?", default="HEAD", help="rev-list range (default: HEAD)")
+    ap.add_argument("rev_range", nargs="?", default="HEAD", help="rev-list range (default: HEAD = whole history)")
     ap.add_argument("--limit", type=int, default=None, metavar="N", help="convert at most N commits (smoke)")
     ap.add_argument(
         "-j", "--jobs", type=int, default=os.cpu_count() or 4, metavar="N",
         help="parallel workers (default: cpu count)",
     )
     ap.add_argument(
-        "--gate", action="store_true",
-        help="run the WI-20 floor gate from tools/history_gate.json (ignores rev_range/--limit)",
-    )
-    ap.add_argument(
         "--self-test", action="store_true",
-        help="synthetic two-commit gate check (compressing + ordinary arms)",
+        help="synthetic smoke check (compressing + ordinary + failure arms)",
     )
     args = ap.parse_args()
 
@@ -563,8 +418,6 @@ def main() -> int:
 
     if args.self_test:
         return run_self_test(top, bins)
-    if args.gate:
-        return run_gate(top, args.jobs, bins)
 
     listed = list_commits(top, args.rev_range, args.limit)
     if listed is None:
@@ -586,7 +439,8 @@ def main() -> int:
             compressing.append((short, sem))
     print(f"head {head_full} range {args.rev_range} commits {len(commits)} tip {commits[-1][:7]} root {commits[0][:7]}")
     head_short = head_full[:7] if len(head_full) >= 7 else head_full
-    print(f"convert {len(commits) - len(failed)}/{len(commits)} (head {head_short})")
+    total_sem = sum(sem for _, sem in compressing)
+    print(f"convert {len(commits) - len(failed)}/{len(commits)} failures {len(total_failures)} compressing {len(compressing)} semantic_hunks {total_sem} (head {head_short})")
     if total_failures:
         print("failures:")
         for f in total_failures:
@@ -597,7 +451,7 @@ def main() -> int:
             print(f"  {short} sem={sem}")
     else:
         print("compressing: none")
-    return 1 if total_failures else 0
+    return 2 if total_failures else 0
 
 
 if __name__ == "__main__":
