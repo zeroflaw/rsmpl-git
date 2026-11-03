@@ -9532,12 +9532,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     assoc-item-name vetoes (a method/const/type named `Old` lives in
     another namespace); trait-impls (`impl Tr for Ty`) stay ordinary
     (WI-3 owns that header).
-    WI-14 slices 1-3 pair move-eligible item moves gaining exactly one
-    single-line `#[...]` attr or `///` outer-doc line while every other
+    WI-14 slices 1-3 + slice 5 pair move-eligible item moves gaining exactly one
+    single-line `///` outer-doc line or one balanced single `#[...]` attr
+    (single-line, or multi-line up to the raiser cap) while every other
     slot stays token-equal: the cut + bare paste carry the move while
-    the attr/doc line rides an ordinary plus-prefix leftover hunk above
+    the attr/doc lines ride an ordinary plus-prefix leftover hunk above
     the paste (the T432b prefix shape — no new spelling, no engine
-    change). Removed / replaced / multi-line attrs, `//!` / `/* */`
+    change). Removed / replaced attrs, two added attrs, `//!` / `/* */`
     docs, and rename+attr (two deltas) stay ordinary — removed by
     construction under the engine whole-span cut law (slice 4: `- I`
     matches the full item span including attrs, so a bare-span cut
