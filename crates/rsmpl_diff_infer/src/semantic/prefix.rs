@@ -74,6 +74,82 @@ pub(crate) fn try_use_prefix_sweep(
     Some(hunk)
 }
 
+/// N=1 use-path prefix single (WI-3 slice 1): one `use P_old::Tail`
+/// → `use P_new::Tail` pair with a shared parent, one renamed
+/// segment, and a textually equal non-empty tail compresses to the
+/// allow-one bare-prefix pair (`- use P_old` / `+ use P_new`, no
+/// directive — the `calls.rs`/`type_single.rs` allow-one precedent).
+/// Uniqueness is proved by `use_holds` at n=1 (zero-or-two same
+/// leading-prefix spans veto, fn-body pairs veto because fn-body
+/// `use` spans never count) plus the T361 `single_reproduces`
+/// byte-compare pre-reservation. Tail-empty leaf renames
+/// (`use crate::old_mod;`) decline like the N>=2 sweep (which
+/// requires `m.len() > k`); single-segment prefixes, parent
+/// mismatches, and multi-rename pairs decline. Detector name
+/// `use_prefix` (same family as the sweep; `guard_for` stays
+/// `Strict` for multis — the singles blocks price their own
+/// precision allowance).
+pub(crate) fn try_use_prefix_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    let minus_segs = parse_use_path(minuses[0])?;
+    let plus_segs = parse_use_path(pluses[0])?;
+    if minus_segs.len() != plus_segs.len() || minus_segs.len() < 3 {
+        return None;
+    }
+    // Shared parent (longest common prefix), exactly one renamed
+    // segment, textually equal non-empty tail.
+    let mut parent = 0usize;
+    while parent < minus_segs.len() && minus_segs[parent] == plus_segs[parent] {
+        parent += 1;
+    }
+    // `parent` is the first diff index by construction (the
+    // all-equal case exits here via `parent + 1 >= len`), so the
+    // renamed segments differ and only the tail needs comparing.
+    if parent < 1 || parent + 1 >= minus_segs.len() {
+        return None;
+    }
+    if minus_segs[parent + 1..] != plus_segs[parent + 1..] {
+        return None;
+    }
+    let old_prefix: Vec<String> = minus_segs[..parent + 1].to_vec();
+    if !crate::totality::use_holds(Some(pre), &old_prefix, minuses, changed) {
+        return None;
+    }
+    let new_prefix: Vec<String> = plus_segs[..parent + 1].to_vec();
+    let minus_tpl = format!("use {}", old_prefix.join("::"));
+    let plus_tpl = format!("use {}", new_prefix.join("::"));
+    if !super::general_expr::single_reproduces(
+        path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
+    ) {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let rule = super::unique_rule(
+        used_rules,
+        &format!("use_{}_to_{}", minus_segs[parent], plus_segs[parent]),
+    );
+    // Allow-one: directive-free ranged hunk (singles-block precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    // Defensive: the probes above already applied equivalent spellings,
+    // but the hunk header is new — never emit a guess.
+    if rsmpl_patch::parse_patch(&hunk).is_err() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some(hunk)
+}
+
 /// Parse one diff line as a `use` path: strip one trailing `;`,
 /// leading visibility, the `use` keyword, and one leading `::`; split
 /// the rest on `::`. The emitted pattern is the bare common prefix,
@@ -132,4 +208,142 @@ fn common_prefix(paths: &[Vec<String>]) -> Vec<String> {
         out.truncate(n);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn use_prefix_single_fires_with_preserved_tail() {
+        // WI-3 slice 1 (fixture 102 shape): one `use` pair with a
+        // shared parent + renamed segment + preserved tail raises.
+        let pre = "use crate::old::Thing;\nuse crate::other::Untouched;\n";
+        let mut used = Vec::new();
+        let out = try_use_prefix_single(
+            &["use crate::old::Thing;"],
+            &["use crate::new::Thing;"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            &mut used,
+        )
+        .expect("single must fire");
+        assert!(out.contains("- use crate::old\n"), "got:\n{out}");
+        assert!(out.contains("+ use crate::new\n"), "got:\n{out}");
+        assert!(
+            !out.contains("allow"),
+            "allow-one carries no directive, got:\n{out}"
+        );
+        // The emission real-applies to the exact native post-tree.
+        let parsed = rsmpl_patch::parse_patch(&format!("{}\n{out}", crate::git_header("f.rs")))
+            .expect("emission must parse with header");
+        let mut files = std::collections::HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "use crate::new::Thing;\nuse crate::other::Untouched;\n"
+        );
+    }
+
+    #[test]
+    fn use_prefix_single_vetoes_twin_and_leaf_and_body() {
+        // An untouched twin (count 2) vetoes — same posture as the sweep.
+        let pre2 = "use crate::old::Thing;\nuse crate::old::Other;\n";
+        let mut used = Vec::new();
+        assert!(
+            try_use_prefix_single(
+                &["use crate::old::Thing;"],
+                &["use crate::new::Thing;"],
+                "f.rs",
+                Some(pre2),
+                &[1],
+                &mut used,
+            )
+            .is_none(),
+            "twin prefix must veto"
+        );
+        // Tail-empty leaf renames stay ordinary (sweep parity: `m.len() > k`).
+        let pre_leaf = "use crate::old_mod;\n";
+        assert!(
+            try_use_prefix_single(
+                &["use crate::old_mod;"],
+                &["use crate::new_mod;"],
+                "f.rs",
+                Some(pre_leaf),
+                &[1],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "leaf rename must stay ordinary"
+        );
+        // Single-segment prefixes never infer (too broad).
+        assert!(
+            try_use_prefix_single(
+                &["use crate;"],
+                &["use other;"],
+                "f.rs",
+                Some("use crate;\n"),
+                &[1],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "single segment must stay ordinary"
+        );
+        // Fn-body `use` pairs stay ordinary (SPEC 14.9: only file-
+        // and inline-mod-level `use` items match; `use_holds` never
+        // counts them, so the count misses and vetoes).
+        let pre_body = "fn m() {\n    use crate::old::Thing;\n}\n";
+        assert!(
+            try_use_prefix_single(
+                &["    use crate::old::Thing;"],
+                &["    use crate::new::Thing;"],
+                "f.rs",
+                Some(pre_body),
+                &[2],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "fn-body use must stay ordinary"
+        );
+        // Parent mismatch (two renamed segments) stays ordinary.
+        let pre_mm = "use crate::old::Thing;\n";
+        assert!(
+            try_use_prefix_single(
+                &["use crate::old::Thing;"],
+                &["use other::new::Thing;"],
+                "f.rs",
+                Some(pre_mm),
+                &[1],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "parent mismatch must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn use_prefix_single_fires_through_grouped_tail() {
+        // Grouped/glob/`as` tails ride verbatim (target-side freedom,
+        // SPEC 14.9) — the tail segment is textually equal.
+        let pre = "use crate::old::{A, B};\n";
+        let mut used = Vec::new();
+        let out = try_use_prefix_single(
+            &["use crate::old::{A, B};"],
+            &["use crate::new::{A, B};"],
+            "f.rs",
+            Some(pre),
+            &[1],
+            &mut used,
+        )
+        .expect("grouped tail must fire");
+        assert!(out.contains("- use crate::old\n"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&format!("{}\n{out}", crate::git_header("f.rs")))
+            .expect("emission must parse with header");
+        let mut files = std::collections::HashMap::new();
+        files.insert("f.rs".to_string(), pre.to_string());
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "use crate::new::{A, B};\n");
+    }
 }

@@ -132,6 +132,22 @@ pub(crate) fn compress_balanced_pair_body(
             declined_guard(declined, "type_sweep", "precision-guard");
             used_rules.truncate(checkpoint);
         }
+        // WI-3 slice 1: single-pair use-prefix single under the
+        // precision guard (uniqueness proved by `use_holds` at n=1
+        // plus the T361 byte-compare inside; `guard_for("use_prefix")`
+        // stays Strict for multis).
+        if let Some(single) = attempt(
+            declined,
+            "use_prefix",
+            super::try_use_prefix_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + super::PRECISION_GUARD {
+                return Some((body.to_string(), "use_prefix"));
+            }
+            declined_guard(declined, "use_prefix", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
         // WI-7 slice-6: bare-call arg-template wrap single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,

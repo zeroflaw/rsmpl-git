@@ -1312,22 +1312,27 @@ fn pins_early(name: &str, native_input: &str, semantic: &str) {
             native_input.len()
         );
     } else if name == "43-single-use-stays-ordinary" {
-        // T482: single use-prefix site veto full-cycle miniature --
-        // one `use crate::old::Thing;` -> `new::Thing` line costs more
-        // as a semantic hunk (rule + scope overhead) than the one
-        // ordinary hunk it replaces, so no rule= hunks: pure ordinary
-        // passthrough, still shorter via 0-context + header collapse.
-        // Veto side of fixture 16 (3-site use_old_to_new fire).
+        // WI-3 slice 1: the single use-prefix site now raises as a
+        // `use_prefix` allow-one single (uniqueness proved by
+        // `use_holds` at n=1 + the T361 byte-compare) — the T482
+        // ordinary veto is retired. Fire side of fixture 16's 3-site
+        // sweep: one proved site, same intent.
+        // (Fixture name is historical: it pinned the T482 veto.)
         assert!(
-            !semantic.contains("rule="),
-            "single use-prefix edit must stay ordinary, got: {semantic}"
+            semantic.contains("rule=r1"),
+            "single use-prefix now fires, got: {semantic}"
         );
-        let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
-        assert!(context.is_empty(), "zero-context, got: {context:?}");
-        let normalized = normalize_native(native_input);
         assert!(
-            semantic == normalized,
-            "[{name}] ordinary passthrough must equal normalized native"
+            semantic.contains("- use crate::old\n"),
+            "prefix minus must fire, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("+ use crate::new\n"),
+            "prefix plus must fire, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("old::Thing;"),
+            "full use line must be consumed by the prefix pair, got: {semantic}"
         );
     } else if name == "44-single-slot-fires" {
         // T482: single slot-sweep site with a long signature fires --

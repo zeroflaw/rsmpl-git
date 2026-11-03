@@ -106,7 +106,7 @@ pub(crate) use let_single::{
     try_hetero_pair_window_single, try_pat_swap_single, try_typed_wrap_single,
     try_untyped_wrap_single,
 };
-pub(crate) use prefix::try_use_prefix_sweep;
+pub(crate) use prefix::{try_use_prefix_single, try_use_prefix_sweep};
 pub(crate) use slot::try_fn_slot_sweep;
 pub(crate) use trait_methods::try_inherent_method_rename;
 pub(crate) use trait_methods::try_trait_method_rename;

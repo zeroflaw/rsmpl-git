@@ -350,6 +350,7 @@ const CYCLE_OK: &[&str] = &[
     "76-impl-filter-B",
     "10-impl-rename",
     "113-sig-evolve-single",
+    "102-use-rename-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -428,11 +429,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "97-macro-sweep-single",
         "t375: single-site macro-sweep rewrite re-infers ordinary",
     ),
-    (
-        "102-use-rename-single",
-        "t375: single-site use-rename rewrite re-infers ordinary",
-    ),
-
     (
         "112-trait-sweep-single",
         "t375: single-site trait-sweep rewrite re-infers ordinary",
