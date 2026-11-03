@@ -332,3 +332,55 @@ fn directive_inventory_sync() {
         "suggest_bare ALL must equal KEYS ∪ BARE: run `python3 tools/gen_directives.py --check`"
     );
 }
+
+/// WI-24 slice 2: error-code inventory coverage gate — the engine is the
+/// single source of error-code truth (`ErrorCode::as_str`), SPEC 25 plus
+/// the AGENTS.md / SKILL.md "Errors: code → fix" tables must cover every
+/// code. Mirrors `python3 tools/gen_errors.py --check` (same layering as
+/// `directive_inventory_sync`); both layers are mutation-checked.
+#[test]
+fn error_inventory_sync() {
+    let root = workspace_root();
+    let errors = std::fs::read_to_string(root.join("crates/rsmpl_patch/src/errors.rs"))
+        .expect("errors.rs must be readable");
+    let spec = std::fs::read_to_string(root.join("SPEC.md")).expect("SPEC.md must be readable");
+    let agents =
+        std::fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must be readable");
+    let skill = std::fs::read_to_string(root.join("skills/gitrs/SKILL.md"))
+        .expect("SKILL.md must be readable");
+
+    // `ErrorCode::as_str` arms: `Self::X => "CODE_CONFLICT"`.
+    let mut codes = Vec::new();
+    let mut rest = errors.as_str();
+    while let Some(a) = rest.find("=> \"") {
+        let tail = &rest[a + 4..];
+        let end = tail.find('"').expect("code closing quote");
+        let code = tail[..end].to_string();
+        if code.ends_with("CONFLICT") {
+            codes.push(code);
+        }
+        rest = &tail[end + 1..];
+    }
+    assert!(!codes.is_empty(), "ErrorCode arms parsed empty");
+    let mut seen = std::collections::BTreeSet::new();
+    for c in &codes {
+        assert!(
+            seen.insert(c.clone()),
+            "duplicate error code `{c}`: run `python3 tools/gen_errors.py --check`"
+        );
+    }
+    for c in &codes {
+        assert!(
+            spec.contains(c),
+            "SPEC 25 must cover error code `{c}`: run `python3 tools/gen_errors.py --check`"
+        );
+        assert!(
+            agents.contains(c),
+            "AGENTS.md error table must cover code `{c}`: run `python3 tools/gen_errors.py --check`"
+        );
+        assert!(
+            skill.contains(c),
+            "SKILL.md error table must cover code `{c}`: run `python3 tools/gen_errors.py --check`"
+        );
+    }
+}
