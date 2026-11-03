@@ -9528,7 +9528,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     the attr/doc line rides an ordinary plus-prefix leftover hunk above
     the paste (the T432b prefix shape — no new spelling, no engine
     change). Removed / replaced / multi-line attrs, `//!` / `/* */`
-    docs, and rename+attr (two deltas) stay ordinary.
+    docs, and rename+attr (two deltas) stay ordinary — removed by
+    construction under the engine whole-span cut law (slice 4: `- I`
+    matches the full item span including attrs, so a bare-span cut
+    matches nothing while a full-span cut captures the attr a bare
+    paste would replay; stripping needs sub-span-cut or
+    strip-on-paste engine work).
        Everything else (other item kinds, other attr deltas, vis+body combos
        without a signature delta, two-slot signature+body combos,
        trait-`impl` moves, shadowed-body

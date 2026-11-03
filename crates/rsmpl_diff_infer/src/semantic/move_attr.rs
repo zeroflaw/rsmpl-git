@@ -15,8 +15,9 @@
 //! Scope is deliberately narrow: any move-eligible item kind, exactly
 //! one added single-line `#[...]` or `///` line. Removed / replaced /
 //! multi-line attrs, `/* */` / `//!` docs, and rename+attr (two
-//! deltas) all decline to ordinary (pinned below) — later WI-14
-//! slices own those axes.
+//! deltas) all decline to ordinary (pinned below; slice 4 proves the
+//! removed mirror needs engine work — the whole-span cut law — so it
+//! stays ordinary by construction). Later WI-14 slices own those axes.
 
 use syn::spanned::Spanned;
 
@@ -231,8 +232,14 @@ mod tests {
 
     #[test]
     fn attr_removed_stays_ordinary() {
-        // Minus `#[a]+fn`, plus bare `fn`: the bare paste would replay
-        // the captured attr — decline (later slice strips on paste).
+        // Minus `#[a]+fn`, plus bare `fn`: stays ordinary BY
+        // CONSTRUCTION (WI-14 slice 4 span law). The engine whole-span
+        // cut law blocks the T432c mirror: `- I` matches the full item
+        // span *including* attrs, so a bare-span cut matches nothing
+        // (probed: `no match found — nearest fn foo at line 3`), while
+        // a full-span cut captures the attr and a bare `+ M1` paste
+        // would replay it. Stripping needs engine work (sub-span cut
+        // or strip-on-paste) — a future WI-14 slice owns it.
         let big = big_fn("foo");
         let minus_item = format!("#[inline]\n{big}");
         let a_old = format!("fn keep() {{}}\n{minus_item}");
@@ -458,5 +465,59 @@ mod tests {
             .collect();
         assert!(!plus_run_is_attr_added_item(&plain, 1, 2));
         assert!(!plus_run_is_attr_added_item(&body, 0, 2));
+    }
+
+    #[test]
+    fn doc_removed_struct_stays_ordinary_span_law() {
+        // Struct twin of the span-law veto: `///`-doc removal rides the
+        // same whole-span cut law (non-fn spans likewise include attrs),
+        // so any move-eligible kind stays ordinary on the removed axis.
+        let mut strukt = String::from("struct Big {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let minus_item = format!("/// Big container.\n{strukt}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = strukt.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "doc-removed move must stay ordinary (engine span law)"
+        );
+    }
+
+    #[test]
+    fn two_attrs_removed_stays_ordinary() {
+        // Exactly one removed line: two removed attrs decline.
+        let big = big_fn("foo");
+        let minus_item = format!("#[inline]\n#[allow(dead_code)]\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "two removed attrs must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn multiline_attr_removed_stays_ordinary() {
+        // The removed attr must fit on one line.
+        let big = big_fn("foo");
+        let minus_item = format!("#[allow(\n    clippy::all,\n)]\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = big.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "multi-line removed attr must stay ordinary"
+        );
     }
 }
