@@ -48,6 +48,7 @@ mod ordinary;
 mod plan;
 mod plan_cut;
 mod plan_dispatch;
+mod plan_inner;
 mod plan_symbol;
 mod postcheck;
 mod postcheck_assoc;
@@ -238,22 +239,18 @@ pub fn apply_patch_to_tree(
 
 #[cfg(test)]
 mod tests {
-    /// WI-22 slice 1 gate: unit tests stay inline (`mod tests` at the
+    /// WI-22 slice 2b gate: unit tests stay inline (`mod tests` at the
     /// bottom of the owning file). No `*_tests.rs` sibling may reappear
     /// under `crates/*/src/` and no `src/**/*.rs` may carry
     /// `#[path = "*_tests.rs"]`. Integration/e2e files under `tests/`
     /// are explicitly exempt.
     #[test]
     fn wi22_no_exiled_sibling_tests() {
-        // Slice-2a allow-list (deferred to slice 2b, which needs a
-        // production split of single-`fn apply_inner` first): only the
-        // plan family still holds an exiled sibling.
-        let allowed: std::collections::HashSet<&str> = [
-            "crates/rsmpl_engine/src/plan_tests.rs",
-            "crates/rsmpl_engine/src/plan.rs",
-        ]
-        .into_iter()
-        .collect();
+        // Slice 2b: allow-list empty — the plan family is homed
+        // (`plan_inner.rs` holds `apply_inner`, `plan_tests.rs` is
+        // inline in `plan.rs`). Any future `*_tests.rs` sibling or
+        // `#[path]` exile fails here.
+        let allowed: std::collections::HashSet<&str> = [].into_iter().collect();
         let root = workspace_root();
         let mut offenders: Vec<String> = Vec::new();
         for dir in ["crates", "bin"] {
