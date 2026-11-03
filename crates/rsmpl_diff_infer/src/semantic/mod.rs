@@ -52,6 +52,7 @@ mod macros;
 mod member;
 mod method_subline;
 mod methods;
+mod move_attr;
 mod move_collection;
 mod move_evolve;
 mod move_evolve_container;

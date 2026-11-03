@@ -9522,7 +9522,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     assoc-item-name vetoes (a method/const/type named `Old` lives in
     another namespace); trait-impls (`impl Tr for Ty`) stay ordinary
     (WI-3 owns that header).
-       Everything else (other item kinds, attr deltas, vis+body combos
+    WI-14 slice 1 pairs `fn` moves gaining exactly one single-line
+    `#[...]` attr line while every other slot stays token-equal: the
+    cut + bare paste carry the move while the attr line rides an
+    ordinary plus-prefix leftover hunk above the paste (the T432b
+    prefix shape — no new spelling, no engine change). Removed /
+    replaced / multi-line / doc-comment attrs, non-`fn` kinds, and
+    rename+attr (two deltas) stay ordinary.
+       Everything else (other item kinds, other attr deltas, vis+body combos
        without a signature delta, two-slot signature+body combos,
        trait-`impl` moves, shadowed-body
        renames the pairing scanner disagrees with, single-line items)
