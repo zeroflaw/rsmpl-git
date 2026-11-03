@@ -34,7 +34,9 @@ use rsmpl_patch::{
     canonicalize_with_spans_parsed, parse_patch, Directive, Hunk, MetavarKind, ParseError,
 };
 
-use crate::single_site_eq::{post_tree_key, unify_single_site_verbatim_to_literal};
+use crate::single_site_eq::{
+    post_tree_key, unify_fn_filter_single_to_concrete, unify_single_site_verbatim_to_literal,
+};
 
 /// Canonicalize `patch_text` against the pre-image tree `pre`
 /// (repo-relative path → file text).
@@ -144,6 +146,10 @@ pub fn canonicalize_with_tree(
             &mut unified_spans,
             &raw_spans,
         );
+        // WI-2 slice 2: filtered fn-rename singles (impl/trait filter +
+        // `(...)`-family pair) unify to the shared concrete inline
+        // form under the same single-site + re-prove discipline.
+        unify_fn_filter_single_to_concrete(&mut patch, pre, post, &mut unified_spans, &raw_spans);
         let mut check = seeded;
         let same = crate::apply_patch_to_tree(&mut check, &patch).is_ok()
             && post_tree_key(&check) == post_tree_key(post);
@@ -1867,5 +1873,88 @@ mod tests {
         let a = canonicalize_with_tree(holed, &p).unwrap();
         let b = canonicalize_with_tree(literal, &p).unwrap();
         assert_ne!(a, b, "multi-delta lines never unify:\n{a}\nvs\n{b}");
+    }
+
+    const IMPL_TWIN_PRE: &str =
+        "struct A;\nstruct B;\nimpl A {\n    fn old(&self) {}\n}\nimpl B {\n    fn old(&self) {}\n}\n";
+
+    #[test]
+    fn wi2_filter_fn_single_unifies_to_concrete_inline() {
+        // WI-2 slice 2: the filtered fn-single arm. The authored sweep
+        // (concrete pair + full frame) and the inferred compact diet
+        // single prove the same one line site; both canonicalize to
+        // the shared filter + concrete inline form.
+        let p = pre(&[("src/lib.rs", IMPL_TWIN_PRE)]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=sweep\n# scope=file\n# allow=many\n  impl A {\n-     fn old(...) {\n+     fn new(...) {\n          ...\n      }\n  }\n";
+        let inferred = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n  impl A {\n-     V Q fn old G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("-     fn old(...) { ... }\n+     fn new(...) { ... }\n"),
+            "concrete inline form:\n{a}"
+        );
+        assert!(a.contains("impl A {"), "filter kept:\n{a}");
+        assert!(
+            !a.lines().any(|l| l.trim() == "..."),
+            "pure frame lines dropped:\n{a}"
+        );
+        // Tree legs close: one site, one post-tree on both legs.
+        let ka = single_site_post_key(&p, authored).expect("authored applies");
+        let kb = single_site_post_key(&p, inferred).expect("inferred applies");
+        assert_eq!(ka, kb, "same single site, same post-tree");
+    }
+
+    #[test]
+    fn wi2_filter_fn_two_site_twin_stays_divergent() {
+        // Negative control: both twins renamed (two line sites) — no
+        // single-site premise, the arm declines.
+        let p = pre(&[("src/lib.rs", IMPL_TWIN_PRE)]);
+        let two_site = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# allow=many\n  impl A {\n-     V Q fn old G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n  impl B {\n-     V Q fn old G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n";
+        let one_site = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n  impl A {\n-     V Q fn old G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n";
+        let a = canonicalize_with_tree(two_site, &p).unwrap();
+        let b = canonicalize_with_tree(one_site, &p).unwrap();
+        assert_ne!(a, b, "two sites never unify with one:\n{a}\nvs\n{b}");
+    }
+
+    #[test]
+    fn wi2_filter_fn_hetero_slot_stays_divergent() {
+        // Negative control: name plus a second slot (vis) — the plus
+        // line is not a bare `fn` header, so erasure fails and the arm
+        // declines (the minus still proves the single site).
+        let p = pre(&[("src/lib.rs", IMPL_TWIN_PRE)]);
+        let evo = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n  impl A {\n-     fn old(...) {\n+     pub fn new(...) {\n          ...\n      }\n  }\n";
+        let plain = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n  impl A {\n-     V Q fn old G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n";
+        let a = canonicalize_with_tree(evo, &p).unwrap();
+        let b = canonicalize_with_tree(plain, &p).unwrap();
+        assert_ne!(a, b, "hetero slots never unify:\n{a}\nvs\n{b}");
+    }
+
+    #[test]
+    fn wi2_filter_fn_name_hole_stays_divergent() {
+        // Negative control: the `N` fn-header name hole is a template,
+        // never a rename — never erased to a literal-looking pair.
+        let p = pre(&[("src/lib.rs", IMPL_TWIN_PRE)]);
+        let holed = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n  impl A {\n-     V Q fn N G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n";
+        let plain = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n  impl A {\n-     V Q fn old G (...) W { ... }\n+     V Q fn new G (...) W { ... }\n";
+        let a = canonicalize_with_tree(holed, &p).unwrap();
+        let b = canonicalize_with_tree(plain, &p).unwrap();
+        assert_ne!(a, b, "N-hole never unifies:\n{a}\nvs\n{b}");
+    }
+
+    #[test]
+    fn wi2_filter_fn_filterless_stays_divergent() {
+        // Negative control: no filter line — N3 contraction owns the
+        // filterless case (and the bare target cannot match a
+        // def-with-body anyway). The arm requires ≥1 filter, so the
+        // filterless leg falls back to its pure sweep form while the
+        // filtered leg rewrites.
+        let p = pre(&[("src/lib.rs", IMPL_TWIN_PRE)]);
+        let filterless =
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- fn old(...) {\n+ fn new(...) {\n";
+        let filtered = "diff --git src/lib.rs\n@@ -4,1 @@ rule=r1\n  impl A {\n-     fn old(...) { ... }\n+     fn new(...) { ... }\n";
+        let a = canonicalize_with_tree(filterless, &p).unwrap();
+        let b = canonicalize_with_tree(filtered, &p).unwrap();
+        assert_ne!(a, b, "filterless never joins the filter arm:\n{a}\nvs\n{b}");
     }
 }

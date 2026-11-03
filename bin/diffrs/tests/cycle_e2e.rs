@@ -346,6 +346,9 @@ const CYCLE_OK: &[&str] = &[
     "69-typehole-path",
     "82-const-block-single",
     "117-type-rewrite-single",
+    "58-impl-filter",
+    "76-impl-filter-B",
+    "10-impl-rename",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -371,10 +374,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "09-token-tree",
         "t375: single macro invocation re-infers ordinary (macro detector is WI-3)",
-    ),
-    (
-        "10-impl-rename",
-        "t375: single impl method re-infers ordinary",
     ),
     (
         "12-stmt-rewrite",
@@ -413,18 +412,10 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
         "55-infer-wildcard",
         "t442: hetero concrete inits vs uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole; tree legs still close)",
     ),
-    (
-        "58-impl-filter",
-        "t375: single-site impl-filter rename re-infers ordinary",
-    ),
 
     (
         "75-macro-verbatim-single",
         "t375: single-site macro-verbatim rewrite re-infers ordinary",
-    ),
-    (
-        "76-impl-filter-B",
-        "t375: single-site impl-filter rename re-infers ordinary",
     ),
 
     (

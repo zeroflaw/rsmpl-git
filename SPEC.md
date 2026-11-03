@@ -8075,6 +8075,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    the precision guard. Same `slot_holds` totality; a pre-image is
    required (the wide wildcard minus has no section-visible
    evidence without an occurrence count).
+  One-line (`}`-terminated, brace-balanced by whole-item parse,
+  rename-only with byte-identical body) lone method definitions in
+  `impl` blocks compress instead to the compact filtered single
+  (verbatim filter header plus one inline-body
+  `V Q fn Old G (...) W { ... }` pair, no frame, no directives)
+  under the same guard with the four-guard filter-block budget; the
+  file-wide count degrades to the opaque-only veto there (the filter
+  names the block), proved by a scratch-apply of the exact emission.
 - Signature-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header, where the name plus any of
   vis/qualifiers/generics/params/return/where carry one uniform delta
@@ -9795,6 +9803,9 @@ stripping is deliberate. Equalities per origin close the contract:
   divergent with their reasons named; the tree legs still hold and
   one further iteration is a fixed point (`S″ == S′`
   byte-identical).
+  Filtered fn-rename hunks (`impl`/`trait` filter plus `(...)`-family
+  pair) instantiate instead to the shared concrete inline form
+  `fn {name}(...) { ... }`, frame dropped.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
 (144), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
@@ -9804,7 +9815,7 @@ cycle must still be tree-lossless).
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser
-deliberately leaves ordinary (`04`, `06`, `09`, `10`, `13`,
+deliberately leaves ordinary (`04`, `06`, `09`, `13`,
 `19`, `22` — definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
 return-carrying/vis-carrying fn singles still need their slice-2

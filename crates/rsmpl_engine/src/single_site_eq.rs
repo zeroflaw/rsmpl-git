@@ -50,6 +50,225 @@ pub(crate) fn post_tree_key(files: &HashMap<String, String>) -> String {
 /// exactly one distinct line is the gate. The caller keeps the rewrite
 /// only when the unified patch re-proves the identical post-tree.
 ///
+/// WI-2 slice 2 (WI-6 slice 1) filtered fn-single equality lives in
+/// `unify_fn_filter_single_to_concrete` below (same D17 discipline,
+/// disjoint gate: that arm owns filter-carrying hunks, this one owns
+/// context-free pairs).
+pub(crate) fn unify_fn_filter_single_to_concrete(
+    patch: &mut rsmpl_patch::Patch,
+    _pre: &std::collections::HashMap<String, String>,
+    _post: &std::collections::HashMap<String, String>,
+    spans: &mut std::collections::HashMap<(String, String), Vec<(u32, u32)>>,
+    raw_spans: &std::collections::HashMap<(String, String), Vec<(u32, u32)>>,
+) {
+    use std::collections::HashMap;
+    let mut owners: HashMap<(String, String), Vec<(usize, usize)>> = HashMap::new();
+    for (fi, sec) in patch.files.iter().enumerate() {
+        for (hi, hunk) in sec.hunks.iter().enumerate() {
+            if let Hunk::Rsmpl(r) = hunk {
+                owners
+                    .entry((sec.target_path.clone(), r.rule_name()))
+                    .or_default()
+                    .push((fi, hi));
+            }
+        }
+    }
+    let mut keys: Vec<(String, String)> = owners.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        let idxs = &owners[&key];
+        if idxs.len() != 1 {
+            continue;
+        }
+        let Some(s) = single_line_site(spans, raw_spans, &key) else {
+            continue;
+        };
+        let (fi, hi) = idxs[0];
+        // Read-only gate pass: compute the rewrite before any
+        // mutation so a veto leaves the hunk byte-identical.
+        let rewritten: Option<Vec<rsmpl_patch::BodyLine>> = {
+            let sec = &patch.files[fi];
+            if sec.is_rename() {
+                None
+            } else if let Hunk::Rsmpl(r) = &sec.hunks[hi] {
+                gate_fn_filter_single(r)
+            } else {
+                None
+            }
+        };
+        let Some(lines) = rewritten else {
+            continue;
+        };
+        let Hunk::Rsmpl(r) = &mut patch.files[fi].hunks[hi] else {
+            continue;
+        };
+        r.lines = lines;
+        r.header.old_start = s;
+        r.header.old_len = 1;
+        // Diet single: no locality lines (the WI-8 range rule keeps the
+        // single span as the tight actual) and no hole declarations.
+        r.directives.retain(|d| {
+            !matches!(
+                d,
+                Directive::Allow(_)
+                    | Directive::Scope(_)
+                    | Directive::MetaVar {
+                        kind: MetavarKind::Pat | MetavarKind::Type | MetavarKind::Expr,
+                        ..
+                    }
+            )
+        });
+        r.raw_directives.retain(|l| {
+            let t = l.trim_start_matches('#').trim_start();
+            !(t.starts_with("sweep")
+                || t.starts_with("allow")
+                || t.starts_with("scope")
+                || t.starts_with("pat")
+                || t.starts_with("type")
+                || t.starts_with("expr"))
+        });
+        spans.insert(key, vec![(s, s)]);
+    }
+}
+
+/// WI-2 slice 2 gate: `Some(new lines)` when hunk `r` is a filtered
+/// fn-rename single, else `None` (byte-identical). The target derives
+/// from the hunk pair itself; the caller verifies by re-applying.
+fn gate_fn_filter_single(r: &rsmpl_patch::RsmplHunk) -> Option<Vec<rsmpl_patch::BodyLine>> {
+    if !r.directives.iter().all(|d| {
+        matches!(
+            d,
+            Directive::Allow(_)
+                | Directive::Scope(_)
+                | Directive::LangRust
+                | Directive::MetaVar {
+                    kind: MetavarKind::Pat | MetavarKind::Type | MetavarKind::Expr,
+                    ..
+                }
+        )
+    }) {
+        return None;
+    }
+    let mut minus: Vec<usize> = Vec::new();
+    let mut plus: Vec<usize> = Vec::new();
+    let mut saw_filter = false;
+    for (i, l) in r.lines.iter().enumerate() {
+        if l.is_removal() {
+            minus.push(i);
+        } else if l.is_addition() {
+            plus.push(i);
+        } else {
+            let t = l.text.trim();
+            if t == "..." || t == "{" || t == "}" {
+                continue;
+            }
+            if is_filter_header_line(t) {
+                saw_filter = true;
+                continue;
+            }
+            return None;
+        }
+    }
+    if minus.len() != 1 || plus.len() != 1 || !saw_filter {
+        return None;
+    }
+    let (m_indent, m_name, m_rest) = fn_diet_erase(&r.lines[minus[0]].text)?;
+    let (p_indent, p_name, p_rest) = fn_diet_erase(&r.lines[plus[0]].text)?;
+    if m_rest != p_rest || m_rest != "(...) { ... }" || m_name == p_name {
+        return None;
+    }
+    // The `N` fn-header name hole is a template, never a rename.
+    if m_name == "N" || p_name == "N" {
+        return None;
+    }
+    // Declared hole names surviving as bare tokens are not hole
+    // instantiations (same law as the verbatim gate).
+    let declared: Vec<&String> = r
+        .directives
+        .iter()
+        .filter_map(|d| match d {
+            Directive::MetaVar { names, .. } => Some(names),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    for n in &declared {
+        if super::canonical_tree::has_bare_token(&format!("fn {m_name}"), n)
+            || super::canonical_tree::has_bare_token(&format!("fn {p_name}"), n)
+        {
+            return None;
+        }
+    }
+    let mut out: Vec<rsmpl_patch::BodyLine> = Vec::new();
+    for (i, l) in r.lines.iter().enumerate() {
+        if i == minus[0] {
+            let mut nl = l.clone();
+            nl.text = format!("{m_indent}fn {m_name}(...) {{ ... }}");
+            out.push(nl);
+        } else if i == plus[0] {
+            let mut nl = l.clone();
+            nl.text = format!("{p_indent}fn {p_name}(...) {{ ... }}");
+            out.push(nl);
+        } else if is_filter_header_line(l.text.trim()) {
+            out.push(l.clone());
+        }
+        // Pure-frame context lines drop (both legs share the reduced
+        // frame); anything else already vetoed above.
+    }
+    Some(out)
+}
+
+/// `{`-terminated `impl`/`trait` filter header (trimmed): mirrors the
+/// `block_headers.rs` law (cross-crate, so mirrored, not shared —
+/// `unsafe` prefix, word-bounded keyword, `{` terminus; attribute and
+/// comment lines never match).
+fn is_filter_header_line(trimmed: &str) -> bool {
+    if !trimmed.ends_with('{') {
+        return false;
+    }
+    let rest = trimmed.strip_prefix("unsafe ").unwrap_or(trimmed);
+    let body = rest
+        .strip_prefix("impl")
+        .or_else(|| rest.strip_prefix("trait"));
+    let Some(body) = body else {
+        return false;
+    };
+    body.is_empty() || body.starts_with([' ', '\t', '<', '{'])
+}
+
+/// Split a pair line into (indent, fn name, diet-erased rest):
+/// `V Q fn foo G (...) W { ... }` → `("     ", "foo", "(...) { ... }")`,
+/// `fn foo(...) {` → `("", "foo", "(...) { ... }")`. The `(...)`
+/// family only — full concrete signatures stay divergent (a future
+/// slice may widen). `None` for non-header shapes.
+fn fn_diet_erase(line_text: &str) -> Option<(String, String, String)> {
+    let trimmed = line_text.trim_start();
+    let indent_len = line_text.len() - trimmed.len();
+    let indent = line_text[..indent_len].to_string();
+    let (vq, t) = match trimmed.strip_prefix("V Q ") {
+        Some(r) => (true, r),
+        None => (false, trimmed),
+    };
+    let t = t.strip_prefix("fn ")?;
+    let name_end = t.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+    let (name, mut rest) = (t[..name_end].to_string(), t[name_end..].to_string());
+    if name.is_empty() || name == "N" {
+        return None;
+    }
+    if vq {
+        rest = rest.replace("G (...) W", "(...)");
+    }
+    rest = rest.trim().to_string();
+    // Concrete `(...) {` and inline `(...) { ... }` both erase to the
+    // shared inline target.
+    if rest == "(...) {" || rest == "(...) { ... }" {
+        rest = "(...) { ... }".to_string();
+    } else {
+        return None;
+    }
+    Some((indent, name, rest))
+}
+///
 /// Gates (anything else stays byte-identical): unique `(file, rule)`
 /// key; exactly one distinct `(s, e)` line span with `s == e`;
 /// exactly one minus + one plus line and zero context lines;

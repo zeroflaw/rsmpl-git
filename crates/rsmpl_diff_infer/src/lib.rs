@@ -744,19 +744,23 @@ pub(crate) fn compress_balanced_pair_body(
             // per-hunk, unlike the whole-section arm), so the per-hunk
             // budget is four guards (64) — the same method-run price the
             // whole-section arm (32 + ~37 dropped prelude) and the subhunk
-            // scaled guard pay. The filter header itself is priced per
+            // scaled guard pay. WI-2 slice 2: lone indented `fn_slot_sweep`
+            // singles carry the identical mandatory filter block (compact
+            // inline-body emission) under the same proof, so they ride
+            // the same budget. The filter header itself is priced per
             // emission (`filter_header_excess`): a long enclosing `impl`
             // header contributes exactly its surplus over the measured
             // baseline, so only the proof anchor scales, never the guard.
             let wins = if minuses.len() == 1 {
                 match semantic::guard_for(detector) {
                     semantic::Guard::Precision => {
-                        let allow =
-                            if detector == "sig_evolution" && minuses[0].starts_with([' ', '\t']) {
-                                semantic::PRECISION_GUARD * 4 + semantic::filter_header_excess(body)
-                            } else {
-                                semantic::PRECISION_GUARD
-                            };
+                        let filtered_single = minuses[0].starts_with([' ', '\t'])
+                            && (detector == "sig_evolution" || detector == "fn_slot_sweep");
+                        let allow = if filtered_single {
+                            semantic::PRECISION_GUARD * 4 + semantic::filter_header_excess(body)
+                        } else {
+                            semantic::PRECISION_GUARD
+                        };
                         body.len() <= hunk_len + allow
                     }
                     semantic::Guard::Strict => body.len() < hunk_len,
@@ -1905,6 +1909,39 @@ mod tests {
         assert_eq!(detector, "sig_evolution");
         assert!(body.contains("- fn alpha(...) {"), "got:\n{body}");
         assert!(body.contains("+ pub fn alpha(...) {"), "got:\n{body}");
+    }
+
+    #[test]
+    fn per_hunk_one_line_method_single_fires_at_method_budget() {
+        // WI-2 slice 2 (WI-6 slice 1): a lone one-line method single
+        // with an untouched same-name twin in another block fires
+        // per-hunk under the ×4 filter-block budget (same mandatory
+        // WI-4a block as the sig_evolution method single, same proof).
+        let pre = "struct A;\nstruct B;\nimpl A {\n    fn old(&self) {}\n}\nimpl B {\n    fn old(&self) {}\n}\n";
+        let pair_native = "@@ -4,1 +4,1 @@\n-    fn old(&self) {}\n+    fn new(&self) {}\n";
+        let (body, detector) = compress_balanced_pair_body(
+            &["    fn old(&self) {}"],
+            &["    fn new(&self) {}"],
+            "f.rs",
+            Some(pre),
+            &[4],
+            pair_native.len(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .expect("one-line method single must fire per-hunk at the method budget");
+        assert_eq!(detector, "fn_slot_sweep");
+        for want in [
+            "impl A {",
+            "-     V Q fn old G (...) W { ... }\n",
+            "+     V Q fn new G (...) W { ... }\n",
+        ] {
+            assert!(body.contains(want), "missing {want:?}, got:\n{body}");
+        }
+        assert!(
+            !body.contains("# allow=many"),
+            "lone site needs no allow, got:\n{body}"
+        );
     }
 
     #[test]

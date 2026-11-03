@@ -538,6 +538,21 @@ pub(crate) fn slot_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
+/// WI-6 slice 1: opaque-interior veto without the file-wide count. A
+/// lone filtered method single names its block via the WI-4a filter,
+/// so same-name methods in other blocks are outside the match domain
+/// (the per-emission scratch proves the site set) — but macro bodies
+/// and string literals hiding the minus text over the changed lines
+/// still veto. `None` pre-image is clear (same posture as
+/// `slot_holds`; the N=1 single path declines missing pre-images
+/// before it ever reaches here).
+pub(crate) fn no_opaque_hits(file_old: Option<&str>, minuses: &[&str], changed: &[usize]) -> bool {
+    let Some(file) = parse_pre(file_old) else {
+        return file_old.is_none();
+    };
+    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+}
+
 /// N-site let type-addition totality (WI-4a): untyped with-init
 /// no-diverge `Stmt::Local` statements occur exactly `minuses.len()`
 /// times. The emitted minus template `let P0 = E0;` matches every such
@@ -1613,5 +1628,33 @@ mod tests {
         assert!(crate::totality::covers_changed(8, 10, &[9]));
         assert!(!crate::totality::covers_changed(4, 4, &[2, 9]));
         assert!(!crate::totality::covers_changed(2, 3, &[4]));
+    }
+
+    #[test]
+    fn no_opaque_hits_clears_and_vetoes() {
+        // WI-6 slice 1: the count-free veto — clear pre-images pass,
+        // a macro body hiding the minus text over the changed line
+        // vetoes (T411 cover law: the container must span the changed
+        // line), `None` pre-image declines.
+        let clear = "struct A;\nimpl A {\n    fn old(&self) {}\n}\n";
+        assert!(crate::totality::no_opaque_hits(
+            Some(clear),
+            &["    fn old(&self) {}"],
+            &[3]
+        ));
+        let macro_hit = "macro_rules! m {\n    () => {\n        fn old(&self) {}\n    };\n}\n";
+        assert!(!crate::totality::no_opaque_hits(
+            Some(macro_hit),
+            &["        fn old(&self) {}"],
+            &[3]
+        ));
+        // `None` pre-image is clear (same posture as `slot_holds` —
+        // the N=1 single path declines missing pre-images before it
+        // ever reaches here).
+        assert!(crate::totality::no_opaque_hits(
+            None,
+            &["    fn old(&self) {}"],
+            &[3]
+        ));
     }
 }
