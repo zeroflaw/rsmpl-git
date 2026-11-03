@@ -1,4 +1,5 @@
-//! WI-12 cross-file assoc + trait-method intent sweeps (SPEC D.4).
+//! WI-12 cross-file assoc + trait-method + inherent-method intent
+//! sweeps (SPEC D.4).
 //!
 //! Whole-patch pre-passes joining definition pairs spread across files
 //! with same-delta use lines into one shared-rule intent. The lowering
@@ -20,6 +21,13 @@
 //!   files). The single-hunk fast path is deliberately omitted: it only
 //!   suffices when one hunk owns every def, which is the same-file
 //!   detector's shape.
+//! - `try_inherent_method_intent_sweep`: method def pairs uniform in
+//!   one ident delta, every def in an inherent `impl` block of one
+//!   self type (last-segment discipline) across files, plus anchored
+//!   call lines. Single-hunk shape only (document-first impl block +
+//!   `# follow=uses` claims every same-self-type def + call
+//!   workspace-wide); def-only classes stay with the per-section
+//!   detector.
 //!
 //! Totality in both is the `item_intent`-posture workspace
 //! scratch-apply probe: the emission applied to a `pre` clone must show
@@ -816,8 +824,248 @@ pub(crate) fn try_trait_method_intent_sweep(
     Some((out, def_path, rule))
 }
 
-/// WI-12 entry for `mod.rs`: assoc then trait-method cross-file sweeps
-/// with provenance commits. Keeps the `mod.rs` wire delta to one call.
+/// Whole-patch cross-file inherent-method intent: method def pairs
+/// uniform in one ident delta, every def in an inherent `impl` block of
+/// one self type (last-segment discipline) across files, plus anchored
+/// call lines. One shared-rule intent. Returns the rebuilt section list
+/// plus the definition path and rule.
+/// Single-hunk shape only (mirrors the trait-method WI-3 shape): the
+/// document-first impl-block hunk carries `# follow=uses`; the engine
+/// inherent follow already claims every same-self-type `impl S` def +
+/// anchored calls workspace-wide (WI-6/WI-10), so sibling def hunks
+/// would double-claim and fail the probe. A failed single-hunk probe
+/// declines to ordinary, never a def-only partial.
+pub(crate) fn try_inherent_method_intent_sweep(
+    sections: &[String],
+    pre: &HashMap<String, String>,
+    used_rules: &mut Vec<String>,
+) -> Option<(Vec<String>, String, String)> {
+    let checkpoint = used_rules.len();
+    let (hunks, pairs, pair_hunk, preserved, native_lens, sec_paths) = harvest(sections)?;
+    let mut old_name: Option<String> = None;
+    let mut new_name: Option<String> = None;
+    let mut terms: Vec<Option<char>> = Vec::with_capacity(pairs.len());
+    let mut is_def: Vec<bool> = Vec::with_capacity(pairs.len());
+    for pair in &pairs {
+        if let Some((o, n, term)) = super::trait_methods::trait_rename_pair(&pair.minus, &pair.plus)
+        {
+            if old_name.as_ref().is_some_and(|c| *c != o) {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+            if new_name.as_ref().is_some_and(|c| *c != n) {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+            old_name = Some(o);
+            new_name = Some(n);
+            terms.push(Some(term));
+            is_def.push(true);
+        } else {
+            terms.push(None);
+            is_def.push(false);
+        }
+    }
+    let (old_name, new_name) = (old_name?, new_name?);
+    if old_name == new_name {
+        return None;
+    }
+    // Inherent definitions are bodies (`{`); a `;` pair is a trait
+    // decl (the trait sweep's domain, not this one). Single-line `}`
+    // defs arrive normalized to `{` by `trait_rename_pair`.
+    for t in terms.iter().flatten() {
+        if *t != '{' {
+            return None;
+        }
+    }
+    let all_indented = pairs.iter().all(|p| p.minus.starts_with([' ', '\t']));
+    let plus_indented = pairs.iter().all(|p| p.plus.starts_with([' ', '\t']));
+    if !all_indented || !plus_indented {
+        return None;
+    }
+    // Domain: every def site in an inherent `impl` block of one
+    // self type. Trait blocks and `impl <T> for _` blocks veto
+    // (different items, D9 — the trait sweep owns those).
+    let mut domain: Option<String> = None;
+    let mut def_sites: Vec<(String, usize)> = Vec::new();
+    for (i, pair) in pairs.iter().enumerate() {
+        if !is_def[i] {
+            continue;
+        }
+        let pre_text = pre.get(&pair.path)?;
+        if super::trait_methods::in_trait_block(pre_text, pair.site)
+            || !super::trait_methods::site_in_inherent_impl(pre_text, pair.site)
+        {
+            return None;
+        }
+        let self_ty = super::trait_methods::inherent_self_ident_for_site(pre_text, pair.site)?;
+        if domain.as_ref().is_some_and(|d| *d != self_ty) {
+            return None;
+        }
+        domain = Some(self_ty);
+        def_sites.push((pair.path.clone(), pair.site));
+    }
+    if def_sites.is_empty() {
+        return None;
+    }
+    let _domain = domain?;
+    // Hunk-level claiming mirrors the trait sweep: def hunks hold
+    // def pairs (co-residents must be claimable calls); other hunks
+    // all-claimable. Unclaimable lines stay ordinary leftovers.
+    let mut hunk_pairs: Vec<Vec<usize>> = vec![Vec::new(); hunks.len()];
+    for (pi, hi) in pair_hunk.iter().enumerate() {
+        hunk_pairs[*hi].push(pi);
+    }
+    let def_pair_set: HashSet<(String, usize)> = def_sites.iter().cloned().collect();
+    let call_gate = |pi: usize| -> bool {
+        if is_def[pi] {
+            return true;
+        }
+        let pair = &pairs[pi];
+        pair.minus.trim() != pair.plus.trim()
+            && contains_ident(&pair.minus, &old_name)
+            && contains_ident(&pair.plus, &new_name)
+    };
+    let is_def_hunk = |pis: &[usize]| -> bool {
+        pis.iter().any(|pi| {
+            is_def[*pi] && def_pair_set.contains(&(pairs[*pi].path.clone(), pairs[*pi].site))
+        })
+    };
+    for pis in &hunk_pairs {
+        if is_def_hunk(pis) {
+            for pi in pis {
+                if !call_gate(*pi) {
+                    return None;
+                }
+            }
+        }
+    }
+    let mut claimed_hunks: HashSet<usize> = HashSet::new();
+    for (hi, pis) in hunk_pairs.iter().enumerate() {
+        if pis.is_empty() {
+            continue;
+        }
+        if is_def_hunk(pis) || pis.iter().all(|pi| call_gate(*pi)) {
+            claimed_hunks.insert(hi);
+        }
+    }
+    // Def-only classes stay with the per-section slot sweep; the
+    // follow needs at least one call to ride (same rule as the
+    // single-file inherent detector).
+    let mut claimed_def = false;
+    let mut claimed_call = false;
+    for hi in claimed_hunks.iter() {
+        for pi in &hunk_pairs[*hi] {
+            if is_def[*pi] {
+                claimed_def = true;
+            } else {
+                claimed_call = true;
+            }
+        }
+    }
+    if !claimed_def || !claimed_call {
+        return None;
+    }
+    if single_section_pure(&hunks, &claimed_hunks, &preserved) {
+        return None;
+    }
+    // Group def sites by impl block across files, document order.
+    let mut per_file: HashMap<String, Vec<usize>> = HashMap::new();
+    for (path, site) in &def_sites {
+        per_file.entry(path.clone()).or_default().push(*site);
+    }
+    let mut groups: Vec<(String, String, Vec<usize>)> = Vec::new();
+    let mut files: Vec<String> = per_file.keys().cloned().collect();
+    files.sort();
+    for path in files {
+        let mut sites = per_file.remove(&path).unwrap_or_default();
+        sites.sort_unstable();
+        let pre_text = &pre[&path];
+        let gs = super::block_headers::group_sites_by_impl_block(Some(pre_text), &sites)?;
+        for g in gs {
+            groups.push((path.clone(), g.header_line, g.sites));
+        }
+    }
+    let mut sec_order: HashMap<String, usize> = HashMap::new();
+    for pair in &pairs {
+        sec_order.entry(pair.path.clone()).or_insert(pair.sec);
+    }
+    groups.sort_by_key(|(p, _, sites)| {
+        (
+            sec_order.get(p).copied().unwrap_or(usize::MAX),
+            sites.first().copied().unwrap_or(usize::MAX),
+        )
+    });
+    let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
+    let (first_path, first_header, first_sites) = groups.first().cloned()?;
+    let minus_fn = format!("V Q fn {old_name} G (...) W {{");
+    let plus_fn = format!("V Q fn {new_name} G (...) W {{");
+    let first_pre = &pre[&first_path];
+    if !super::block_headers::probe_block_hunk(
+        &first_path,
+        first_pre,
+        &first_header,
+        &minus_fn,
+        &plus_fn,
+        first_sites.len(),
+    ) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    let mut sec = item_emission_header(&first_path, &rule, Some(first_pre), &first_sites);
+    sec.push_str("# follow=uses\n");
+    sec.push_str(&super::block_headers::block_hunk_body(
+        &first_header,
+        &minus_fn,
+        &plus_fn,
+    ));
+    let mut claimed_idx: Vec<usize> = Vec::new();
+    for hi in claimed_hunks.iter() {
+        claimed_idx.extend(hunk_pairs[*hi].iter().copied());
+    }
+    claimed_idx.sort_unstable();
+    let claimed: Vec<Pair> = claimed_idx
+        .iter()
+        .map(|pi| Pair {
+            sec: pairs[*pi].sec,
+            path: pairs[*pi].path.clone(),
+            minus: pairs[*pi].minus.clone(),
+            plus: pairs[*pi].plus.clone(),
+            site: pairs[*pi].site,
+        })
+        .collect();
+    for pair in &claimed {
+        if !pre.contains_key(&pair.path) {
+            used_rules.truncate(checkpoint);
+            return None;
+        }
+    }
+    let joined = sec.clone();
+    if !probe_reproduces(pre, &joined, &claimed) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    if !byte_win(&joined, &hunks, &claimed_hunks, &native_lens, &preserved) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    let mut emissions: HashMap<String, String> = HashMap::new();
+    emissions.insert(first_path.clone(), sec);
+    let def_path = first_path.clone();
+    let out = rebuild(
+        sections,
+        &hunks,
+        &claimed_hunks,
+        &preserved,
+        &sec_paths,
+        &emissions,
+    );
+    Some((out, def_path, rule))
+}
+
+/// WI-12 entry for `mod.rs`: assoc, trait-method, then inherent-method
+/// cross-file sweeps with provenance commits. Keeps the `mod.rs` wire
+/// delta to one call.
 pub(crate) fn try_cross_intents(
     sections: &[String],
     pre: &HashMap<String, String>,
@@ -852,6 +1100,23 @@ pub(crate) fn try_cross_intents(
             &def_path,
             "trait_method_rename",
             before_tm,
+            used_rules.as_slice(),
+            pre,
+            compressed_any,
+        );
+        fired = true;
+    }
+    let before_inh = used_rules.len();
+    if let Some((rewritten, def_path, _)) =
+        try_inherent_method_intent_sweep(&current, pre, used_rules)
+    {
+        current = super::prov::commit_pre_pass(
+            prov,
+            &current,
+            rewritten,
+            &def_path,
+            "inherent_method_rename",
+            before_inh,
             used_rules.as_slice(),
             pre,
             compressed_any,
@@ -1176,7 +1441,7 @@ mod tests {
     #[test]
     fn trait_method_third_file_off_diff_call_vetoes() {
         let mut sections = tm_sections();
-        sections.push(section("c.rs", "@@ -1,1 +1,1 @@\n-// touch\n+// touch2\n"));
+        sections.push(section("c.rs", "@@ -1,1 +1,1@@\n-// touch\n+// touch2\n"));
         let pre = pre_map(&[
             ("a.rs", TM_A),
             ("b.rs", TM_B),
@@ -1190,6 +1455,153 @@ mod tests {
         // fails and the whole intent stays ordinary.
         let mut used = Vec::new();
         assert!(try_trait_method_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    const INH_A: &str =
+        "struct S;\nimpl S {\n    fn old(&self) {\n        let _ = self;\n    }\n}\n";
+    const INH_B: &str = "fn f(s: S) {\n    s.old();\n}\n";
+
+    fn inh_sections() -> Vec<String> {
+        vec![
+            section(
+                "a.rs",
+                "@@ -3,1 +3,1@@\n-    fn old(&self) {\n+    fn new(&self) {\n",
+            ),
+            section("b.rs", "@@ -2,1 +2,1@@\n-    s.old();\n+    s.new();\n"),
+        ]
+    }
+
+    #[test]
+    fn inherent_cross_file_fires_one_intent() {
+        let sections = inh_sections();
+        let pre = pre_map(&[("a.rs", INH_A), ("b.rs", INH_B)]);
+        let mut used = Vec::new();
+        let (out, path, _) =
+            try_inherent_method_intent_sweep(&sections, &pre, &mut used).expect("must fire");
+        assert_eq!(path, "a.rs");
+        // Single-hunk shape: the impl hunk + follow owns the remote
+        // call, so the collapsed use section vanishes.
+        assert_eq!(out.len(), 1, "got: {out:?}");
+        assert_eq!(
+            out.iter().filter(|s| s.contains("# follow=uses")).count(),
+            1,
+            "follow exactly once, got: {out:?}"
+        );
+        let joint = out.join("");
+        validated_live(&joint, &pre);
+        let parsed = rsmpl_patch::parse_patch(&joint).unwrap();
+        let mut files = pre.clone();
+        let report = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(
+            report.rules.iter().all(|r| r.orphans.is_empty()),
+            "must verify, got: {:?}",
+            report.rules.iter().map(|r| &r.orphans).collect::<Vec<_>>()
+        );
+        assert!(files["a.rs"].contains("fn new"), "got: {}", files["a.rs"]);
+        assert!(files["b.rs"].contains("s.new()"), "got: {}", files["b.rs"]);
+        assert!(!files["a.rs"].contains("old"), "got: {}", files["a.rs"]);
+        assert!(!files["b.rs"].contains("s.old()"), "got: {}", files["b.rs"]);
+    }
+
+    #[test]
+    fn inherent_cross_file_pipeline_compresses() {
+        let sections = inh_sections();
+        let pre = pre_map(&[("a.rs", INH_A), ("b.rs", INH_B)]);
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("pipeline must compress");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("fn new"), "got:\n{out}");
+        validated_live(&out, &pre);
+        assert!(!out.contains("-    fn old(&self) {"), "got:\n{out}");
+    }
+
+    #[test]
+    fn inherent_two_self_types_veto() {
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -3,1 +3,1@@\n-    fn old(&self) {\n+    fn new(&self) {\n",
+            ),
+            section(
+                "c.rs",
+                "@@ -3,1 +3,1@@\n-    fn old(&self) {\n+    fn new(&self) {\n",
+            ),
+            section("b.rs", "@@ -2,1 +2,1@@\n-    s.old();\n+    s.new();\n"),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", INH_A),
+            (
+                "c.rs",
+                "struct T;\nimpl T {\n    fn old(&self) {\n        let _ = self;\n    }\n}\n",
+            ),
+            ("b.rs", INH_B),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_inherent_method_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn inherent_trait_def_vetoes() {
+        // A `trait`-block decl is the trait sweep's domain, never this one.
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -2,1 +2,1@@\n-    fn old(&self);\n+    fn new(&self);\n",
+            ),
+            section("b.rs", "@@ -2,1 +2,1@@\n-    s.old();\n+    s.new();\n"),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", "trait Tr {\n    fn old(&self);\n}\n"),
+            ("b.rs", INH_B),
+        ]);
+        let mut used = Vec::new();
+        assert!(try_inherent_method_intent_sweep(&sections, &pre, &mut used).is_none());
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn inherent_single_section_declines() {
+        let raw = section(
+            "f.rs",
+            concat!(
+                "@@ -3,1 +3,1@@\n",
+                "-    fn old(&self) {\n",
+                "+    fn new(&self) {\n",
+                "@@ -8,1 +8,1@@\n",
+                "-    s.old();\n",
+                "+    s.new();\n",
+            ),
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "struct S;\nimpl S {\n    fn old(&self) {\n        let _ = self;\n    }\n}\nfn f(s: S) {\n    s.old();\n}\n",
+        )]);
+        let mut used = Vec::new();
+        assert!(
+            try_inherent_method_intent_sweep(std::slice::from_ref(&raw), &pre, &mut used).is_none()
+        );
+        assert!(used.is_empty());
+    }
+
+    #[test]
+    fn inherent_third_file_off_diff_call_vetoes() {
+        let mut sections = inh_sections();
+        sections.push(section("c.rs", "@@ -1,1 +1,1@@\n-// touch\n+// touch2\n"));
+        let pre = pre_map(&[
+            ("a.rs", INH_A),
+            ("b.rs", INH_B),
+            (
+                "c.rs",
+                "// touch\nstruct S2;\nimpl S2 {\n    fn old(&self) {\n        let _ = self;\n    }\n}\nfn g(s: S) {\n    s.old();\n}\n",
+            ),
+        ]);
+        // `c.rs` holds an unclaimed same-name call the follow would
+        // rewrite: the unchanged-leg fails and the intent stays ordinary.
+        // (Note: `S2::old` is a different item and correctly ignored;
+        // the `s.old()` call on `S` is the blocker.)
+        let mut used = Vec::new();
+        assert!(try_inherent_method_intent_sweep(&sections, &pre, &mut used).is_none());
         assert!(used.is_empty());
     }
 }

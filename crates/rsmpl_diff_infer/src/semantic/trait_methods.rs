@@ -383,7 +383,7 @@ pub(crate) fn try_inherent_method_rename(
 /// Self-type last ident of the smallest enclosing inherent `impl`
 /// block at 1-based `site`. `None` for trait-impl blocks and outside
 /// every inherent block.
-fn inherent_self_ident_for_site(pre: &str, site: usize) -> Option<String> {
+pub(crate) fn inherent_self_ident_for_site(pre: &str, site: usize) -> Option<String> {
     use syn::spanned::Spanned;
     let file: syn::File = syn::parse_str(pre).ok()?;
     fn walk(items: &[syn::Item], site: usize, best: &mut Option<(usize, String)>) {

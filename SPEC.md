@@ -8394,13 +8394,22 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    (last-segment discipline, D8) with one uniform ident delta, plus at
    least one anchored call line sharing the delta (def-only classes stay
    with the slot sweep; trait-block and `impl <T> for _` defs veto).
-   Emits the single document-first impl-block hunk with `# follow=uses`
-   iff the block probe and the full-set scratch probe reproduce every
-   changed line; otherwise ordinary (unproven/shadowed calls fail the
-   scratch, never a def-only partial). Detector name
-   `inherent_method_rename` (Precision under the WI-7 allowance — the
-   block probe + full-set scratch prove the site set, so the small
-   case fires as one follow hunk).
+    Emits the single document-first impl-block hunk with `# follow=uses`
+    iff the block probe and the full-set scratch probe reproduce every
+    changed line; otherwise ordinary (unproven/shadowed calls fail the
+    scratch, never a def-only partial). Cross-file intents raise via
+    the whole-patch `inherent_method_rename` pre-pass (WI-12: inherent
+    defs of one self type + anchored calls across files, same
+    one-self-type/uniform-delta gates; emission is the single
+    document-first impl-block hunk with `# follow=uses` — the follow
+    owns every remote same-self-type def and anchored call, so sibling
+    def hunks would double-claim and are never emitted; a failed
+    single-hunk probe declines to ordinary, never a def-only partial;
+    single-section pure shapes stay with the per-section detector).
+    Detector name
+    `inherent_method_rename` (Precision under the WI-7 allowance — the
+    block probe + full-set scratch prove the site set, so the small
+    case fires as one follow hunk).
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
