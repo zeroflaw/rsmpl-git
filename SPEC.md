@@ -9569,10 +9569,14 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Two added attrs, `//!` /
-    `/* */` docs, two-added+rename, and interior (non-prefix) attr deltas
-    stay ordinary — interior deltas stay ordinary by the prefix-only rule
-    (an interior attr would strand as uncovered non-blank and veto the
-    sweep, losing the companions' partial rescue). Removed / replaced
+    `/* */` docs, two-added+rename, replaced-interior (a new attr between
+    companion cuts — its plus gap has no interior-leftover support yet,
+    so the pairing declines to preserve the companions' partial rescue),
+    and item-interior (`#[keep]+#[old]+fn` → `#[keep]+fn`, needs
+    discontiguous cuts) attr deltas stay ordinary. Hunk-interior removed
+    (one removed attr between companion cuts, bare or +rename) fires via
+    the same E1 sub-span cut below with the removed block as an interior
+    ordinary minus leftover between the cuts. Removed / replaced
     bare at prefix position fires via the E1 sub-span cut: `- I` cites
     the stripped span (`find_stripped_item_target`, move-cut-only) with
     the old block as an ordinary minus prefix (removed) or ordinary

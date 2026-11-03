@@ -19,6 +19,12 @@
 //! kind. Slice 1 covers same-ident bare (removed AND replaced-bare, the
 //! latter composing via the plus-side added prefix); slice 2 covers
 //! removed/replaced + rename via the stripped evolved delegation below.
+//! Slice 3 covers hunk-interior removed (one removed attr between
+//! companion cuts, bare or +rename): the stripped pair forms regardless
+//! of hunk position while replaced-interior (plus carries its own new
+//! attr) declines to preserve partial rescue; the minus gate admits one
+//! single-attr interior gap and the rebuild emits it as an interior
+//! ordinary leftover. Item-interior stays ordinary by design.
 
 use super::move_parts::{MoveItem, MovePair, SectionParts};
 
@@ -77,23 +83,28 @@ pub(crate) fn removed_pairs_for_item(
     let Some((k, stripped_lines, stripped_text)) = stripped_minus_parts(item) else {
         return Vec::new();
     };
-    // Prefix-only (E1 slice 1): the removed block must sit at the hunk top
-    // (only blanks precede it). An interior attr would strand as an
-    // uncovered non-blank between paired runs and veto the whole sweep
-    // (`minus_hunk_holds`), losing the byte-identical companions' partial
-    // rescue — so interior deltas stay ordinary for a later slice.
+    // E1 slice 3: no hunk-position gate. The strip itself proves the
+    // removed block is the first block OF ITS ITEM; the hunk position
+    // (top vs interior between companion cuts) is owned by
+    // `minus_hunk_holds` + the rebuilt interior ordinary leftover.
     let minus_body = &parsed[minus_key.0].hunks[minus_key.1].body;
-    if !minus_body[..item.first.min(minus_body.len())]
+    let minus_interior = minus_body[..item.first.min(minus_body.len())]
         .iter()
-        .all(|l| super::move_parts::line_text(l).trim().is_empty())
-    {
-        return Vec::new();
-    }
+        .any(|l| !super::move_parts::line_text(l).trim().is_empty());
     let mut out = Vec::new();
     for (psi, phi) in plus_hunks {
         let pbody = &parsed[*psi].hunks[*phi].body;
         for (first, last) in super::move_scan::find_runs(pbody, &stripped_lines) {
             if !super::move_scan::plus_run_is_item(pbody, first, last) {
+                continue;
+            }
+            // Replaced-interior (the plus run sits under its own new attr)
+            // stays ordinary — its plus gap would veto the whole sweep via
+            // `plus_runs_hold`, losing the companions' partial rescue.
+            // Only the bare-plus shape (removed-interior, no plus gap)
+            // pairs from interior; top position keeps the inherited
+            // replaced-bare composition.
+            if minus_interior && plus_run_has_attr_above(pbody, first, last) {
                 continue;
             }
             out.push(MovePair {
@@ -146,15 +157,14 @@ pub(crate) fn removed_evolved_pairs_for_item(
     let Some(stripped_ident) = super::move_scan::item_ident(&file.items[0]) else {
         return Vec::new();
     };
-    // Prefix-only: the removed block must sit at the hunk top (only
-    // blanks precede the item) — same soundness reason as the bare arm.
+    // E1 slice 3: no hunk-position gate here either, but replaced-interior
+    // (plus-added pairs, whose new attr would strand a plus gap with no
+    // interior-leftover support) is filtered to preserve the companions'
+    // partial rescue. Removed-interior (bare-plus evolved pairs) rides.
     let minus_body = &parsed[minus_key.0].hunks[minus_key.1].body;
-    if !minus_body[..item.first.min(minus_body.len())]
+    let minus_interior = minus_body[..item.first.min(minus_body.len())]
         .iter()
-        .all(|l| super::move_parts::line_text(l).trim().is_empty())
-    {
-        return Vec::new();
-    }
+        .any(|l| !super::move_parts::line_text(l).trim().is_empty());
     let stripped = MoveItem {
         ident: stripped_ident,
         text: stripped_text,
@@ -162,7 +172,28 @@ pub(crate) fn removed_evolved_pairs_for_item(
         first: item.first + k,
         last: item.last,
     };
-    super::move_pair_evolve::evolved_pairs_for_item(&stripped, parsed, plus_hunks, minus_key)
+    let pairs =
+        super::move_pair_evolve::evolved_pairs_for_item(&stripped, parsed, plus_hunks, minus_key);
+    if !minus_interior {
+        return pairs;
+    }
+    pairs
+        .into_iter()
+        .filter(|p| {
+            let plus_body = &parsed[p.plus_hunk_key.0].hunks[p.plus_hunk_key.1].body;
+            !plus_run_has_attr_above(plus_body, p.plus_first, p.plus_last)
+        })
+        .collect()
+}
+
+/// E1 slice 3: true when the plus run is a strict sub-span of its plus
+/// item (an attr block sits above the run inside the same item) — the
+/// replaced shape, whose plus gap has no interior-leftover support yet.
+/// Bare runs coincide exactly and return false.
+fn plus_run_has_attr_above(body: &[String], first: usize, last: usize) -> bool {
+    super::move_scan::plus_items_in(body)
+        .map(|items| items.iter().any(|it| it.first < first && it.last == last))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -416,5 +447,125 @@ mod tests {
             "new attr rides ordinary plus, got:\n{text}"
         );
         validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn hunk_interior_removed_second_moves_with_interior_leftover() {
+        // E1 slice 3: two-item minus hunk whose second item carries one
+        // removed attr (`[aaa, #[old]+bbb]` → `[aaa, bbb]`). Both move as
+        // two cuts; the removed attr rides an interior ordinary minus
+        // leftover between them (no partial rescue needed).
+        let big_a = big_fn("aaa");
+        let big_b = big_fn("bbb");
+        let minus_b = format!("#[allow(dead_code)]\n{big_b}");
+        let minus_body = format!("{big_a}\n{minus_b}");
+        let a_old = format!("fn keep() {{}}\n{minus_body}");
+        let a_minus: String = minus_body.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_body = format!("{big_a}\n{big_b}");
+        let b_plus: String = plus_body.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("hunk-interior removed must fire both moves");
+        let text = out.join("");
+        assert_eq!(
+            text.matches("# bind=").count(),
+            2,
+            "two cuts must fire, got:\n{text}"
+        );
+        assert!(
+            text.contains("-#[allow(dead_code)]\n"),
+            "removed attr rides interior ordinary minus, got:\n{text}"
+        );
+        assert!(
+            !text.contains("-fn bbb() {"),
+            "bbb body must be consumed by its cut, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn hunk_interior_removed_plus_rename_fires() {
+        // E1 slice 3 evolved twin: `[aaa, #[old]+bbb]` → `[aaa, ccc]`.
+        // aaa rides a bare cut; the renamed bbb rides a stripped evolved
+        // cut with the same interior ordinary `-#[old]` leftover.
+        let big_a = big_fn("aaa");
+        let big_b = big_fn("bbb");
+        let minus_b = format!("#[allow(dead_code)]\n{big_b}");
+        let minus_body = format!("{big_a}\n{minus_b}");
+        let a_old = format!("fn keep() {{}}\n{minus_body}");
+        let a_minus: String = minus_body.lines().map(|l| format!("-{l}\n")).collect();
+        let renamed = big_b.replacen("fn bbb()", "fn ccc()", 1);
+        let plus_body = format!("{big_a}\n{renamed}");
+        let b_plus: String = plus_body.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("hunk-interior removed+rename must fire");
+        let text = out.join("");
+        assert_eq!(
+            text.matches("# bind=").count(),
+            2,
+            "two cuts must fire, got:\n{text}"
+        );
+        assert!(
+            text.contains("+ fn ccc(...) { ... }"),
+            "paste must carry the evolved template, got:\n{text}"
+        );
+        assert!(
+            text.contains("-#[allow(dead_code)]\n"),
+            "removed attr rides interior ordinary minus, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn hunk_interior_two_removed_stays_partial() {
+        // Two removed attrs between companions: the stripped arm declines
+        // (inner attr-count mismatch), so only the companion moves —
+        // partial rescue preserved, bbb wholly ordinary both sides.
+        let big_a = big_fn("aaa");
+        let big_b = big_fn("bbb");
+        let minus_b = format!("#[a]\n#[b]\n{big_b}");
+        let minus_body = format!("{big_a}\n{minus_b}");
+        let a_old = format!("fn keep() {{}}\n{minus_body}");
+        let a_minus: String = minus_body.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_body = format!("{big_a}\n{big_b}");
+        let b_plus: String = plus_body.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("companion must still move");
+        let text = out.join("");
+        assert_eq!(
+            text.matches("# bind=").count(),
+            1,
+            "only the companion cut must fire, got:\n{text}"
+        );
+        assert!(
+            text.contains("-fn bbb() {") && text.contains("+fn bbb() {"),
+            "bbb stays ordinary both sides, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn single_item_kept_plus_removed_stays_ordinary() {
+        // Item-interior (`#[keep]+#[old]+fn` → `#[keep]+fn`): no
+        // middle-strip exists — the raw strip removes the KEPT leading
+        // block, not the interior one — so no pair forms and the move
+        // stays wholly ordinary. By design (needs discontiguous cuts).
+        let big = big_fn("foo");
+        let minus_item = format!("#[keep_attr]\n#[allow(dead_code)]\n{big}");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[keep_attr]\n{big}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "item-interior removed stays ordinary by design"
+        );
     }
 }

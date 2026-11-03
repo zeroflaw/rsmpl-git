@@ -271,6 +271,49 @@ pub(crate) fn rebuild_sections(
                     emitted += c.len();
                     rebuilt.push_str(c);
                 }
+                // E1 slice 3: interior gaps between distinct cuts stay
+                // ordinary (disjoint old-range deletions, SPEC 10.6
+                // option-1). Each non-last cut absorbs its following
+                // blank (`delete_lines`), so one leading blank per gap
+                // is skipped; the remainder is the removed attr line
+                // admitted by `minus_hunk_holds` and re-emits verbatim.
+                let mut spans: Vec<(usize, usize)> = named
+                    .iter()
+                    .filter(|(p, _, _)| p.minus_hunk_key == (*si, hi))
+                    .map(|(p, _, _)| (p.item.first, p.item.last))
+                    .collect();
+                spans.sort();
+                spans.dedup();
+                for w in spans.windows(2) {
+                    let gap_start = w[0].1 + 1;
+                    let gap_end = w[1].0;
+                    if gap_start >= gap_end || gap_end > hunk.body.len() {
+                        continue;
+                    }
+                    let mut glo = gap_start;
+                    if glo < gap_end && line_text(&hunk.body[glo]).trim().is_empty() {
+                        glo += 1;
+                    }
+                    if glo >= gap_end {
+                        continue;
+                    }
+                    let glen = gap_end - glo;
+                    let header = format!(
+                        "@@ -{},{} +{},{} @@",
+                        hunk.old_start + glo as u32,
+                        glen,
+                        hunk.new_start,
+                        0
+                    );
+                    emitted += header.len() + 1;
+                    rebuilt.push_str(&header);
+                    rebuilt.push('\n');
+                    for line in hunk.body.iter().skip(glo).take(glen) {
+                        emitted += line.len() + 1;
+                        rebuilt.push_str(line);
+                        rebuilt.push('\n');
+                    }
+                }
                 // Trailing leftovers stay ordinary after the cuts; the
                 // single blank right after the last paired run is
                 // absorbed by the cut, never re-emitted.

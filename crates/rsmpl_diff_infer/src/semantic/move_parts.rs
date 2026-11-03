@@ -95,6 +95,18 @@ pub(crate) fn line_text(line: &str) -> &str {
     line.get(1..).unwrap_or("")
 }
 
+/// E1 slice 3: single-line removed-attr leftover predicate for the
+/// hunk-interior gate below: exactly one `#[...]` (single line, one
+/// occurrence) or one outer-doc `///` line. Multi-line attrs, `//!`,
+/// and code all decline (stay ordinary via the gate veto).
+fn is_single_attr_doc(t: &str) -> bool {
+    let s = t.trim();
+    if s.starts_with("///") {
+        return true;
+    }
+    s.starts_with("#[") && s.ends_with(']') && s.matches("#[").count() == 1
+}
+
 /// Minus-hunk gate over a narrowed pair set: paired runs sit anywhere
 /// with exactly one blank between consecutive runs (a cut absorbs exactly
 /// one following blank); uncovered prefix lines stay ordinary before the
@@ -126,16 +138,29 @@ pub(crate) fn minus_hunk_holds(
         return false;
     };
     let mut prev_blank = false;
+    let mut gap_attrs: u32 = 0;
     for (i, line) in body.iter().enumerate().take(hi + 1).skip(lo) {
         if covered[i] {
             prev_blank = false;
+            gap_attrs = 0;
             continue;
         }
         let blank = line_text(line).trim().is_empty();
-        if !blank || prev_blank {
+        if blank {
+            if prev_blank {
+                return false;
+            }
+            prev_blank = true;
+            continue;
+        }
+        prev_blank = false;
+        if gap_attrs >= 1 {
             return false;
         }
-        prev_blank = true;
+        if !is_single_attr_doc(line_text(line)) {
+            return false;
+        }
+        gap_attrs += 1;
     }
     true
 }
@@ -206,6 +231,32 @@ pub(crate) fn minus_last_cut_sound(
         let last_file_line = old_start as usize + hi;
         if last_file_line >= nlines {
             return true;
+        }
+    }
+    // E1 slice 3: multi-cut hunks whose last cut is preceded by a
+    // non-blank hunk line absorb nothing (following is non-blank or
+    // EOF per the checks above; preceding is the interior leftover
+    // the rebuild emits ordinary) — sound, so the interior-removed
+    // companion sets
+    // keep their full pair set instead of capping to a prefix subset.
+    let last_first = pairs
+        .iter()
+        .filter(|p| p.minus_hunk_key == (msi, mhi))
+        .map(|p| p.item.first)
+        .max();
+    if let Some(lf) = last_first {
+        // Narrow: only an UNCOVERED single-attr predecessor unlocks.
+        // A covered predecessor (adjacent multi-cuts) keeps the
+        // existing capping behavior pinned by
+        // `partial_adjacent_multi_cut_stays_unsound`.
+        if lf > 0 && lf <= hi {
+            let prev_covered = pairs
+                .iter()
+                .filter(|p| p.minus_hunk_key == (msi, mhi))
+                .any(|p| (p.item.first..=p.item.last).contains(&(lf - 1)));
+            if !prev_covered && is_single_attr_doc(line_text(&body[lf - 1])) {
+                return true;
+            }
         }
     }
     if n != 1 {
@@ -672,5 +723,78 @@ mod tests {
         let (h, b) = parts.hunks[0].unsplit.clone().unwrap();
         assert_eq!(h, "@@ -5,2 +7,2 @@");
         assert_eq!(b.len(), 4);
+    }
+
+    #[test]
+    fn interior_single_attr_gap_holds() {
+        // E1 slice 3: one uncovered single-attr line between two covered
+        // runs holds — the rebuild emits it as an interior ordinary hunk
+        // (disjoint old-range deletion), so nothing is dropped.
+        let body: Vec<String> = vec![
+            "-fn a() {}".to_string(),
+            "-".to_string(),
+            "-#[old]".to_string(),
+            "-fn b() {}".to_string(),
+        ];
+        let pairs = vec![test_pair(0, 0), test_pair(3, 3)];
+        assert!(minus_hunk_holds(&body, &pairs, 0, 0));
+    }
+
+    #[test]
+    fn interior_two_attr_gap_vetoes() {
+        // Two removed attrs in one gap stay ordinary (no pair may claim
+        // a two-line interior; the whole sweep degrades instead).
+        let body: Vec<String> = vec![
+            "-fn a() {}".to_string(),
+            "-#[a]".to_string(),
+            "-#[b]".to_string(),
+            "-fn b() {}".to_string(),
+        ];
+        let pairs = vec![test_pair(0, 0), test_pair(3, 3)];
+        assert!(!minus_hunk_holds(&body, &pairs, 0, 0));
+    }
+
+    #[test]
+    fn interior_code_gap_vetoes() {
+        // Unpaired code between paired runs is never silently droppable.
+        let body: Vec<String> = vec![
+            "-fn a() {}".to_string(),
+            "-let x = 1;".to_string(),
+            "-fn b() {}".to_string(),
+        ];
+        let pairs = vec![test_pair(0, 0), test_pair(2, 2)];
+        assert!(!minus_hunk_holds(&body, &pairs, 0, 0));
+    }
+
+    #[test]
+    fn multi_cut_nonblank_preceding_last_is_sound() {
+        // E1 slice 3: `[aaa, blank, #[old], bbb]` at EOF — the last cut
+        // (bbb) is preceded by the non-blank removed attr, so it absorbs
+        // nothing and the two-cut set stays sound (no capping).
+        let body: Vec<String> = vec![
+            "-fn a() {}".to_string(),
+            "-".to_string(),
+            "-#[old]".to_string(),
+            "-fn b() {}".to_string(),
+        ];
+        let pairs = vec![test_pair(0, 0), test_pair(3, 3)];
+        let old = "fn keep() {}\nfn a() {}\n\n#[old]\nfn b() {}\n";
+        assert!(minus_last_cut_sound(&body, &pairs, 0, 0, 2, old));
+    }
+
+    #[test]
+    fn multi_cut_blank_preceding_last_at_eof_stays_unsound() {
+        // Counterpart: two bare companions `[aaa, blank, bbb]` at EOF —
+        // the last cut's preceding blank is already claimed by the
+        // first cut's following-blank absorption, so without a following
+        // blank the set still caps to one (existing behavior kept).
+        let body: Vec<String> = vec![
+            "-fn a() {}".to_string(),
+            "-".to_string(),
+            "-fn b() {}".to_string(),
+        ];
+        let pairs = vec![test_pair(0, 0), test_pair(2, 2)];
+        let old = "fn keep() {}\nfn a() {}\n\nfn b() {}\n";
+        assert!(!minus_last_cut_sound(&body, &pairs, 0, 0, 2, old));
     }
 }

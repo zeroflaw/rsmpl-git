@@ -29,8 +29,9 @@
 //! engine-owned). Slice 10 closes the added axis: the struct arm admits
 //! a vis delta riding with rename+attr, and the rename-only
 //! method-bearing trait twin is pinned ordinary. The remaining axes
-//! (interior attr deltas, method-bearing trait moves) stay ordinary by
-//! construction (owners: E1 residue (b), E2). Removed/replaced + rename
+//! (replaced-interior, item-interior attr deltas, method-bearing trait
+//! moves) stay ordinary by construction (owners: E1 residue (b)
+//! remainder, E2). Removed/replaced + rename
 //! now fires via the E1 slice-2 stripped evolved delegation (owner:
 //! `move_attr_removed.rs` — fire pins below, shape pins there).
 
