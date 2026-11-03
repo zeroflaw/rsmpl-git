@@ -10109,6 +10109,8 @@ seeded native-side mutations (fn rename, call swap, control-header decoy, N=1 si
 raised via `infer_rsmpl_with_pre_images` must parse, apply to the native post tree
 byte-identical, and re-infer byte-identical; hetero `&`/field-arg sweeps are excluded
 until emission spacing fidelity lands (DISCOVERED TASKS.md item).
+Property harness (WI-19 slice 2, `crates/rsmpl_diff_infer/tests/property_cycle_authored.rs`):
+seeded authored-side mutations (fn rename, call sweep, `# optional` zero-match, `# repeat` fold, stale-range, overlap veto) applied via `apply_patch_to_tree` must never panic, Ok must deterministically reach the independently recomputed post, Err must carry a known SPEC 25 code.
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser
