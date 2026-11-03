@@ -708,12 +708,13 @@ fn joint_candidate(
         Joint::A
     } else {
         // WI-4b Joint-B1: every call adds the same concrete trailing
-        // args (uniform template below); the header must evolve params
-        // only with the return preserved — a return delta plus an
-        // arg-add is two evolutions the shared-rule pair cannot
-        // restate. N=1 (def plus one call) pays the second hunk under the
-        // precision allowance at the fire gate (WI-8 slice 2); the len gate
-        // above already guarantees at least one call.
+        // args or retypes the trailing args uniformly (uniform
+        // template below); the header must evolve params only with
+        // the return preserved — a return delta plus a call evolution
+        // is two evolutions the shared-rule pair cannot restate. N=1
+        // (def plus one call) pays the second hunk under the
+        // precision allowance at the fire gate (WI-8 slice 2); the len
+        // gate above already guarantees at least one call.
         if !header_argadd_gates(&flat[def_idx].minus, &flat[def_idx].plus) {
             return Candidate::Suppress(old);
         }
@@ -1299,6 +1300,12 @@ mod tests {
                 "- foo::<u8>(E0)\n",
                 "+ bar::<u8>(E0, 0)\n",
             ),
+            (
+                "fn foo(a: i32, b: i32) {\n    a\n}\nfn m() {\n    foo(1, 2);\n    foo(3, 2);\n}\n",
+                "@@ -1,1 +1,1 @@\n-fn foo(a: i32, b: i32) {\n+fn bar(a: i32, b: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 2);\n-    foo(3, 2);\n+    bar(1, 2u32);\n+    bar(3, 2u32);\n",
+                "- foo(E0, 2)\n",
+                "+ bar(E0, 2u32)\n",
+            ),
         ] {
             let sections = vec![section("src.rs", body)];
             let pre = pre_map(&[("src.rs", pre_text)]);
@@ -1361,6 +1368,10 @@ mod tests {
             "@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32, y: i32) -> u32 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
             // Qualifier delta plus arg-add is two evolutions.
             "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+async fn bar(x: i32, y: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+            // Non-uniform trailing retype (WI-8 slice 3).
+            "@@ -1,1 +1,1 @@\n-fn foo(a: i32, b: i32) {\n+fn bar(a: i32, b: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 2);\n-    foo(3, 2);\n+    bar(1, 2u32);\n+    bar(3, 3u32);\n",
+            // Arg deletion is never a B1 evolution.
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32, y: i32) {\n+fn bar(x: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1, 0);\n-    foo(2, 0);\n+    bar(1);\n+    bar(2);\n",
         ] {
             let sections = vec![section("src.rs", body)];
             let pre = pre_map(&[("src.rs", pre)]);

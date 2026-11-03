@@ -303,10 +303,10 @@ pub(crate) fn joint_workspace_candidate(
         Joint::A
     } else {
         // WI-4f B1: the claimed calls add the same concrete trailing
-        // args (uniform template) and the header evolves params only
-        // with the return preserved — the single-file B1 laws lifted
-        // workspace-wide. Any hetero shape suppresses (B stays ordinary,
-        // never a fragment).
+        // args or retype the trailing args uniformly (template law);
+        // the header evolves params only with the return preserved —
+        // the single-file B1 laws lifted workspace-wide. Any hetero
+        // shape suppresses (B stays ordinary, never a fragment).
         if !header_argadd_gates(&flat[def_idx].minus, &flat[def_idx].plus) {
             return Workspace::Suppress(involved_paths, old);
         }

@@ -107,71 +107,144 @@ pub(crate) fn prefix_qual(qual: &str, callee: &str) -> String {
     }
 }
 
-/// WI-4b: uniform arg-add template over the non-def pairs (indices
-/// `!= def_idx`): every call renames old→new with an equal qualifier,
-/// and every plus side extends the token-identical minus prefix by the
-/// same non-empty concrete suffix. Returns the `(call_minus,
-/// call_plus)` pattern pair, or `None` on any hetero shape (prefix
-/// rewrite, hetero suffix/arity/qual/turbo — suppressed, pinned).
-/// WI-4f reuses it for the workspace B1 gate over cross-file claims.
+/// WI-4b uniform arg-evolution template over the non-def pairs
+/// (indices `!= def_idx`): every call renames old→new with an equal
+/// qualifier and equal turbofish, with uniform arity on both sides,
+/// in one of two shapes — trailing-add (every plus side extends the
+/// token-identical minus prefix by the same non-empty concrete
+/// suffix) or trailing-retype (WI-8 slice 3; same arity, leading
+/// args token-identical per call and hole-bound, trailing suffix
+/// uniform concrete on both sides and differing). Returns the
+/// `(call_minus, call_plus)` pattern pair, or `None` on any hetero
+/// shape (prefix rewrite, hetero suffix/arity/qual/turbo, deletion,
+/// varying-value retype — suppressed, pinned). WI-4f reuses it for
+/// the workspace B1 gate over cross-file claims.
 pub(crate) fn arg_add_template(
     flat: &[FlatPair],
     def_idx: usize,
     old: &str,
     new: &str,
 ) -> Option<(String, String)> {
-    let mut qual: Option<String> = None;
-    let mut turbo: Option<String> = None;
-    let mut arity: Option<usize> = None;
-    let mut suffix: Option<Vec<String>> = None;
+    struct EvolveCall {
+        qual: String,
+        turbo: String,
+        minus: Vec<String>,
+        plus: Vec<String>,
+    }
+    let mut calls: Vec<EvolveCall> = Vec::new();
     for (i, fp) in flat.iter().enumerate() {
         if i == def_idx {
             continue;
         }
         let (qm, cm, tm, am) = call_parts(&fp.minus)?;
         let (qp, cp, tp, ap) = call_parts(&fp.plus)?;
-        if cm != old || cp != new || qm != qp {
+        if cm != old || cp != new || qm != qp || tm != tp {
             return None;
         }
-        if ap.len() <= am.len() {
-            return None;
+        calls.push(EvolveCall {
+            qual: qm,
+            turbo: tm,
+            minus: am,
+            plus: ap,
+        });
+    }
+    let first = calls.first()?;
+    if !calls
+        .iter()
+        .all(|c| c.qual == first.qual && c.turbo == first.turbo)
+    {
+        return None;
+    }
+    let (minus_len, plus_len) = (first.minus.len(), first.plus.len());
+    if !calls
+        .iter()
+        .all(|c| c.minus.len() == minus_len && c.plus.len() == plus_len)
+    {
+        return None;
+    }
+    if plus_len > minus_len {
+        // Trailing-add (WI-4b law, unchanged): the minus prefix is
+        // token-identical per call and hole-bound; one shared concrete
+        // grown suffix rides every plus side.
+        for c in &calls {
+            if !c.minus.iter().zip(c.plus.iter()).all(|(a, b)| a == b) {
+                return None;
+            }
         }
-        if !am.iter().zip(ap.iter()).all(|(a, b)| a == b) {
-            return None;
-        }
-        if tm != tp {
-            return None;
-        }
-        let grown: Vec<String> = ap[am.len()..].to_vec();
+        let grown: Vec<String> = first.plus[minus_len..].to_vec();
         if grown.is_empty() {
             return None;
         }
-        if qual.as_ref().is_some_and(|q| *q != qm)
-            || turbo.as_ref().is_some_and(|t| *t != tm)
-            || arity.is_some_and(|k| k != am.len())
-            || suffix.as_ref().is_some_and(|s| *s != grown)
-        {
+        if !calls.iter().all(|c| c.plus[minus_len..] == grown) {
             return None;
         }
-        qual = Some(qm);
-        turbo = Some(tm);
-        arity = Some(am.len());
-        suffix = Some(grown);
+        return Some(render_call_template(
+            &first.qual,
+            &first.turbo,
+            old,
+            new,
+            minus_len,
+            &[],
+            &grown,
+        ));
     }
-    let (q, t, k, s) = (qual?, turbo?, arity?, suffix?);
-    let holes: Vec<String> = (0..k).map(|i| format!("E{i}")).collect();
-    let minus_args = holes.join(", ");
-    let plus_args = if holes.is_empty() {
-        s.join(", ")
-    } else {
-        format!("{}, {}", holes.join(", "), s.join(", "))
-    };
-    let old_path = super::shape::literal_path_last(&prefix_qual(&q, old));
-    let new_path = super::shape::literal_path_last(&prefix_qual(&q, new));
-    Some((
-        format!("{old_path}{t}({minus_args})"),
-        format!("{new_path}{t}({plus_args})"),
-    ))
+    if plus_len == minus_len {
+        // Trailing-retype (WI-8 slice 3): the largest leading run
+        // preserved per call binds holes; the trailing suffix is
+        // uniform concrete on both sides and differs.
+        for k in (0..minus_len).rev() {
+            if !calls.iter().all(|c| c.minus[..k] == c.plus[..k]) {
+                continue;
+            }
+            let (minus_suffix, plus_suffix) = (&first.minus[k..], &first.plus[k..]);
+            if minus_suffix == plus_suffix {
+                continue;
+            }
+            if !calls
+                .iter()
+                .all(|c| c.minus[k..] == *minus_suffix && c.plus[k..] == *plus_suffix)
+            {
+                continue;
+            }
+            return Some(render_call_template(
+                &first.qual,
+                &first.turbo,
+                old,
+                new,
+                k,
+                minus_suffix,
+                plus_suffix,
+            ));
+        }
+        return None;
+    }
+    None
+}
+
+/// Render one call-template pair: `holes` leading `E{i}` holes plus a
+/// concrete suffix on each side (`- foo(E0, 2)` /
+/// `+ bar(E0, 2u32)`; the trailing-add shape passes an empty minus
+/// suffix). Zero holes renders the bare concrete pair.
+fn render_call_template(
+    qual: &str,
+    turbo: &str,
+    old: &str,
+    new: &str,
+    holes: usize,
+    minus_suffix: &[String],
+    plus_suffix: &[String],
+) -> (String, String) {
+    let hole_names: Vec<String> = (0..holes).map(|i| format!("E{i}")).collect();
+    let mut minus_parts = hole_names.clone();
+    minus_parts.extend(minus_suffix.iter().cloned());
+    let mut plus_parts = hole_names;
+    plus_parts.extend(plus_suffix.iter().cloned());
+    let old_path = super::shape::literal_path_last(&prefix_qual(qual, old));
+    let new_path = super::shape::literal_path_last(&prefix_qual(qual, new));
+    (
+        format!("{old_path}{turbo}({})", minus_parts.join(", ")),
+        format!("{new_path}{turbo}({})", plus_parts.join(", ")),
+    )
 }
 
 /// WI-1 closed vis set the terse `fn` rename admits (SPEC 14.1 diet
@@ -249,4 +322,81 @@ pub(crate) fn contains_ident(haystack: &str, needle: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::arg_add_template;
+    use super::FlatPair;
+
+    fn pair(minus: &str, plus: &str) -> FlatPair {
+        FlatPair {
+            sec: 0,
+            hunk: 0,
+            minus: minus.to_string(),
+            plus: plus.to_string(),
+            site: 1,
+        }
+    }
+
+    fn def_pair() -> FlatPair {
+        pair("fn foo(a: i32, b: i32) {", "fn bar(a: i32, b: u32) {")
+    }
+
+    #[test]
+    fn add_template_law_unchanged() {
+        // WI-4b add law pinned byte-exact: hole-bound prefix plus the
+        // shared concrete grown suffix.
+        let flat = vec![
+            def_pair(),
+            pair("foo(1);", "bar(1, 0);"),
+            pair("foo(2);", "bar(2, 0);"),
+        ];
+        assert_eq!(
+            arg_add_template(&flat, 0, "foo", "bar"),
+            Some(("foo(E0)".to_string(), "bar(E0, 0)".to_string()))
+        );
+    }
+
+    #[test]
+    fn retype_template_fires() {
+        // WI-8 slice 3: same arity, leading prefix preserved per call
+        // and hole-bound, trailing suffix uniform concrete and
+        // differing on both sides.
+        let flat = vec![
+            def_pair(),
+            pair("foo(1, 2);", "bar(1, 2u32);"),
+            pair("foo(3, 2);", "bar(3, 2u32);"),
+        ];
+        assert_eq!(
+            arg_add_template(&flat, 0, "foo", "bar"),
+            Some(("foo(E0, 2)".to_string(), "bar(E0, 2u32)".to_string()))
+        );
+        // Fully concrete pair (no hole) fires too.
+        let flat = vec![
+            def_pair(),
+            pair("foo(0);", "bar(1);"),
+            pair("foo(0);", "bar(1);"),
+        ];
+        assert_eq!(
+            arg_add_template(&flat, 0, "foo", "bar"),
+            Some(("foo(0)".to_string(), "bar(1)".to_string()))
+        );
+    }
+
+    #[test]
+    fn retype_hetero_vetoes() {
+        // Non-uniform suffixes, varying-value retypes (no uniform
+        // concrete to state), deletions, and mixed arities each
+        // decline — suppressed downstream, pinned.
+        for (minus0, plus0, minus1, plus1) in [
+            ("foo(1, 2);", "bar(1, 2u32);", "foo(3, 2);", "bar(3, 3u32);"),
+            ("foo(1);", "bar(1u32);", "foo(2);", "bar(2u32);"),
+            ("foo(1, 0);", "bar(1);", "foo(2, 0);", "bar(2);"),
+            ("foo(1);", "bar(1, 0);", "foo(2, 3);", "bar(2, 3);"),
+        ] {
+            let flat = vec![def_pair(), pair(minus0, plus0), pair(minus1, plus1)];
+            assert_eq!(arg_add_template(&flat, 0, "foo", "bar"), None);
+        }
+    }
 }
