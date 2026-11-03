@@ -9550,8 +9550,13 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     `static` / `mod`, each through its own abstract evolved matcher and
     header-prefix helper; the trait finder is untouched): the paste
     carries the kind's evolution template with the added block as the
-    ordinary prefix. Tiny `mod` rename+attr stays ordinary under the
-    T375 byte guard (a 1-line empty mod plus one attr line can never
+    ordinary prefix. WI-14 slice 9 extends the same composition to
+    empty `trait` rename+attr (through `trait_evolved_match`, so pure
+    attr-added without rename never double-claims and method-bearing
+    traits veto inside the matcher and stay engine-owned): the paste
+    carries the trait evolution template with the added block as the
+    ordinary prefix. Tiny `mod` and tiny-trait rename+attr stay ordinary under the
+    T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Removed / replaced attrs, two added attrs, `//!` / `/* */`
     docs, removed+rename, replaced+rename, and two-added+rename stay

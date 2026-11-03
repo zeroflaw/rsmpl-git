@@ -21,10 +21,12 @@
 //! proves the removed mirror needs engine work — the whole-span cut law
 //! — so it stays ordinary by construction). Slices 7–8 extend the added
 //! axis to move+rename (bare minus, one added leading block, renamed
-//! item): `fn` in slice 7, every other move-eligible kind in slice 8 —
+//! item): `fn` in slice 7, every other move-eligible kind in slice 8,
+//! empty `trait` in slice 9 —
 //! the inner rename pairs through the abstract evolved matcher in
 //! `move_evolve.rs` / `move_evolve_tail.rs` via `added_attr_block_len`
-//! below. Later WI-14 slices own the remaining axes.
+//! below (method-bearing traits veto inside the trait matcher and stay
+//! engine-owned). Later WI-14 slices own the remaining axes.
 
 use syn::spanned::Spanned;
 
@@ -1326,12 +1328,12 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_attr_trait_stays_ordinary() {
-        // Trait axis stays engine-owned: even the empty-trait rename
-        // with one added attr declines (the cut cannot carry
-        // method-bearing traits, and the trait finder is untouched).
-        let tr = "trait Old {}\ntrait New2 {}\n";
-        let _ = tr;
+    fn rename_plus_attr_tiny_trait_stays_ordinary_t375() {
+        // WI-14 slice 9: the finder arm lands, but a 1-line empty
+        // trait plus one attr line can never price the cut+paste below
+        // the ordinary hunks (T375) — same guard as the tiny-mod pin in
+        // slice 8. Padded twins below fire; this pins the guard, not
+        // the detector.
         let minus_item = "trait Old {}\n";
         let plus_item = "#[allow(dead_code)]\ntrait New {}\n";
         let a_old = format!("fn keep() {{}}\n{minus_item}");
@@ -1341,7 +1343,181 @@ mod tests {
         let mut used = Vec::new();
         assert!(
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "trait rename+attr must stay ordinary (engine-owned)"
+            "tiny trait rename+attr must stay ordinary (T375 guard)"
+        );
+    }
+
+    fn padded_trait_old() -> (String, String) {
+        // 40 `///` pad lines (T375-clearing, same as the empty-trait
+        // fire pin in `moves.rs`) + `trait Old {}`.
+        let mut docs = String::new();
+        for i in 0..40 {
+            docs.push_str(&format!("/// doc line {i}\n"));
+        }
+        let minus_item = format!("{docs}trait Old {{}}\n");
+        (docs, minus_item)
+    }
+
+    #[test]
+    fn rename_plus_attr_trait_fires_with_ordinary_prefix() {
+        // WI-14 slice 9: empty `trait Old` moves a.rs -> b.rs as
+        // `#[allow(dead_code)] trait New` (docs padded to clear T375).
+        // The minus cut is bare; the attr rides an ordinary T432b
+        // prefix while the inner rename pairs through the abstract
+        // trait evolved matcher.
+        let (docs, minus_item) = padded_trait_old();
+        let plus_item = format!("#[allow(dead_code)]\n{docs}trait New {{}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait rename+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("trait New"),
+            "paste must carry the evolved template, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[allow(dead_code)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+trait New {}"),
+            "plus trait lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_doc_trait_fires_with_ordinary_prefix() {
+        // Doc twin: one added `///` line atop the padded docs + rename
+        // fires identically through the same arm.
+        let (docs, minus_item) = padded_trait_old();
+        let plus_item = format!("/// Moved trait.\n{docs}trait New {{}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait rename+doc move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+/// Moved trait.\n"),
+            "doc rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+trait New {}"),
+            "plus trait lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_multiline_attr_trait_fires() {
+        // Multi-line twin: one balanced 3-line `#[derive(...)]` block
+        // atop the padded docs + rename fires through the shared
+        // `added_attr_block_len` cap.
+        let (docs, minus_item) = padded_trait_old();
+        let plus_item = format!("#[derive(\n    Clone,\n    Debug,\n)]\n{docs}trait New {{}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait rename+multiline-attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("trait New"),
+            "paste must carry the evolved template, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn rename_plus_two_attrs_trait_stays_ordinary() {
+        // Two added attrs + rename stays ordinary (exactly-one-block
+        // gate: the stripped inner keeps one attr against the bare
+        // minus, so the inner evolved match vetoes).
+        let (docs, minus_item) = padded_trait_old();
+        let plus_item = format!("#[allow(dead_code)]\n#[inline]\n{docs}trait New {{}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "trait two-added+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_replaced_attr_trait_stays_ordinary() {
+        // Replaced attr + rename stays ordinary (engine span law: the
+        // counts are equal, never plus-one, so the arm never reached;
+        // same wall as slices 4/6).
+        let (docs, minus_item_base) = padded_trait_old();
+        let minus_item = format!("#[allow(dead_code)]\n{minus_item_base}");
+        let plus_item = format!("#[allow(unused)]\n{docs}trait New {{}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "trait replaced+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_removed_attr_trait_stays_ordinary() {
+        // Removed attr + rename stays ordinary (engine span law: the
+        // minus side carries the attr).
+        let (docs, minus_item_base) = padded_trait_old();
+        let minus_item = format!("#[allow(dead_code)]\n{minus_item_base}");
+        let plus_item = format!("{docs}trait New {{}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "trait removed+rename must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn rename_plus_attr_method_bearing_trait_stays_ordinary() {
+        // Method-bearing trait rename+attr stays ordinary by the
+        // `trait_evolved_match` empty-items gate (engine cut law: the
+        // scalar `- I` cut cannot isolate a trait with methods).
+        let mut docs = String::new();
+        for i in 0..40 {
+            docs.push_str(&format!("/// doc line {i}\n"));
+        }
+        let minus_item = format!("{docs}trait Old {{\n    fn foo(&self);\n}}\n");
+        let plus_item =
+            format!("#[allow(dead_code)]\n{docs}trait New {{\n    fn foo(&self);\n}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "method-bearing trait rename+attr must stay ordinary (engine-owned)"
         );
     }
 }

@@ -768,7 +768,29 @@ pub(crate) fn find_trait_evolved_hits(
         let syn::Item::Trait(plus) = it else {
             continue;
         };
-        if trait_evolved_match(&minus, plus).is_none() {
+        if trait_evolved_match(&minus, plus).is_some() {
+            let s = it.span().start().line;
+            let e = it.span().end().line;
+            if s < 1 || e < s || e > plus_body.len() {
+                continue;
+            }
+            let name = plus.ident.to_string();
+            let Some(prefix) = trait_header_prefix(&plus_body[(s - 1)..e], &name) else {
+                continue;
+            };
+            out.push((s - 1, e - 1, prefix, name));
+            continue;
+        }
+        // WI-14 slice 9: empty-trait move+rename with exactly one added
+        // leading attr/doc block (`trait Old` -> `#[derive] trait New`).
+        // Mirrors the slice-8 type/const/static/mod arms: count gate,
+        // kind-agnostic block measure, stripped inner re-parse through
+        // the same evolved matcher (vis-or-name-or-unsafety delta
+        // required, so pure attr-added never double-claims the
+        // byte-identical axis; method-bearing inners veto inside
+        // `trait_evolved_match`), hit past the block so the attr rides
+        // the existing T432b ordinary prefix.
+        if plus.attrs.len() != minus.attrs.len() + 1 {
             continue;
         }
         let s = it.span().start().line;
@@ -776,11 +798,24 @@ pub(crate) fn find_trait_evolved_hits(
         if s < 1 || e < s || e > plus_body.len() {
             continue;
         }
-        let name = plus.ident.to_string();
-        let Some(prefix) = trait_header_prefix(&plus_body[(s - 1)..e], &name) else {
+        let span_lines: Vec<&str> = plus_body[(s - 1)..e]
+            .iter()
+            .map(|l| l.get(1..).unwrap_or(""))
+            .collect();
+        let Some(k) = super::move_attr::added_attr_block_len(&span_lines) else {
             continue;
         };
-        out.push((s - 1, e - 1, prefix, name));
+        let Ok(inner) = syn::parse_str::<syn::ItemTrait>(&span_lines[k..].join("\n")) else {
+            continue;
+        };
+        if trait_evolved_match(&minus, &inner).is_none() {
+            continue;
+        }
+        let name = inner.ident.to_string();
+        let Some(prefix) = trait_header_prefix(&plus_body[(s - 1 + k)..e], &name) else {
+            continue;
+        };
+        out.push((s - 1 + k, e - 1, prefix, name));
     }
     out
 }
