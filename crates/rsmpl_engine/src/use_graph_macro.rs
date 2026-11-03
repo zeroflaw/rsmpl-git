@@ -69,6 +69,24 @@ mod tests {
     }
 
     #[test]
+    fn macro_nested_inside_other_macro_is_opaque() {
+        // WI-16 slice 1: `Old!(…)` nested inside another macro's body
+        // is opaque — the follow vetoes loud without fallback and
+        // skips `macro-hidden` with it, never rewrites.
+        let src = "macro_rules! Old {\n    ($x:expr) => { $x };\n}\nmacro_rules! outer {\n    ($x:expr) => { $x };\n}\nfn f() {\n    outer!(Old!(1));\n}\n";
+        assert!(resolve_macro_for_test(src, "Old", "macro_rules! Old", false).is_err());
+        let out = resolve_macro_for_test(src, "Old", "macro_rules! Old", true).unwrap();
+        assert!(out.spans.is_empty(), "spans: {:?}", out.spans);
+        assert!(
+            out.skipped
+                .iter()
+                .any(|s| s.reason == crate::follow_reasons::reason::MACRO_HIDDEN),
+            "skipped: {:?}",
+            out.skipped
+        );
+    }
+
+    #[test]
     fn path_predicate_accepts_only_bare_macro_rules() {
         let bare: syn::Path = syn::parse_str("macro_rules").unwrap();
         assert!(is_macro_rules_path(&bare));

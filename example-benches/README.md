@@ -89,7 +89,7 @@ counts in the JSON report).
 | 29-sequence-sweep (3 blocks × 2 hetero lets, 1 hunk) | 670 B / 18 ln | 144 B / 7 ln | 79% |
 | 30-arg-template (5 sites, wrap migration `use_it(x)` → `use_it(x.clone())`, 1 hunk) | 470 B / 14 ln | 88 B / 5 ln | 81% |
 | 31-collection-move (5 helpers move files, one `# allow=many` cut + one paste) | 1720 B / 117 ln | 156 B / 13 ln | 91% |
-| 32-macro-rules-rename (`macro_rules!` def + 4 uses, 2 hunks sharing one rule) | 637 B / 15 ln | 253 B / 10 ln | 60% |
+| 32-macro-rules-rename (`macro_rules!` def + 4 uses, 1 hunk with `# follow=uses`) | 637 B / 15 ln | 136 B / 5 ln | 79% |
 | 33-field-rename (field def + 5 uses incl. shorthand expansion, 1 hunk with `# follow=uses`) | 1444 B / 21 ln | 170 B / 7 ln | 88% |
 | 34-variant-rename (variant def + 4 uses incl. `use` segment, 1 hunk with `# follow=uses`) | 793 B / 17 ln | 133 B / 7 ln | 83% |
 | 35-general-expr (5 sites, binary-op `E0 + 1` → `E0 + 2`, 1 hunk) | 563 B / 18 ln | 73 B / 5 ln | 87% |

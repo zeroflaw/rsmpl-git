@@ -1,11 +1,17 @@
-//! `macro_rules!` definition + invocation rename (WI-7b, SPEC D.4).
+//! `macro_rules!` definition + invocation rename (WI-7b + WI-16, SPEC D.4).
 //!
 //! One `macro_rules! Old { … }` definition line plus N ≥ 1 bare
-//! `Old!(…)` invocation lines sharing one ident delta compress to two
-//! hunks sharing `rule=rename_Old_to_New`: the definition as a plain
-//! item-rename hunk (`- macro_rules! Old` / `+ macro_rules! New`) and
-//! the invocations as one `# allow=many` `# macro=token_tree` verbatim
-//! sweep (`- Old!(…)` / `+ New!(…)`). Cross-file def+use intents group
+//! `Old!(…)` invocation lines sharing one ident delta compress to one
+//! def hunk with `# follow=uses` (`- macro_rules! Old` /
+//! `+ macro_rules! New`, WI-16 slice 1, byte-identical to the authored
+//! form). The engine's `macro_paths` follow rewrites every invocation
+//! by path identity; totality is the scratch line-equality probe over
+//! the exact site set. When the follow probe declines (no pre-image,
+//! opaque interior, qualified path), the detector falls back to the
+//! WI-7b two-hunk combined form sharing `rule=rename_Old_to_New`:
+//! the definition as a plain item-rename hunk plus the invocations as
+//! one `# allow=many` `# macro=token_tree` verbatim sweep.
+//! Cross-file def+use intents group
 //! via the existing `item_rename` + `macro_rename` grouping; this
 //! detector owns the same-file combined intent.
 //!
@@ -18,7 +24,7 @@
 //! ordinary). Totality is pre-image-proven: one `macro_rules! Old`
 //! definition covering its changed line plus `macro_holds` over the
 //! invocation subset (untouched twins veto), and a scratch-apply probe
-//! of the combined emission.
+//! of the emitted form.
 
 use syn::spanned::Spanned;
 
@@ -94,6 +100,28 @@ pub(crate) fn try_macro_rules_rename(
             return None;
         }
     }
+    // WI-16 slice 1: the follow form wins when proven. The same
+    // def+use shape raises as one def hunk with `# follow=uses`
+    // (byte-identical to the authored fixture-45 hunk); the engine's
+    // `macro_paths` follow rewrites every `Old!(…)` invocation by
+    // path identity. The scratch line-equality probe below is
+    // authoritative; the `parse_macro_pair` gate above only rejects
+    // cheap non-shares.
+    if let Some(pre_text) = pre {
+        let probe = emit_follow(path, "probe", Some(pre_text), def_site, &def_old, &def_new);
+        let pre_lines: Vec<&str> = pre_text.lines().collect();
+        if scratch_reproduces(pre_text, path, &probe, &pre_lines, changed, pluses) {
+            let rule = unique_rule(used_rules, &format!("rename_{def_old}_to_{def_new}"));
+            return Some(emit_follow(
+                path,
+                &rule,
+                Some(pre_text),
+                def_site,
+                &def_old,
+                &def_new,
+            ));
+        }
+    }
     // Scratch-apply probe of the combined emission (T361 doctrine):
     // the exact bytes must apply cleanly with 1 + N matches.
     let probe_rule = "probe";
@@ -153,6 +181,77 @@ fn macro_rules_def_site(pre: &str, old: &str) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// WI-16 slice 1: the follow emission — one def hunk with
+/// `# follow=uses` (byte-identical to the authored fixture-45 hunk).
+/// The engine rewrites every `Old!(…)` invocation by path identity;
+/// the `scratch_reproduces` probe below proves the exact site set.
+fn emit_follow(
+    path: &str,
+    rule: &str,
+    file_old: Option<&str>,
+    def_site: usize,
+    old: &str,
+    new: &str,
+) -> String {
+    let mut out = crate::git_header(path);
+    out.push('\n');
+    let mut head = item_emission_header(path, rule, file_old, &[def_site]);
+    // The def-only spelling carries `# allow=many`; the follow hunk
+    // is the single-proven-site spelling (59/77 doctrine).
+    head = head.replace("# allow=many\n", "");
+    out.push_str(strip_git_header(&head));
+    out.push_str("# follow=uses\n");
+    out.push_str(&format!("- macro_rules! {old}\n+ macro_rules! {new}\n"));
+    out
+}
+
+/// WI-16 slice 1 totality (member.rs line-equality precedent): the
+/// follow emission applied to `pre` must reproduce exactly the
+/// native plus lines at the changed sites with every other line
+/// byte-identical. An untouched twin the follow would rewrite fails
+/// the unchanged leg; a missed site fails the plus leg.
+fn scratch_reproduces(
+    pre: &str,
+    path: &str,
+    section: &str,
+    pre_lines: &[&str],
+    changed: &[usize],
+    pluses: &[&str],
+) -> bool {
+    let Ok(parsed) = rsmpl_patch::parse_patch(section) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(_) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return false;
+    };
+    let post = &files[path];
+    let post_lines: Vec<&str> = post.lines().collect();
+    if post_lines.len() != pre_lines.len() {
+        return false;
+    }
+    let changed_set: std::collections::HashSet<usize> = changed.iter().copied().collect();
+    for (i, &site) in changed.iter().enumerate() {
+        let Some(post_line) = post_lines.get(site.saturating_sub(1)) else {
+            return false;
+        };
+        if post_line.trim() != pluses[i].trim() {
+            return false;
+        }
+    }
+    for (idx, (pre_line, post_line)) in pre_lines.iter().zip(post_lines.iter()).enumerate() {
+        let line_no = idx + 1;
+        if changed_set.contains(&line_no) {
+            continue;
+        }
+        if pre_line != post_line {
+            return false;
+        }
+    }
+    true
 }
 
 /// Emit the combined two-hunk section sharing `rule`: the definition as
@@ -348,18 +447,21 @@ mod tests {
 
     #[test]
     fn fires_one_def_plus_four_uses() {
+        // WI-16 slice 1: def + clean invocations raises as one follow
+        // hunk (not the two-hunk verbatim combined form).
         let raw = raw_section();
         let pre = pre_map(&[("f.rs", PRE)]);
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("macro_rules rename must compress");
         assert_eq!(
             out.matches("rule=rename_old_widget_to_new_widget").count(),
-            2,
+            1,
             "got:\n{out}"
         );
         assert!(out.contains("- macro_rules! old_widget\n"), "got:\n{out}");
-        assert!(out.contains("- old_widget!(...)\n"), "got:\n{out}");
-        assert!(out.contains("# macro=token_tree\n"), "got:\n{out}");
+        assert!(out.contains("+ macro_rules! new_widget\n"), "got:\n{out}");
+        assert!(out.contains("# follow=uses\n"), "got:\n{out}");
+        assert!(!out.contains("# macro=token_tree\n"), "got:\n{out}");
         validated_live(&out, &pre);
         // Real-apply byte-identical: the post tree renames all five.
         let parsed = rsmpl_patch::parse_patch(&out).unwrap();
@@ -371,6 +473,66 @@ mod tests {
         assert!(!post.contains("old_widget"), "got: {post}");
         // The distractor survives.
         assert!(post.contains("other_widget!(6)"), "got: {post}");
+    }
+
+    #[test]
+    fn fixture_45_shape_fires_one_follow_hunk() {
+        // WI-16 slice 1: the fixture-45 corpus form (def + single
+        // `old_m!(41)` use) raises to the authored follow hunk.
+        let pre = "macro_rules! old_m {\n    ($x:expr) => { $x + 1 };\n}\nfn f() -> i32 {\n    old_m!(41)\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -1 +1 @@\n-macro_rules! old_m {\n+macro_rules! new_m {\n@@ -5 +5 @@\n-    old_m!(41)\n+    new_m!(41)\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("fixture-45 shape must compress");
+        assert_eq!(
+            out.matches("rule=rename_old_m_to_new_m").count(),
+            1,
+            "got:\n{out}"
+        );
+        assert!(out.contains("# follow=uses\n"), "got:\n{out}");
+        assert!(out.contains("- macro_rules! old_m\n"), "got:\n{out}");
+        assert!(out.contains("+ macro_rules! new_m\n"), "got:\n{out}");
+        validated_live(&out, &pre_map);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert!(files["f.rs"].contains("macro_rules! new_m {"));
+        assert!(files["f.rs"].contains("new_m!(41)"));
+        assert!(!files["f.rs"].contains("old_m"));
+    }
+
+    #[test]
+    fn invocation_only_declines_without_def() {
+        // WI-16 slice 1 boundary: a bare invocation pair with no def
+        // pair is WI-3's single territory, never the follow intent.
+        let minuses = ["    let a = old_widget!(1);"];
+        let pluses = ["    let a = new_widget!(1);"];
+        let mut used = Vec::new();
+        assert!(
+            try_macro_rules_rename(&minuses, &pluses, "f.rs", Some(PRE), &[5], &mut used).is_none()
+        );
+    }
+
+    #[test]
+    fn nested_inside_other_macro_stays_ordinary() {
+        // WI-16 slice 1 veto: an invocation nested inside another
+        // macro's body (`outer!(old_widget!(1))`) names `outer`, not
+        // `old_widget`, so the section declines wholly ordinary.
+        let pre = "macro_rules! old_widget {\n    ($x:expr) => { $x };\n}\nmacro_rules! outer {\n    ($x:expr) => { $x };\n}\nfn f() {\n    outer!(old_widget!(1));\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -1 +1 @@\n-macro_rules! old_widget {\n+macro_rules! new_widget {\n@@ -8 +8 @@\n-    outer!(old_widget!(1));\n+    outer!(new_widget!(1));\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map).is_none()
+                || !infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                    .unwrap()
+                    .contains("rename_old_widget_to_new_widget")
+        );
     }
 
     #[test]

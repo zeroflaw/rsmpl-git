@@ -9264,19 +9264,26 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   wins; any veto — multi-hole, strings, per-site deltas, mixed
   delimiters, unmatched twin — falls back to the verbatim `...` with
   its own probe).
-- `macro_rules!` definition + invocation rename (WI-7b): exactly one
+- `macro_rules!` definition + invocation rename (WI-7b + WI-16): exactly one
   column-0 `macro_rules! Old { … }` → `macro_rules! New { … }` header
   pair plus N ≥ 1 bare `Old!(…)` → `New!(…)` invocation pairs sharing
-  one ident delta → two hunks sharing `rule=rename_Old_to_New`: the
-  definition as a plain item hunk (`- macro_rules! Old` /
-  `+ macro_rules! New`) and the invocations as one `# allow=many`
-  `# macro=token_tree` verbatim sweep (`- Old!(...)` /
-  `+ New!(...)`). Bare invocations only (qualified `crate::Old!`
-  stays ordinary); twin definitions, indented (block-level)
-  definitions, and untouched invocation twins veto to ordinary.
-   Totality is pre-image-proven (one `macro_rules! Old` definition
-   covering its changed line plus `macro_holds` over the invocation
-   subset) plus a scratch-apply probe of the combined emission.
+  one ident delta → one def hunk with `# follow=uses`
+  (`- macro_rules! Old` / `+ macro_rules! New`, WI-16 slice 1,
+  byte-identical to the authored form). The engine's `macro_paths`
+  follow rewrites every invocation by path identity; totality is the
+  scratch line-equality probe over the exact site set (an untouched
+  twin the follow would rewrite fails the unchanged leg, a missed
+  site fails the plus leg). Bare invocations only (qualified
+  `crate::Old!` stays ordinary); twin definitions, indented
+  (block-level) definitions, and untouched invocation twins veto to
+  ordinary; invocations nested inside another macro's body are opaque
+  (`macro-hidden`: veto loud without fallback, skip with it — never
+  rewritten, never silent). When the follow probe declines (no
+  pre-image), the WI-7b two-hunk fallback emits instead sharing
+  `rule=rename_Old_to_New`: the definition as a plain item hunk plus
+  the invocations as one `# allow=many` `# macro=token_tree` verbatim
+  sweep, under the same def-site + `macro_holds` proof plus a
+  scratch-apply probe of the combined emission.
    Def-only singles (WI-19b, N = 1 definition pair, no invocations):
    the definition hunk alone in the concrete directive-free spelling,
    under the precision guard; same def-site proof + scratch probe.

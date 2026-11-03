@@ -33,8 +33,10 @@ pub(crate) fn run_pair_chain(
     used_rules: &mut Vec<String>,
     declined: &mut Vec<HunkDeclined>,
 ) -> Option<(String, &'static str)> {
-    // WI-7b: `macro_rules!` definition + invocation rename (one def plus
-    // N uses, hetero by construction) — before the slot sweep, which owns
+    // WI-7b + WI-16: `macro_rules!` definition + invocation rename (one
+    // def plus N uses, hetero by construction; WI-16 emits the def with
+    // `# follow=uses` when the scratch probe proves the site set, else
+    // the WI-7b two-hunk verbatim fallback) — before the slot sweep, which owns
     // homogeneous header classes and never claims a `macro_rules!` line.
     if let Some(combined) = attempt(
         declined,

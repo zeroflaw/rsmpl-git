@@ -356,6 +356,7 @@ const CYCLE_OK: &[&str] = &[
     "09-token-tree",
     "86-token-tree-single",
     "97-macro-sweep-single",
+    "45-macro-rules-rename",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -397,10 +398,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "30-trait-sweep",
         "hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)",
-    ),
-    (
-        "45-macro-rules-rename",
-        "partial (WI-19): def re-infers as precision item_rename single, use stays ordinary (no single-use macro detector, slice 2); S groups them with follow",
     ),
 
     (
