@@ -16,7 +16,7 @@ pub mod reason {
     pub const GLOB_REEXPORT: &str = "glob-reexport";
     /// A re-export chain passes through a second re-exporter.
     pub const SECOND_HOP: &str = "second-hop";
-    /// A method chain is deeper than the one-hop cap (`S::make().foo().run()`).
+    /// A method chain is deeper than the bounded-two cap (`a.foo().bar().baz().run()`).
     pub const CHAIN_DEPTH: &str = "chain-depth";
     /// A chain step names no provable constructor or stated return type.
     pub const CHAIN_UNPROVEN: &str = "chain-unproven";

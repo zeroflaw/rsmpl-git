@@ -161,7 +161,8 @@ fn inherent_ctor_chain_completion_applies_and_checks_clean() {
 }
 
 #[test]
-fn inherent_two_hop_chain_skips_chain_depth() {
+fn inherent_two_hop_chain_rewrites() {
+    // WI-11: two hops prove S through both steps.
     let dir = init_repo();
     cargo_crate(
         dir.path(),
@@ -170,8 +171,29 @@ fn inherent_two_hop_chain_skips_chain_depth() {
     let v = check_json(dir.path(), CTOR_PATCH);
     assert_eq!(
         v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "two-hop chain proves (WI-11), got: {v}"
+    );
+    apply_patch(dir.path(), CTOR_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("S::make().foo().new();"), "got: {post}");
+    assert!(!post.contains("old"), "got: {post}");
+    cargo_check(dir.path());
+}
+
+#[test]
+fn inherent_three_hop_chain_skips_chain_depth() {
+    // WI-11 bound: a third hop keeps `chain-depth`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub struct S;\nimpl S {\n    pub fn make() -> S {\n        S\n    }\n    pub fn foo(&self) -> S {\n        S\n    }\n    pub fn bar(&self) -> S {\n        S\n    }\n    pub fn old(&self) {}\n}\npub fn f() {\n    S::make().foo().bar().old();\n}\n",
+    );
+    let v = check_json(dir.path(), CTOR_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
         serde_json::json!("partial"),
-        "two-hop chain exceeds the one-hop cap (WI-11), got: {v}"
+        "three-hop chain exceeds the bounded-two cap (WI-11), got: {v}"
     );
     let reasons: Vec<String> = v["rules"][0]["follow_skipped_details"]
         .as_array()
@@ -185,7 +207,7 @@ fn inherent_two_hop_chain_skips_chain_depth() {
     );
     apply_patch(dir.path(), CTOR_PATCH);
     let post = read(dir.path(), "src/lib.rs");
-    assert!(post.contains("S::make().foo().old();"), "got: {post}");
+    assert!(post.contains("S::make().foo().bar().old();"), "got: {post}");
     // No `cargo check`: the definition renamed while the skipped call
     // still names `old` — the evidence (not the build) is the pin.
 }

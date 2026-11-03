@@ -1368,7 +1368,7 @@ mod tests {
         assert_eq!(super::item_macro_ident_lines(m, "old"), vec![3]);
     }
 
-    // WI-11: constructor chains, one-hop method-return chains, generic bounds.
+    // WI-11: constructor chains, bounded-two method-return chains, generic bounds.
     const CTOR_SRC: &str = "struct S;\nimpl S {\n    fn make() -> S {\n        S\n    }\n    fn run(&self) {\n    }\n}\nfn f() {\n    S::make().run();\n}\n";
 
     fn run_patch() -> String {
@@ -1444,14 +1444,47 @@ mod tests {
     }
 
     #[test]
-    fn two_hop_chain_is_chain_depth() {
-        let src = "struct S;\nimpl S {\n    fn make() -> S {\n        S\n    }\n    fn foo(&self) -> S {\n        S\n    }\n    fn run(&self) {\n    }\n}\nfn f() {\n    S::make().foo().run();\n}\n";
+    fn two_hop_chain_rewrites() {
+        // WI-11: `S::make().foo().run()` proves S through both hops.
+        let src = "struct S;\nimpl S {\n    fn make() -> S {\n        S\n    }\n    fn foo(&self) -> S {\n        S\n    }\n    fn run(&self) {\n    }\n}\nfn f() {\n    S::make().foo().run();\n}";
+        let (files, report) = apply_files(&run_patch(), &[("src/lib.rs", src)]).unwrap();
+        assert!(
+            files["src/lib.rs"].contains("S::make().foo().walk();"),
+            "got: {}",
+            files["src/lib.rs"]
+        );
+        assert!(
+            report.rules[0].follow_skipped_details.is_empty(),
+            "got: {:?}",
+            report.rules[0].follow_skipped_details
+        );
+    }
+
+    #[test]
+    fn three_hop_chain_is_chain_depth() {
+        // WI-11 bound: a third hop keeps `chain-depth`.
+        let src = "struct S;\nimpl S {\n    fn make() -> S {\n        S\n    }\n    fn foo(&self) -> S {\n        S\n    }\n    fn bar(&self) -> S {\n        S\n    }\n    fn run(&self) {\n    }\n}\nfn f() {\n    S::make().foo().bar().run();\n}";
         let (_, report) = apply_files(&run_patch(), &[("src/lib.rs", src)]).unwrap();
         assert!(
             report.rules[0]
                 .follow_skipped_details
                 .iter()
                 .any(|d| d.reason == "chain-depth"),
+            "got: {:?}",
+            report.rules[0].follow_skipped_details
+        );
+    }
+
+    #[test]
+    fn unstated_mid_return_is_chain_unproven() {
+        // WI-11 per-hop proof: the failing hop reports `chain-unproven`.
+        let src = "struct S;\nimpl S {\n    fn make() -> S {\n        S\n    }\n    fn foo(&self) {\n    }\n    fn run(&self) {\n    }\n}\nfn f() {\n    S::make().foo().run();\n}";
+        let (_, report) = apply_files(&run_patch(), &[("src/lib.rs", src)]).unwrap();
+        assert!(
+            report.rules[0]
+                .follow_skipped_details
+                .iter()
+                .any(|d| d.reason == "chain-unproven"),
             "got: {:?}",
             report.rules[0].follow_skipped_details
         );

@@ -1,4 +1,4 @@
-//! WI-11 anchor growth: constructor chains, one-hop method-return
+//! WI-11 anchor growth: constructor chains, bounded-two method-return
 //! chains, and generic-bound receivers (SPEC 14.8).
 //!
 //! Sibling of [`crate::use_graph_method`] under the D5 file-size gate:
@@ -231,7 +231,7 @@ pub(crate) enum ChainVerdict {
     /// Generic-bound proof: the single bound names the trait itself —
     /// the caller claims without consulting `domain_self`.
     ProvenTrait,
-    /// Deeper than the one-hop cap (`S::make().foo().run()`).
+    /// Deeper than the bounded-two cap (`a.foo().bar().baz().run()`).
     Depth,
     /// Shape recognised but the proof is missing (unknown ctor,
     /// unstated intermediate return).
@@ -243,10 +243,12 @@ pub(crate) enum ChainVerdict {
 }
 
 /// Resolve the receiver of a final `.old()` call:
-/// `C::ctor(…)` (ctor map), `base.m(…)` one-hop chains (return map),
-/// or a generic-bound root (bounds map, trait domain only).
+/// `C::ctor(…)` (ctor map), `base.m(…)` chains up to two hops
+/// (return map), or a generic-bound root (bounds map, trait domain only).
 /// `self_ty_at`/`trait_top` mirror the walker's `self` handling so
 /// `self.clone().run()` proves through the enclosing `impl S`.
+/// Bound: at most two `Call`/`MethodCall` hops; a deref step costs
+/// nothing (anchor rewrite before the walk). A third hop is `Depth`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_chain_type(
     recv: &syn::Expr,
@@ -280,9 +282,74 @@ pub(crate) fn resolve_chain_type(
             }
         }
     }
-    match recv {
+    match type_of_expr(
+        recv,
+        line,
+        anchors,
+        maps,
+        trait_name,
+        self_ty_at,
+        trait_top,
+        is_inherent,
+        2,
+    ) {
+        Ok(ty) => ChainVerdict::Proven(ty),
+        Err(v) => v,
+    }
+}
+
+/// One proved method step: inherent stated return wins, then the
+/// exactly-one trait-`Self` holder, then the closed `clone`-shape.
+fn step_return(base_ty: &str, mid: &str, maps: &ChainMaps) -> Result<String, ChainVerdict> {
+    if let Some(ret) = maps.returns.get(&(base_ty.to_string(), mid.to_string())) {
+        return Ok(ret.clone());
+    }
+    let holders = maps.trait_self.iter().filter(|e| e.1 == mid).count();
+    if holders == 1 {
+        return Ok(base_ty.to_string());
+    }
+    if holders > 1 {
+        return Err(ChainVerdict::Unproven);
+    }
+    if mid == "clone" {
+        return Ok(base_ty.to_string());
+    }
+    Err(ChainVerdict::Unproven)
+}
+
+/// Type of a receiver sub-expression under a hop budget.
+/// `Path`/`Field` bases cost nothing (anchor rewrite, deref free);
+/// each `Call`/`MethodCall` costs one hop. `Decline` means not a
+/// chain shape (the walker's evidence owns it); `Depth` means the
+/// budget is exceeded; `Unproven`/`Ambiguous` name the failed proof.
+#[allow(clippy::too_many_arguments)]
+fn type_of_expr(
+    expr: &syn::Expr,
+    line: u32,
+    anchors: &AnchorIndex,
+    maps: &ChainMaps,
+    trait_name: &str,
+    self_ty_at: Option<&str>,
+    trait_top: Option<&str>,
+    is_inherent: bool,
+    budget: u8,
+) -> Result<String, ChainVerdict> {
+    match expr {
+        syn::Expr::Path(_) | syn::Expr::Field(_) => base_concrete_type(
+            expr,
+            line,
+            anchors,
+            maps,
+            trait_name,
+            self_ty_at,
+            trait_top,
+            is_inherent,
+        )
+        .ok_or(ChainVerdict::Decline),
         syn::Expr::Call(call) => {
-            // `C::ctor(…)` — func path with ≥2 segments, last in CTOR_NAMES.
+            if budget == 0 {
+                return Err(ChainVerdict::Depth);
+            }
             if let syn::Expr::Path(fp) = call.func.as_ref() {
                 if fp.qself.is_none() && fp.path.segments.len() >= 2 {
                     let segs: Vec<String> = fp
@@ -295,24 +362,19 @@ pub(crate) fn resolve_chain_type(
                     if CTOR_NAMES.contains(&ctor.as_str()) {
                         let container = segs[segs.len() - 2].clone();
                         if maps.ctors.contains(&(container.clone(), ctor)) {
-                            return ChainVerdict::Proven(container);
+                            return Ok(container);
                         }
-                        return ChainVerdict::Unproven;
+                        return Err(ChainVerdict::Unproven);
                     }
                 }
             }
-            ChainVerdict::Decline
+            Err(ChainVerdict::Decline)
         }
         syn::Expr::MethodCall(inner) => {
-            // One-hop cap: a chained base (`S::make().foo().run()`)
-            // is `chain-depth`, never a guess.
-            if !matches!(
-                inner.receiver.as_ref(),
-                syn::Expr::Path(_) | syn::Expr::Field(_)
-            ) {
-                return ChainVerdict::Depth;
+            if budget == 0 {
+                return Err(ChainVerdict::Depth);
             }
-            let Some(base_ty) = base_concrete_type(
+            let base_ty = type_of_expr(
                 &inner.receiver,
                 line,
                 anchors,
@@ -321,39 +383,11 @@ pub(crate) fn resolve_chain_type(
                 self_ty_at,
                 trait_top,
                 is_inherent,
-            ) else {
-                return ChainVerdict::Decline;
-            };
-            let mid = inner.method.to_string();
-            // Inherent stated returns keep precedence over the
-            // trait-`Self` rule below (a concrete return wins).
-            if let Some(ret) = maps.returns.get(&(base_ty.clone(), mid.clone())) {
-                return ChainVerdict::Proven(ret.clone());
-            }
-            // WI-10 slice 2: trait-`Self` return — `c.get().run()`
-            // proves the base type when exactly one same-file trait
-            // defines `get` with a `Self` return. Two or more such
-            // traits stay `chain-unproven`, never a guess.
-            let holders = maps
-                .trait_self
-                .iter()
-                .filter(|entry| entry.1 == mid)
-                .count();
-            if holders == 1 {
-                return ChainVerdict::Proven(base_ty);
-            }
-            if holders > 1 {
-                return ChainVerdict::Unproven;
-            }
-            // Closed `clone`-shape: `c.clone()` returns the receiver
-            // type when the receiver is independently anchored (which
-            // it is — `base_concrete_type` proved it above).
-            if mid == "clone" {
-                return ChainVerdict::Proven(base_ty);
-            }
-            ChainVerdict::Unproven
+                budget - 1,
+            )?;
+            step_return(&base_ty, &inner.method.to_string(), maps)
         }
-        _ => ChainVerdict::Decline,
+        _ => Err(ChainVerdict::Decline),
     }
 }
 
@@ -606,6 +640,35 @@ mod tests {
         assert_eq!(
             resolve_recv(src, "c.clone()", 3),
             ChainVerdict::Proven("C".to_string())
+        );
+    }
+
+    #[test]
+    fn two_hop_ctor_plus_method_proves() {
+        // WI-11: `S::make().foo()` proves S through both hops.
+        let src = "struct S;\nimpl S {\n    fn make() -> S { S }\n    fn foo(&self) -> S { S }\n}\nfn f() {\n    S::make().foo().run();\n}\n";
+        assert_eq!(
+            resolve_recv(src, "S::make().foo()", 9),
+            ChainVerdict::Proven("S".to_string())
+        );
+    }
+
+    #[test]
+    fn three_hop_chain_keeps_depth() {
+        // WI-11 bound: three hops exceed the budget.
+        let src = "struct S;\nimpl S {\n    fn make() -> S { S }\n    fn foo(&self) -> S { S }\n    fn bar(&self) -> S { S }\n}\nfn f() {\n    S::make().foo().bar().run();\n}\n";
+        assert_eq!(
+            resolve_recv(src, "S::make().foo().bar()", 10),
+            ChainVerdict::Depth
+        );
+    }
+
+    #[test]
+    fn unstated_second_hop_is_unproven() {
+        let src = "struct S;\nimpl S {\n    fn make() -> S { S }\n    fn foo(&self) {}\n}\nfn f() {\n    S::make().foo().run();\n}\n";
+        assert_eq!(
+            resolve_recv(src, "S::make().foo()", 8),
+            ChainVerdict::Unproven
         );
     }
 

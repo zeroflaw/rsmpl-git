@@ -2577,7 +2577,7 @@ re-export chain passes through a second re-exporter), `macro-hidden`
 an unsearchable workspace file), `off-target` (names `old` but sits
 outside any rewritten hunk: a re-export that does not point at our
 definition, or a use left behind by a definition-only rename),
-`chain-depth` (WI-11: a method chain deeper than the one-hop cap),
+`chain-depth` (WI-11: a method chain deeper than the bounded-two cap),
 `chain-unproven` (WI-11: a chain step naming no proven constructor or
 stated return type), `ambiguous-bound` (WI-11: a generic-bound receiver
 with two or more candidate bounds), `capture-risk` (a pre-existing `new` binder in a sequence- or single-`let`-renamed binder's own scope — rewritten uses would resolve under a shadowing twin). JSON
@@ -2837,7 +2837,8 @@ order same-file only (D8): `C::ctor(…).old()` where `ctor` is
 `new`/`make`/`default` and the same file contains `impl C` with that
 constructor returning `C`/`Self`; `base.m(…).old()` where `base` is
 anchored and the same file states `m` returning the domain type on the
-base type (one hop — deeper chains skip `chain-depth`); and `t.old()`
+base type (bounded two hops — each hop proved, a third hop skips
+`chain-depth`; a deref step costs no hop); and `t.old()`
 where `t: T` with exactly one bound naming the trait (`T: Tr`, inline
 or `where`; two or more bounds skip `ambiguous-bound`); and WI-10
 slice 2 grows the one-hop arm workspace-wide: `base.m(…).old()`
@@ -2870,7 +2871,7 @@ closed-set/shadowing law, plus workspace `impl Deref for C` targets
 anchoring `C` to `T`), `self` inside an
 `impl S` block, `S::old` tails, and `<S as _>::old` qself tails naming
 the self type, plus the WI-11 same-file chain shapes (constructor calls
-and one-hop method-return chains, including workspace trait-`Self`
+and bounded-two method-return chains, including workspace trait-`Self`
 returns and the closed `clone`-shape; generic bounds never prove a concrete
 self type and stay `off-target`). `trait` declarations, `impl <Trait> for _` definitions,
 and other-type inherent `impl U { fn old }` defs never claim (different
