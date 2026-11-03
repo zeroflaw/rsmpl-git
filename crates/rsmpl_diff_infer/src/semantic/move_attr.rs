@@ -1,33 +1,37 @@
-//! WI-14 slice 1: `fn` move + exactly one added single-line `#[...]`
+//! WI-14 slices 1-2: move + exactly one added single-line `#[...]`
 //! attr line (D5 sibling of `move_scan.rs`).
 //!
-//! A verbatim `fn` move whose plus side carries one extra `#[attr]`
+//! A verbatim item move whose plus side carries one extra `#[attr]`
 //! line above an otherwise identical item re-diffs as delete-cut +
-//! wholly ordinary plus: byte-identical `find_runs` matches the `fn`
-//! lines, but `plus_run_is_item` declines (sub-span of the attr+fn
-//! item) and the evolved cascade vetoes every attr delta. This module
-//! admits exactly that shape: the claimed plus run is the `fn` span
+//! wholly ordinary plus: byte-identical `find_runs` matches the item
+//! lines, but `plus_run_is_item` declines (sub-span of the attr+item
+//! span) and the evolved cascade vetoes every attr delta. This module
+//! admits exactly that shape: the claimed plus run is the item span
 //! minus its one leading attr line, so the attr line falls into the
 //! existing T432b plus-prefix leftover (ordinary `+#[attr]` hunk)
 //! while the cut + bare `+ M1` paste carry the move — no pattern or
 //! engine change, no new spelling.
 //!
-//! Scope is deliberately narrow: `fn` items only, exactly one added
-//! single-line `#[...]` line. Removed / replaced / multi-line attrs,
-//! doc (`///`) additions, non-`fn` kinds, and rename+attr (two deltas)
-//! all decline to ordinary (pinned below) — later WI-14 slices own
-//! those axes.
+//! Scope is deliberately narrow: any move-eligible item kind, exactly
+//! one added single-line `#[...]` line. Removed / replaced /
+//! multi-line attrs, doc (`///`) additions, and rename+attr (two
+//! deltas) all decline to ordinary (pinned below) — later WI-14
+//! slices own those axes.
 
 use syn::spanned::Spanned;
 
 use super::move_parts::line_text;
 
 /// True when `body[first..=last]` (0-based hunk-body lines) is a parsed
-/// `Item::Fn` span minus exactly one leading single-line `#[...]` attr
-/// line. The caller guarantees the run textually matches a minus item;
-/// this checks the plus-side shape only: an `fn` item whose span starts
-/// exactly one line above the run, that line is one `#[...]` line, and
-/// the remaining item lines equal the run lines verbatim.
+/// move-eligible item span minus exactly one leading single-line
+/// `#[...]` attr line. The caller guarantees the run textually matches
+/// a minus item; this checks the plus-side shape only: an item whose
+/// span starts exactly one line above the run, that line is one
+/// `#[...]` line, and the remaining item lines equal the run lines
+/// verbatim. Content-bearing `mod` / method-bearing `trait` decline
+/// via the shared `move_cut_eligible` gate (the cut cannot carry
+/// them); ident-less items (use/macro/trait-impl) decline since no
+/// minus item ever pairs them.
 pub(crate) fn plus_run_is_attr_added_fn(body: &[String], first: usize, last: usize) -> bool {
     if first == 0 || last < first || last >= body.len() {
         return false;
@@ -46,9 +50,12 @@ pub(crate) fn plus_run_is_attr_added_fn(body: &[String], first: usize, last: usi
         return false;
     };
     for it in &file.items {
-        let syn::Item::Fn(_) = it else {
+        if !super::move_scan::move_cut_eligible(it) {
             continue;
-        };
+        }
+        if super::move_scan::item_ident(it).is_none() {
+            continue;
+        }
         // syn spans are 1-based and include outer attrs: the item must
         // start on the attr line and end on the run's last line.
         if it.span().start().line != attr_idx + 1 || it.span().end().line != last + 1 {
@@ -233,8 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn struct_attr_added_stays_ordinary() {
-        // Slice 1 is `fn`-only: a struct move + attr stays ordinary.
+    fn struct_attr_added_fires_with_ordinary_prefix() {
+        // WI-14 slice 2: any move-eligible item kind rides the same
+        // T432b leftover shape as `fn` — the attr line stays ordinary
+        // above the bare paste.
         let mut strukt = String::from("struct Big {\n");
         for i in 0..40 {
             strukt.push_str(&format!("    f{i}: u32,\n"));
@@ -246,15 +255,66 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("struct attr-added move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("+#[derive(Clone)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+struct Big {"),
+            "plus struct lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn enum_attr_added_fires_with_ordinary_prefix() {
+        // Second-kind twin: enum + one added attr fires identically.
+        let mut en = String::from("enum Big {\n");
+        for i in 0..40 {
+            en.push_str(&format!("    V{i}(u32),\n"));
+        }
+        en.push_str("}\n");
+        let a_old = format!("fn keep() {{}}\n{en}");
+        let a_minus: String = en.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[derive(Clone)]\n{en}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("enum attr-added move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(
+            text.contains("+#[derive(Clone)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn content_bearing_mod_attr_added_stays_ordinary() {
+        // The shared `move_cut_eligible` gate still declines
+        // content-bearing `mod` (the scalar cut cannot carry it).
+        let modu = "mod m {\n    pub fn f() {}\n}\n";
+        let a_old = format!("fn keep() {{}}\n{modu}");
+        let a_minus: String = modu.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[allow(dead_code)]\n{modu}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
         assert!(
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "struct attr-added must stay ordinary"
+            "content-bearing mod attr-added must stay ordinary"
         );
     }
 
     #[test]
     fn rename_plus_attr_stays_ordinary() {
-        // Two deltas (rename + attr add) never join in slice 1.
+        // Two deltas (rename + attr add) never join in slices 1-2.
         let big = big_fn("foo");
         let renamed = big.replacen("fn foo()", "fn bar()", 1);
         let a_old = format!("fn keep() {{}}\n{big}");
@@ -272,7 +332,7 @@ mod tests {
 
     #[test]
     fn doc_comment_added_stays_ordinary() {
-        // Slice 1 covers `#[...]` only; `///` additions stay ordinary.
+        // Slices 1-2 cover `#[...]` only; `///` additions stay ordinary.
         let big = big_fn("foo");
         let a_old = format!("fn keep() {{}}\n{big}");
         let a_minus: String = big.lines().map(|l| format!("-{l}\n")).collect();

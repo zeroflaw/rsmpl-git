@@ -76,7 +76,7 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
 /// `trait` always fails with `expected one match, found N`. Such items
 /// stay ordinary. Empty inline `mod {}` (`Some` empty), outline
 /// `mod;` (`None`), and empty traits stay eligible.
-fn move_cut_eligible(it: &syn::Item) -> bool {
+pub(crate) fn move_cut_eligible(it: &syn::Item) -> bool {
     match it {
         syn::Item::Mod(m) => match &m.content {
             None => true,
@@ -91,7 +91,7 @@ fn move_cut_eligible(it: &syn::Item) -> bool {
 /// (use decls, macros) which stay ordinary. Inherent `impl` blocks
 /// contribute their self-ty last segment (`impl Old` → `Old`);
 /// trait-impls (`impl Tr for Ty`) stay `None` (WI-3 owns that header).
-fn item_ident(it: &syn::Item) -> Option<String> {
+pub(crate) fn item_ident(it: &syn::Item) -> Option<String> {
     match it {
         syn::Item::Fn(f) => Some(f.sig.ident.to_string()),
         syn::Item::Struct(s) => Some(s.ident.to_string()),
