@@ -14,22 +14,57 @@ use syn::spanned::Spanned;
 /// `# symbol` (WI-4 slice 1: single-segment pattern path naming a
 /// symbol) verifies through `matcher_symbol` — exact full-path text
 /// under `# fallback=syntax`, crate-graph resolution otherwise — and
-/// never binds. A whole-segment placeholder binds the target segment
+/// never binds. A symbol-led prefix (WI-4 slice 2a: `Old::suffix`,
+/// `Old::<T>::suffix`) verifies the stem the same way and compares the
+/// concrete suffix structurally. A whole-segment placeholder binds the target segment
 /// text; concrete segments must equal.
 /// (`qself` equality lives in the `matcher_spelling` sibling, WI-7d.)
 pub(crate) fn match_path(pat: &syn::Path, tgt: &syn::Path, cx: &mut MatchCx) -> bool {
+    // WI-4 slice 2a: symbol-led prefixes first (single leading symbol
+    // + concrete suffix; whole-path single-segment paths fall to the
+    // arm below).
+    if pat.segments.len() > 1 {
+        let head_id = pat.segments[0].ident.to_string();
+        if let Some(name) = as_placeholder(&cx.reverse, &head_id).cloned() {
+            if cx.symbols.contains_key(&name) {
+                return crate::matcher_symbol::match_symbol_prefix(cx, pat, tgt).unwrap_or(false);
+            }
+        }
+    }
     // WI-4 slice 1: whole-path symbols first (before the leading-`::`
     // parity gate — resolution in `matcher_symbol` owns leading math).
     if pat.segments.len() == 1 {
         let id = pat.segments[0].ident.to_string();
         if let Some(name) = as_placeholder(&cx.reverse, &id).cloned() {
             if cx.symbols.contains_key(&name) {
-                // Compile-time C14 rejects placeholder segments with
-                // generic args; defense-in-depth never matches them here.
+                // WI-4 slice 2a: stem turbofish/args (`Old::<T>`)
+                // compare structurally against the LAST target segment
+                // (ordinary holes bind, nested symbols verify); the stem
+                // text verifies over all target segments below, so full
+                // spellings (`crate::old::<u8>`) match as well as short
+                // ones. Arg-free stems keep the slice-1 verdict
+                // (concrete targets with args still miss: `None` vs
+                // `Some` fails safe in `match_path_args`).
                 if !matches!(pat.segments[0].arguments, syn::PathArguments::None) {
-                    return false;
-                }
-                if tgt
+                    let Some(last) = tgt.segments.last() else {
+                        return false;
+                    };
+                    if !match_path_args(&pat.segments[0].arguments, &last.arguments, cx) {
+                        return false;
+                    }
+                    // Middle-segment args never match a whole-path
+                    // turbofish (the stem is one segment; anything else
+                    // is a different path).
+                    let n = tgt.segments.len();
+                    if tgt
+                        .segments
+                        .iter()
+                        .take(n.saturating_sub(1))
+                        .any(|s| !matches!(s.arguments, syn::PathArguments::None))
+                    {
+                        return false;
+                    }
+                } else if tgt
                     .segments
                     .iter()
                     .any(|s| !matches!(s.arguments, syn::PathArguments::None))

@@ -393,21 +393,24 @@ fn symbol_fallback_rejects_bare_path() {
 }
 #[test]
 fn symbol_in_general_shape_is_pattern_conflict() {
-    // WI-4 slice 1/C14: a general-expression hunk with a PREFIX symbol
-    // (`Old::…`) fails at compile even with `# fallback=syntax` set —
-    // whole-path uses compile, prefix uses ride concrete paths.
+    // WI-4 slice 2a/C14: a general-expression hunk with a NON-LEADING
+    // symbol (`foo::Old`) fails at compile even with `# fallback=syntax`
+    // set — leading prefixes compile, suffix segments ride concrete
+    // paths. (Bare `E + <path>` shapes never reach C14: the
+    // pre-existing inference claims `E` as `type` there, so this pin
+    // keeps a `+ 1` tail to stay in expression inference.)
     let dir = init_repo();
     write(
         dir.path(),
         "src/lib.rs",
         "fn a() {\n    let v = y + 1;\n    let _ = v;\n}\n",
     );
-    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- E + Old::compute(1)\n+ E + New::compute(1)\n";
+    let patch = "diff --git src/lib.rs\n@@ -1,4 @@ rule=r\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- foo::Old + 1\n+ foo::New + 1\n";
     let out = run_stdin(dir.path(), patch, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(stderr.contains("RSMPL_PATTERN_CONFLICT"), "got: {stderr}");
-    assert!(stderr.contains("path prefix"), "got: {stderr}");
+    assert!(stderr.contains("longer path"), "got: {stderr}");
 }
 
 #[test]

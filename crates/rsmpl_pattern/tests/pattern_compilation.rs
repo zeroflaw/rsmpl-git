@@ -1832,9 +1832,11 @@ fn arm_addition_minus_present_declines() {
     );
 }
 
-// WI-4 slice 1: whole-path `# symbol` positions in General Stmt/Expr/Type
-// compile; prefix, turbofish, qself, method-ident, binding, field, and
-// sequence uses reject with the position named (C14).
+// WI-4 slice 1 + slice 2a: whole-path and prefix `# symbol` positions in
+// General Stmt/Expr/Type compile; qself, method-ident, binding, field,
+// non-leading/double/non-concrete-suffix, and sequence uses reject with
+// the position named (C14). Slice 2a moved the prefix, turbofish, and
+// nested-annotation shapes from the reject list to this compile list.
 #[test]
 fn wi4_slice1_general_symbol_positions_compile() {
     let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
@@ -1846,6 +1848,30 @@ fn wi4_slice1_general_symbol_positions_compile() {
         ("expr", "E + Old(1)", "E + New(1)"),
         ("type", "Old", "New"),
         ("type-nested", "Vec<Old>", "Vec<New>"),
+        // Slice 2a: prefix (stmt + expr + type), turbofish callee,
+        // nested symbol annotation.
+        (
+            "stmt-prefix",
+            "let x = Old::compute(E);",
+            "let x = New::compute(E);",
+        ),
+        ("expr-prefix", "Old::foo + 1", "New::foo + 1"),
+        ("type-prefix", "Old::Assoc", "New::Assoc"),
+        (
+            "stmt-turbofish",
+            "let x = Old::<u8>(E);",
+            "let x = New::<u8>(E);",
+        ),
+        (
+            "stmt-annot-nested",
+            "let x: Vec<Old> = E;",
+            "let x: Vec<New> = E;",
+        ),
+        (
+            "stmt-suffix-targs",
+            "let x = Old::make::<T>(E);",
+            "let x = New::make::<T>(E);",
+        ),
     ] {
         let extra = if shape.starts_with("type") {
             "# root=type\n".to_string()
@@ -1853,7 +1879,7 @@ fn wi4_slice1_general_symbol_positions_compile() {
             String::new()
         };
         let patch = format!(
-            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n{extra}# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- {minus}\n+ {plus}\n"
+            "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n{extra}# expr E\n# type T\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- {minus}\n+ {plus}\n"
         );
         let kind = compile(&hunk_of(&patch))
             .expect("{shape} whole-path symbol must compile")
@@ -1876,22 +1902,18 @@ fn wi4_slice1_general_symbol_positions_compile() {
 #[test]
 fn wi4_slice1_general_symbol_slots_reject() {
     let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
-    // (minus, plus, position needle).
-    // NOTE: a symbol nested in a `let`-annotation (`Vec<Old>`) stays C8
-    // (the pre-existing pattern-interior gate owns it — checked here as
-    // a boundary pin); the same nesting as a standalone type hunk is a
-    // whole-path use and compiles (pinned above).
+    // (minus, plus, position needle). Slice 2a admits the single-leading
+    // prefix, turbofish, nested-annotation, and suffix-turbofish-hole
+    // shapes (pinned compiling above); what still rejects is a symbol
+    // that does not HEAD the path. Suffix placeholders pass the gate
+    // (the engine binds them) — there is no reachable parse-only
+    // rejection left. NOTE: bare `E + <path>` shapes never reach C14 —
+    // the pre-existing inference claims `E` as `type` there (trait-
+    // object parse; no symbols involved), so the rows below keep a
+    // `+ 1` tail (or no `E`) to stay in expression inference.
     for (minus, plus, needle) in [
-        (
-            "let x = Old::compute(E);",
-            "let x = New::compute(E);",
-            "path prefix",
-        ),
-        (
-            "let x = Old::<u8>(E);",
-            "let x = New::<u8>(E);",
-            "path prefix",
-        ),
+        ("foo::Old + 1", "foo::New + 1", "longer path"),
+        ("Old::New + 1", "New::Old + 1", "longer path"),
         ("let Old = E;", "let New = E;", "pattern interior"),
         (
             "let y = S { Old: E };",
@@ -1937,12 +1959,21 @@ fn wi4_slice1_general_symbol_slots_reject() {
         "want sequence label:\n{}",
         err.render()
     );
-    // Boundary: a symbol nested in a `let`-annotation generic arg stays
-    // C8 (pre-existing pattern-interior gate, not C14).
+    // Boundary (slice 2a): a symbol nested in a `let`-annotation generic
+    // arg now compiles (C8 admits symbol-only annotation types).
     let annot_nested = format!(
         "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# fallback=syntax\n# symbol Old=crate::old_api\n# symbol New=crate::new_api\n- let x: Vec<Old> = E;\n+ let x: Vec<New> = E;\n"
     );
-    let err = compile(&hunk_of(&annot_nested)).expect_err("nested annotation must reject");
+    assert!(
+        compile(&hunk_of(&annot_nested)).is_ok(),
+        "nested symbol annotation must compile"
+    );
+    // Boundary (slice 2a): a non-symbol placeholder nested in a
+    // `let`-annotation still fails C8 (the gate keys on symbols only).
+    let annot_hole = format!(
+        "{head}@@ -2,1 +2,1 @@ rule=x\n# lang=rust\n# expr E\n# type T\n# fallback=syntax\n- let x: Vec<T> = E;\n+ let x: Vec<T> = E;\n"
+    );
+    let err = compile(&hunk_of(&annot_hole)).expect_err("non-symbol annotation hole must reject");
     assert!(
         err.render().contains("embedded metavariables elsewhere"),
         "want the C8 gate:\n{}",

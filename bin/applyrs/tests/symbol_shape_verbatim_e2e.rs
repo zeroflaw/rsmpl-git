@@ -1,12 +1,14 @@
-//! T276 (WI-4 slice 1): engine-verbatim `# symbol`-in-wrong-shape (SPEC 18.6 C14) reasons.
+//! T276 (WI-4 slice 1) + WI-4 slice 2a: engine-verbatim `# symbol`-in-
+//! wrong-shape (SPEC 18.6 C14) reasons.
 //!
 //! SPEC 18.6 C14 enumerates the admitted positions (call shapes plus
-//! general whole-path uses) and the named offending slot for the rest.
-//! The macro hunk below pins the shape label; the sequence hunk pins the
-//! remaining General label; the prefix hunk pins the slot-naming repair
-//! shape. General whole-path uses (`let x = Old(E)`, bare `Old` types)
-//! compile since WI-4 slice 1 — their pins live in `pattern_compilation`
-//! and the `matcher_symbol` / `matcher_general_apply` unit tests.
+//! general whole-path and single-leading-prefix uses) and the named
+//! offending slot for the rest. The macro hunk below pins the shape
+//! label; the sequence hunk pins the remaining General label; the
+//! non-leading-segment hunk pins the slot-naming repair shape. General
+//! whole-path and prefix uses compile since WI-4 slices 1–2a — their
+//! pins live in `pattern_compilation` and the `matcher_symbol` /
+//! `matcher_general_apply` unit tests.
 //! Text output omits the null `range:`/`suggestion:` lines; the JSON
 //! envelope carries explicit nulls.
 
@@ -70,31 +72,32 @@ fn symbol_in_sequence_names_shape_verbatim() {
     );
     assert!(
         stderr.contains(
-            "this general statement-sequence hunk cannot use `# symbol` — use a call-shape or general whole-path hunk, or a concrete path pattern"
+            "this general statement-sequence hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"
         ),
         "got: {stderr}"
     );
     assert_eq!(
         v["error"]["reason"],
-        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general whole-path positions (general-expression, general `let`-statement, general-type) in v0.1 — symbols match by exact full-path text (SPEC 19.3); this general statement-sequence hunk cannot use `# symbol` — use a call-shape or general whole-path hunk, or a concrete path pattern"),
+        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this general statement-sequence hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"),
         "got: {v}"
     );
 }
 
 #[test]
 fn symbol_prefix_slot_names_repair_verbatim() {
-    // Whole-path positions only: a prefix use names its slot (C14).
-    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=sym_pre\n# scope=file\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# fallback=syntax\n# expr E\n- let x = Old::compute(E);\n+ let x = New::compute(E);\n";
+    // Only leading symbols segment a prefix: a suffix-segment use names
+    // its slot (C14).
+    let patch = "diff --git a.rs\n@@ -1,1 @@ rule=sym_pre\n# scope=file\n# symbol Old=crate::foo\n# symbol New=crate::bar\n# fallback=syntax\n# expr E\n- foo::Old + 1\n+ foo::New + 1\n";
     let (stderr, v) = check_both(patch, "a.rs", "fn f() {\n    let x = 1;\n}\n");
     assert!(
         stderr.contains(
-            "`Old` names a path prefix (`Old::…`) — prefix symbols ride concrete paths in slice 1 (write the full path)"
+            "`Old` names a path segment of a longer path — only a leading symbol segments a prefix (`Old::suffix`); suffix segments ride concrete paths in slice 2a (write the full path)"
         ),
         "got: {stderr}"
     );
     assert_eq!(
         v["error"]["reason"],
-        serde_json::json!("`Old` names a path prefix (`Old::…`) — prefix symbols ride concrete paths in slice 1 (write the full path)"),
+        serde_json::json!("`Old` names a path segment of a longer path — only a leading symbol segments a prefix (`Old::suffix`); suffix segments ride concrete paths in slice 2a (write the full path)"),
         "got: {v}"
     );
 }
@@ -105,13 +108,13 @@ fn symbol_in_macro_names_shape_verbatim() {
     let (stderr, v) = check_both(patch, "a.rs", "fn f() { foo!(x); }\n");
     assert!(
         stderr.contains(
-            "this macro hunk cannot use `# symbol` — use a call-shape or general whole-path hunk, or a concrete path pattern"
+            "this macro hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"
         ),
         "got: {stderr}"
     );
     assert_eq!(
         v["error"]["reason"],
-        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general whole-path positions (general-expression, general `let`-statement, general-type) in v0.1 — symbols match by exact full-path text (SPEC 19.3); this macro hunk cannot use `# symbol` — use a call-shape or general whole-path hunk, or a concrete path pattern"),
+        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this macro hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"),
         "got: {v}"
     );
 }

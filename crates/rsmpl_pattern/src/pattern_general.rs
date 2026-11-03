@@ -3,6 +3,8 @@
 //! Upgrades non-call `Raw` shapes to structural patterns; the engine performs
 //! the actual target matching.
 
+use std::collections::HashMap;
+
 use rsmpl_patch::{ErrorCode, MetavarKind, StructuredError};
 use syn::visit::{self, Visit};
 
@@ -78,7 +80,7 @@ fn try_sequence(
     }
     for stmt in &minus_block.stmts {
         if let syn::Stmt::Local(l) = stmt {
-            check_let_pat(l)?;
+            check_let_pat(l, &table.symbols)?;
         }
     }
     let (_, plus_rest) = split_leading_attrs(plus_raw);
@@ -165,7 +167,7 @@ pub(crate) fn try_general(
     // every other embedded hole (notably `Or`-with-hole) fails here at
     // compile time in every pattern position — never a match-time
     // `no match found` the agent must debug by reading the file.
-    check_pat_positions(&sub)?;
+    check_pat_positions(&sub, &table.symbols)?;
 
     let want = |s: GeneralShape| forced.is_none_or(|f| f == s);
     let has_type_decl = table.declared.iter().any(|(k, _)| {
@@ -182,7 +184,7 @@ pub(crate) fn try_general(
     if want(GeneralShape::Stmt) {
         match syn::parse_str::<syn::Stmt>(&sub) {
             Ok(syn::Stmt::Local(local)) => {
-                check_let_pat(&local)?;
+                check_let_pat(&local, &table.symbols)?;
                 if has_ellipsis {
                     check_general_ellipsis_stmt(&local, &plus_rest, table)?;
                 }
@@ -589,7 +591,10 @@ fn build_general(
 /// WI-3 structural composites (`Some(P)`, `(P, Q)`, `S { f: P }`, `&P`,
 /// `[P]`, `(P)`) with holes only in bindable leaf positions, or a `P: T`
 /// shape whose parts are each whole-placeholder/concrete).
-fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
+fn check_let_pat(
+    local: &syn::Local,
+    symbols: &HashMap<String, String>,
+) -> Result<(), StructuredError> {
     let pat = &local.pat;
     let (inner, ty) = match pat {
         syn::Pat::Type(pt) => (&*pt.pat, Some(&*pt.ty)),
@@ -613,22 +618,52 @@ fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
         }
         if let Some(t) = ty {
             let rendered = quote::quote!(#t).to_string();
-            if rendered.contains("__RSMPL_") && !is_single_placeholder_type(t) {
+            if rendered.contains("__RSMPL_")
+                && !is_single_placeholder_type(t)
+                && !type_symbols_ok(t, symbols)
+            {
                 return Err(embedded_pat_err());
             }
         }
         return Ok(());
     }
-    if !pat_holes_ok(inner) {
+    if !pat_holes_ok(inner, symbols) {
         return Err(embedded_pat_err());
     }
     if let Some(t) = ty {
         let rendered = quote::quote!(#t).to_string();
-        if rendered.contains("__RSMPL_") && !is_single_placeholder_type(t) {
+        if rendered.contains("__RSMPL_")
+            && !is_single_placeholder_type(t)
+            && !type_symbols_ok(t, symbols)
+        {
             return Err(embedded_pat_err());
         }
     }
     Ok(())
+}
+
+/// WI-4 slice 2a: true when every `__RSMPL_*` token in the rendered type
+/// names a declared `# symbol` (at least one token present). Such types
+/// (`Vec<Old>`, `Option<Vec<Old>>`, `&Old`, …) pass the C8 annotation
+/// gate: the engine verifies symbols structurally (`match_symbol_type`
+/// via `match_generic_arg`) and never binds them. Ordinary placeholders
+/// keep the bare-single rule — a `Vec<P>` with non-symbol `P` still
+/// fails C8 at the caller.
+fn type_symbols_ok(t: &syn::Type, symbols: &HashMap<String, String>) -> bool {
+    if symbols.is_empty() {
+        return false;
+    }
+    let rendered = quote::quote!(#t).to_string();
+    let mut found = false;
+    for tok in rendered.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+        if let Some(name) = tok.strip_prefix("__RSMPL_") {
+            if !symbols.contains_key(name) {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found
 }
 
 /// WI-3: true when every metavariable inside `pat` sits in a position the
@@ -638,7 +673,11 @@ fn check_let_pat(local: &syn::Local) -> Result<(), StructuredError> {
 /// paren, reference, slice) recursed into. `Or` (ambiguous binding),
 /// macro/verbatim interiors, and ascribed-type holes beyond a single
 /// placeholder all return false (C8 at the caller).
-fn pat_holes_ok(pat: &syn::Pat) -> bool {
+///
+/// WI-4 slice 2a: `symbols` admits symbol-only annotation types
+/// (`let x: Vec<Old>` — see `type_symbols_ok`); every other position
+/// keeps the historical rule.
+fn pat_holes_ok(pat: &syn::Pat, symbols: &HashMap<String, String>) -> bool {
     match pat {
         syn::Pat::Ident(pid) => {
             let head_is_ph = pid.ident.to_string().starts_with("__RSMPL_");
@@ -656,17 +695,20 @@ fn pat_holes_ok(pat: &syn::Pat) -> bool {
         syn::Pat::Type(pt) => {
             let ty = &pt.ty;
             let rendered = quote::quote!(#ty).to_string();
-            if rendered.contains("__RSMPL_") && !is_single_placeholder_type(ty) {
+            if rendered.contains("__RSMPL_")
+                && !is_single_placeholder_type(ty)
+                && !type_symbols_ok(ty, symbols)
+            {
                 return false;
             }
-            pat_holes_ok(&pt.pat)
+            pat_holes_ok(&pt.pat, symbols)
         }
-        syn::Pat::TupleStruct(ps) => ps.elems.iter().all(pat_holes_ok),
-        syn::Pat::Tuple(pt) => pt.elems.iter().all(pat_holes_ok),
-        syn::Pat::Struct(ps) => ps.fields.iter().all(|f| pat_holes_ok(&f.pat)),
-        syn::Pat::Paren(pp) => pat_holes_ok(&pp.pat),
-        syn::Pat::Reference(pr) => pat_holes_ok(&pr.pat),
-        syn::Pat::Slice(ps) => ps.elems.iter().all(pat_holes_ok),
+        syn::Pat::TupleStruct(ps) => ps.elems.iter().all(|e| pat_holes_ok(e, symbols)),
+        syn::Pat::Tuple(pt) => pt.elems.iter().all(|e| pat_holes_ok(e, symbols)),
+        syn::Pat::Struct(ps) => ps.fields.iter().all(|f| pat_holes_ok(&f.pat, symbols)),
+        syn::Pat::Paren(pp) => pat_holes_ok(&pp.pat, symbols),
+        syn::Pat::Reference(pr) => pat_holes_ok(&pr.pat, symbols),
+        syn::Pat::Slice(ps) => ps.elems.iter().all(|e| pat_holes_ok(e, symbols)),
         // `Or` stays concrete-only (binding under alternation is
         // ambiguous); everything else must be hole-free.
         _ => !contains_placeholder(pat),
@@ -679,9 +721,15 @@ fn pat_holes_ok(pat: &syn::Pat) -> bool {
 /// Walks each parse root that succeeds (same roots as `check_c19`; the
 /// walk is idempotent). Plus sides are unchecked — writing a bound hole
 /// into a pattern position is textual substitution and applies today.
-fn check_pat_positions(minus_sub: &str) -> Result<(), StructuredError> {
+fn check_pat_positions(
+    minus_sub: &str,
+    symbols: &HashMap<String, String>,
+) -> Result<(), StructuredError> {
     let mut bad = false;
-    let mut walk = PatGateWalk { bad: &mut bad };
+    let mut walk = PatGateWalk {
+        bad: &mut bad,
+        symbols,
+    };
     if let Ok(stmt) = syn::parse_str::<syn::Stmt>(minus_sub) {
         walk.visit_stmt(&stmt);
     }
@@ -703,11 +751,12 @@ fn check_pat_positions(minus_sub: &str) -> Result<(), StructuredError> {
 /// C8 walker: flags the first pattern position `pat_holes_ok` rejects.
 struct PatGateWalk<'a> {
     bad: &'a mut bool,
+    symbols: &'a HashMap<String, String>,
 }
 
 impl<'ast, 'a> Visit<'ast> for PatGateWalk<'a> {
     fn visit_pat(&mut self, p: &'ast syn::Pat) {
-        if !*self.bad && !pat_holes_ok(p) {
+        if !*self.bad && !pat_holes_ok(p, self.symbols) {
             *self.bad = true;
         }
         visit::visit_pat(self, p);

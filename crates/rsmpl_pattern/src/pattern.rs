@@ -745,17 +745,18 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!(
-                "`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general whole-path positions (general-expression, general `let`-statement, general-type) in v0.1 — symbols match by exact full-path text (SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape or general whole-path hunk, or a concrete path pattern",
+                "`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern",
             ),
         )
         .with_repair(StructuredError::fix_pattern_repair(
             "C14",
-            "use a call-shape or general whole-path hunk, or a concrete path pattern",
+            "use a call-shape or general symbol hunk, or a concrete path pattern",
         )));
     }
 
-    // WI-4 slice 1: position check for the admitted General+symbol hunks.
-    // Whole-path only (see `check_general_symbol_positions`); the parse
+    // WI-4 slice 2a: position check for the admitted General+symbol
+    // hunks. Whole-path plus single-leading-prefix (see
+    // `check_general_symbol_positions`); the parse
     // and adjacency probes name the offending position.
     if !table.symbols.is_empty() {
         if let PatternKind::General {
@@ -913,18 +914,30 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     })
 }
 
-/// WI-4 slice 1: whole-path position check for an admitted General
-/// Stmt/Expr/Type hunk carrying `# symbol`.
+/// WI-4 slice 2a: whole-path plus single-prefix position check for an
+/// admitted General Stmt/Expr/Type hunk carrying `# symbol`.
 ///
 /// Every declared symbol must occur in the substituted minus pattern as
-/// the SOLE segment of a path: no `::` prefix (`Old::suffix`) or suffix
-/// (`X::Old`), no generic args (`Old::<T>`, `Old<T>`), no `qself`
-/// (`<T as Tr>::Old`), no method ident (`R.Old`), and never inside a
-/// `let`/`for`/closure pattern (binding positions bind; they never
-/// verify). Violations reject with the position named (C14); the general
-/// matcher only ever sees whole-path uses. Prefix, turbofish, `qself`,
-/// sequence, `use`-prefix, and field-type positions ride concrete paths
-/// until a later WI-4 slice.
+/// either the SOLE segment of a path (whole-path use, optionally with
+/// turbofish/args — `Old::<T>`, verified stem + structural args) or the
+/// LEADING segment of a longer path with an otherwise concrete suffix
+/// (`Old::suffix`, `Old::<T>::suffix` — prefix use). In both cases: no
+/// `::` before the symbol (suffix `X::Old` — text probe below), no
+/// abutting `<` args (`Old<T>` — write `Old::<T>` or nest as
+/// `Vec<Old>`), no `qself` (`<T as Tr>::Old`), no method ident
+/// (`R.Old`), and never inside a `let`/`for`/closure pattern (binding
+/// positions bind; they never verify). Generic args NESTED around a
+/// symbol (`Vec<Old>`) are fine — the C8 gate owns those, not this
+/// check. Suffix segment idents must be concrete (the engine compares
+/// them textually); placeholders inside suffix generic args
+/// (`Old::make::<T>`) pass — the engine binds ordinary holes and
+/// verifies nested symbols structurally. A second symbol ident in the
+/// suffix is caught by the parse-level skeleton check (unreachable
+/// through plain `::`, reachable around comments). Violations
+/// reject with the position named (C14); the general matcher verifies
+/// whole paths via `match_symbol_placeholder` and prefixes via
+/// `match_symbol_prefix`. `use`-prefix and field-type positions ride
+/// concrete paths until slice 2b.
 fn check_general_symbol_positions(
     minus_sub: &str,
     symbols: &HashMap<String, String>,
@@ -945,7 +958,7 @@ fn check_general_symbol_positions(
             let next = masked[end..].trim_start();
             if prev.ends_with("::") {
                 return Err(symbol_pos_err(format!(
-                    "`{name}` names a path segment of a longer path — prefix/segment symbols ride concrete paths in slice 1 (write the full path)"
+                    "`{name}` names a path segment of a longer path — only a leading symbol segments a prefix (`{name}::suffix`); suffix segments ride concrete paths in slice 2a (write the full path)"
             )));
             }
             if prev.ends_with('.') && !prev.ends_with("..") {
@@ -956,23 +969,27 @@ fn check_general_symbol_positions(
                 )));
             }
             if next.starts_with("::") {
-                return Err(symbol_pos_err(format!(
-                    "`{name}` names a path prefix (`{name}::…`) — prefix symbols ride concrete paths in slice 1 (write the full path)"
-            )));
+                // `Old::suffix` (prefix form) and `Old::<T>` (turbofish
+                // on the symbol segment) both pass through here — the
+                // parse-level skeleton check below owns them (single
+                // leading symbol, concrete suffix, or whole path).
+                continue;
             }
             // A single `:` names a struct field, label, or other
             // non-path slot (`S { Old: … }`, `'a: Old`); symbols only
             // name whole paths.
             if next.starts_with(':') {
                 return Err(symbol_pos_err(format!(
-                    "`{name}` names a field/label slot, not a path — field and label positions ride concrete paths in slice 1"
+                    "`{name}` names a field/label slot, not a path — field and label positions ride concrete paths in slice 2a"
             )));
             }
-            // Abutting `<` is generic args (`Old<T>`); spaced `<` is a
-            // comparison (`Old < x`) and stays legal.
+            // Abutting `<` is generic args on the symbol itself
+            // (`Old<T>`); spaced `<` is a comparison (`Old < x`) and
+            // stays legal. The admitted turbofish spells `::<`, which
+            // the `::` probe above already passed through.
             if masked[end..].starts_with('<') {
                 return Err(symbol_pos_err(format!(
-                    "`{name}` carries generic args — turbofish/parameterized symbols ride concrete paths in slice 1 (write the full path)"
+                    "`{name}` carries generic args without `::` — write `Vec<{name}>` (nested) or `{name}::<T>` (turbofish), or the full concrete path"
             )));
             }
         }
@@ -1061,6 +1078,34 @@ impl SymbolPosVisitor {
 }
 
 impl<'ast> syn::visit::Visit<'ast> for SymbolPosVisitor {
+    fn visit_path(&mut self, node: &'ast syn::Path) {
+        // WI-4 slice 2a: suffix-skeleton rule. A leading symbol followed
+        // by more segments must carry concrete suffix IDENTS (the
+        // engine compares them textually); placeholders inside suffix
+        // generic args (`Old::make::<T>`) pass — the engine binds
+        // ordinary holes and verifies nested symbols structurally via
+        // `match_path_args`. Non-leading symbols never reach here — the
+        // text probe above rejects them first (`::` always abuts the
+        // segment). Whole-path uses (alone, or with turbofish/args —
+        // the engine compares those structurally) always pass.
+        if self.error.is_none() {
+            let head_is_sym = node.segments.first().is_some_and(|s| self.is_sym(&s.ident));
+            if head_is_sym && node.segments.len() > 1 {
+                for s in node.segments.iter().skip(1) {
+                    if self.is_sym(&s.ident) {
+                        let raw = s.ident.to_string();
+                        let who = raw.strip_prefix("__RSMPL_").unwrap_or(&raw);
+                        self.error = Some(symbol_pos_err(format!(
+                            "`{who}` names a non-leading path segment — only a leading symbol segments a prefix (`{who}` must head the path); suffix segments ride concrete paths in slice 2a (write the full path)"
+                        )));
+                        return;
+                    }
+                }
+            }
+        }
+        syn::visit::visit_path(self, node);
+    }
+
     fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
         if self.error.is_none() && node.qself.is_some() {
             let rendered = quote::quote!(#node).to_string();

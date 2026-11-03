@@ -1111,7 +1111,7 @@ mod tests {
                 file: "fn a() {\n    foo!(crate::old_api(1));\n}\n",
                 code: "RSMPL_PATTERN_CONFLICT",
                 reason: "this macro hunk cannot use `# symbol`",
-                suggestion: Some("use a call-shape or general whole-path hunk"),
+                suggestion: Some("use a call-shape or general symbol hunk"),
             },
         ];
         assert_eq!(

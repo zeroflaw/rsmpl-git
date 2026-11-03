@@ -122,7 +122,122 @@ pub(crate) fn match_symbol_type(cx: &MatchCx, name: &str, tgt: &syn::Type) -> bo
     false
 }
 
-/// Build a per-candidate `MatchCx` carrying the hunk's symbol posture:
+/// WI-4 slice 2a: prefix verdict for a pattern path whose FIRST segment
+/// names a symbol and concrete suffix segments follow (`Old::suffix`,
+/// `Old::<T>::suffix`). The compile gate (C14 skeleton check) admits
+/// only a single leading symbol with an otherwise placeholder-free
+/// suffix; this arm proves the site.
+///
+/// The pattern head is ONE segment that expands to the seed's N
+/// segments on emission, so raw segment counts never compare directly.
+/// Instead the target splits into head + tail, where the tail is the
+/// last suffix.len() segments:
+/// - fallback: the head must spell the seed exactly (leading-`::`
+///   parity on the whole, head idents == seed segments) and the tail
+///   must spell the suffix; stem turbofish/args compare structurally
+///   (ordinary holes bind, nested symbols verify — the same arms as
+///   whole-path types);
+/// - resolved: `graph.resolve_call` on the target's full spelled path
+///   must equal `seed_canon + "::" + suffix` (the head spelling may be
+///   short via imports or full — resolution owns it); tail idents and
+///   all args still compare as above.
+///   `qself` never reaches here (callers compare it before `match_path`).
+///   Returns `None` when the pattern path is not a symbol-led prefix
+///   (caller falls through to the per-segment logic, which rejects
+///   symbols).
+pub(crate) fn match_symbol_prefix(
+    cx: &mut crate::matcher_general::MatchCx,
+    pat: &syn::Path,
+    tgt: &syn::Path,
+) -> Option<bool> {
+    use crate::matcher_general::as_placeholder;
+    use crate::matcher_types::match_path_args;
+    if pat.segments.len() < 2 || tgt.segments.is_empty() {
+        return None;
+    }
+    let head_id = pat.segments[0].ident.to_string();
+    let name = as_placeholder(&cx.reverse, &head_id).cloned()?;
+    if !cx.symbols.contains_key(&name) {
+        return None;
+    }
+    // Suffix idents are compile-gated concrete; a placeholder ident in
+    // the suffix is a loud `false` here — defense in depth, never a
+    // bind. Placeholders inside suffix ARGS (`Old::make::<T>`) pass:
+    // the tail comparison below binds ordinary holes and verifies
+    // nested symbols structurally.
+    for s in pat.segments.iter().skip(1) {
+        let id = s.ident.to_string();
+        if as_placeholder(&cx.reverse, &id).is_some() {
+            return Some(false);
+        }
+    }
+    let suffix: Vec<&syn::PathSegment> = pat.segments.iter().skip(1).collect();
+    // The pattern head is ONE segment that expands to the seed's N
+    // segments on emission, so raw segment counts never compare
+    // directly. The target splits into head + tail, where the tail is
+    // the last suffix.len() segments; the head spelling may be short
+    // (via imports) or full — resolution (or exact head text) owns it.
+    let tgt_all: Vec<&syn::PathSegment> = tgt.segments.iter().collect();
+    if tgt_all.len() < suffix.len() + 1 {
+        return Some(false);
+    }
+    let split = tgt_all.len() - suffix.len();
+    let (tgt_head, tgt_tail) = (&tgt_all[..split], &tgt_all[split..]);
+    // Tail idents compare textually (concrete in slice 2a); tail args
+    // compare structurally (same verdict for concrete args).
+    for (ps, ts) in suffix.iter().zip(tgt_tail.iter()) {
+        if ps.ident != ts.ident {
+            return Some(false);
+        }
+        if !match_path_args(&ps.arguments, &ts.arguments, cx) {
+            return Some(false);
+        }
+    }
+    // Stem turbofish/args ride the last head segment (structural —
+    // ordinary holes bind, nested symbols verify).
+    let Some(tgt_head_last) = tgt_head.last() else {
+        return Some(false);
+    };
+    if !match_path_args(&pat.segments[0].arguments, &tgt_head_last.arguments, cx) {
+        return Some(false);
+    }
+    let seed = cx.symbols.get(&name).cloned().unwrap_or_default();
+    if cx.fallback_syntax {
+        // Exact full-path text: the head spells the seed, the tail
+        // spells the suffix (proven above), with whole-path leading
+        // parity.
+        let seed_leading = seed.starts_with("::");
+        if seed_leading != tgt.leading_colon.is_some() {
+            return Some(false);
+        }
+        let seed_segs: Vec<&str> = seed.trim_start_matches("::").split("::").collect();
+        if seed_segs.len() != tgt_head.len() {
+            return Some(false);
+        }
+        let tgt_head_ids: Vec<String> = tgt_head.iter().map(|s| s.ident.to_string()).collect();
+        return Some(
+            seed_segs
+                .iter()
+                .zip(tgt_head_ids.iter())
+                .all(|(a, b)| a == b),
+        );
+    }
+    let (graph, file) = match cx.symbol_graph.as_ref() {
+        Some((g, f)) => (*g, *f),
+        None => return Some(false),
+    };
+    let want = match cx.seed_canons.get(&name) {
+        Some(w) => w.clone(),
+        None => return Some(false),
+    };
+    let tgt_ids: Vec<String> = tgt_all.iter().map(|s| s.ident.to_string()).collect();
+    let suffix_ids: Vec<String> = suffix.iter().map(|s| s.ident.to_string()).collect();
+    let composed = format!("{want}::{}", suffix_ids.join("::"));
+    match graph.resolve_call(file, tgt.leading_colon.is_some(), &tgt_ids) {
+        Some(got) => Some(got == composed),
+        None => Some(false),
+    }
+}
 /// declared names pre-bound to their seed paths (so the plus side emits
 /// the concrete seed, exactly the call-hunk posture), plus the graph and
 /// verified canons for resolved per-site checks.

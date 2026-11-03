@@ -36,6 +36,10 @@ impl CrateGraph {
         let mut g = CrateGraph::default();
         let mut paths: Vec<&String> = files.keys().collect();
         paths.sort();
+        // Two phases: defs + imports for every file first (order-free),
+        // then `impl`-method indexing against the complete graph, so a
+        // self type defined in a later-sorting file still resolves.
+        let mut parsed_files: Vec<(String, Vec<String>, syn::File)> = Vec::new();
         for path in paths {
             if !path.ends_with(".rs") {
                 continue;
@@ -46,7 +50,13 @@ impl CrateGraph {
             };
             let module = file_module_path(path);
             g.file_modules.insert(path.clone(), module.clone());
-            collect_file(&parsed.items, &module, path, &mut g);
+            parsed_files.push((path.clone(), module, parsed));
+        }
+        for (path, module, parsed) in &parsed_files {
+            collect_file(&parsed.items, module, path, &mut g);
+        }
+        for (path, module, parsed) in &parsed_files {
+            collect_impl_file(&parsed.items, module, path, &mut g);
         }
         g
     }
@@ -227,6 +237,91 @@ fn normalize_seed(seed: &str) -> Option<String> {
 
 fn collect_file(items: &[syn::Item], module: &[String], file: &str, g: &mut CrateGraph) {
     collect_items(items, module, file, g, false);
+}
+
+/// WI-4 slice 2a phase 2: index `impl`-method canons once defs and
+/// imports are complete (see `build`).
+///
+/// Driver: one file's `impl` blocks, recursing into inline modules
+/// with their module path (so an `impl S` inside `mod m` resolves `S`
+/// against `m`, exactly like a call site there).
+fn collect_impl_file(items: &[syn::Item], module: &[String], file: &str, g: &mut CrateGraph) {
+    for item in items {
+        match item {
+            syn::Item::Impl(ib) => collect_impl_methods(ib, module, file, g),
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    let mut sub = module.to_vec();
+                    sub.push(m.ident.to_string());
+                    collect_impl_file(inner, &sub, file, g);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// WI-4 slice 2a phase 2: index `impl` methods as `crate::Type::method`.
+/// The self type must be an arg-free path resolving (through the
+/// file's imports, like any call site) to a definition the crate
+/// contains; the resolved canon prefixes every method ident in the
+/// block. Generic self types (`impl<T> Foo<T>`) are skipped — their
+/// args bind per site, never per definition. Trait-qualified impls
+/// (`impl Tr for S`) index under the self type — `S::method` names
+/// that definition textually, and the prefix composer only ever
+/// appends the written suffix to the seeded self-type canon.
+/// External or unresolvable bases stay out, never guessed
+/// (`resolve_call` returns `Some` only for `defs` members).
+/// `module` is the `impl` block's own module path (inline mods nest);
+/// `file` selects the import map for self-ty resolution.
+fn collect_impl_methods(ib: &syn::ItemImpl, module: &[String], file: &str, g: &mut CrateGraph) {
+    let syn::Type::Path(tp) = ib.self_ty.as_ref() else {
+        return;
+    };
+    if tp.qself.is_some() {
+        return;
+    }
+    if tp
+        .path
+        .segments
+        .iter()
+        .any(|s| !matches!(s.arguments, syn::PathArguments::None))
+    {
+        return;
+    }
+    let segs: Vec<String> = tp
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    // Module-relative first (an `impl S` beside a local `struct S`
+    // inside an inline mod must not claim the crate root), then the
+    // file's import map and root probes via `resolve_call`.
+    let prefix = if segs.len() == 1 && !module.is_empty() {
+        let mut canon = String::from("crate");
+        for s in module {
+            canon.push_str("::");
+            canon.push_str(s);
+        }
+        canon.push_str("::");
+        canon.push_str(&segs[0]);
+        if g.defs.contains(&canon) {
+            Some(g.chase_reexports(&canon))
+        } else {
+            g.resolve_call(file, tp.path.leading_colon.is_some(), &segs)
+        }
+    } else {
+        g.resolve_call(file, tp.path.leading_colon.is_some(), &segs)
+    };
+    let Some(prefix) = prefix else {
+        return;
+    };
+    for item in &ib.items {
+        if let syn::ImplItem::Fn(m) = item {
+            g.defs.insert(format!("{prefix}::{}", m.sig.ident));
+        }
+    }
 }
 
 fn canon_path(module: &[String], name: &str) -> String {
@@ -507,6 +602,113 @@ mod tests {
         assert_eq!(
             g.resolve_seed("crate::m::old_api"),
             Some("crate::m::old_api".to_string())
+        );
+    }
+
+    // WI-4 slice 2a: `impl` methods are addressable as
+    // `crate::Type::method` for prefix-symbol composition.
+    #[test]
+    fn impl_methods_index_under_self_ty() {
+        let g = CrateGraph::build(&files(&[(
+            "src/lib.rs",
+            "pub struct Old;\nimpl Old { pub fn make(v: u8) -> u8 { v } }\n",
+        )]));
+        assert_eq!(
+            g.resolve_call(
+                "src/lib.rs",
+                false,
+                &["Old".to_string(), "make".to_string()]
+            ),
+            Some("crate::Old::make".to_string())
+        );
+        // Short `make` alone still resolves to nothing new (no free
+        // `make` here) — method canons never shadow value paths.
+        assert_eq!(
+            g.resolve_call("src/lib.rs", false, &["make".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn impl_methods_resolve_via_import_across_files() {
+        // Order-free: the impl sorts before the type definition file.
+        let g = CrateGraph::build(&files(&[
+            (
+                "src/a.rs",
+                "use crate::b::Old;\nimpl Old { pub fn make(v: u8) -> u8 { v } }\nfn f() { let x = Old::make(1); }\n",
+            ),
+            ("src/b.rs", "pub struct Old;\n"),
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+        ]));
+        assert_eq!(
+            g.resolve_call("src/a.rs", false, &["Old".to_string(), "make".to_string()]),
+            Some("crate::b::Old::make".to_string())
+        );
+    }
+
+    #[test]
+    fn impl_methods_in_inline_mod_resolve_module_relative() {
+        // An `impl S` inside `mod vendored` resolves `S` against the
+        // inline module, so the vendored twin discriminates by canon
+        // (no match for a `crate::Old` seed) instead of missing the
+        // index.
+        let g = CrateGraph::build(&files(&[(
+            "src/lib.rs",
+            "pub struct Old;\nimpl Old { pub fn make(v: u8) -> u8 { v } }\npub mod vendored { pub struct Old; impl Old { pub fn make(v: u8) -> u8 { v } } }\n",
+        )]));
+        assert_eq!(
+            g.resolve_call(
+                "src/lib.rs",
+                false,
+                &["Old".to_string(), "make".to_string()]
+            ),
+            Some("crate::Old::make".to_string())
+        );
+        assert_eq!(
+            g.resolve_call(
+                "src/lib.rs",
+                false,
+                &[
+                    "vendored".to_string(),
+                    "Old".to_string(),
+                    "make".to_string()
+                ]
+            ),
+            Some("crate::vendored::Old::make".to_string())
+        );
+    }
+
+    #[test]
+    fn impl_methods_skip_external_and_generic_self_ty() {
+        let g = CrateGraph::build(&files(&[(
+            "src/lib.rs",
+            "impl Vec<u8> { pub fn make(v: u8) -> u8 { v } }\nimpl<T> Foo<T> { pub fn make(v: T) -> T { v } }\nstruct Bar;\nimpl Bar { pub fn make(v: u8) -> u8 { v } }\n",
+        )]));
+        // External (`Vec`) and generic (`Foo<T>`) self types stay out.
+        assert_eq!(
+            g.resolve_call(
+                "src/lib.rs",
+                false,
+                &["Vec".to_string(), "make".to_string()]
+            ),
+            None
+        );
+        assert_eq!(
+            g.resolve_call(
+                "src/lib.rs",
+                false,
+                &["Foo".to_string(), "make".to_string()]
+            ),
+            None
+        );
+        // Local arg-free self type indexes.
+        assert_eq!(
+            g.resolve_call(
+                "src/lib.rs",
+                false,
+                &["Bar".to_string(), "make".to_string()]
+            ),
+            Some("crate::Bar::make".to_string())
         );
     }
 }

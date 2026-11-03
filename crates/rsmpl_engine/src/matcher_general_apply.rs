@@ -1351,3 +1351,194 @@ mod wi4_slice1_plus_only_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod wi4_slice2_tests {
+    // WI-4 slice 2a: prefix (`Old::suffix`), stem turbofish
+    // (`Old::<T>`), and nested-annotation (`Vec<Old>`) symbols in
+    // General Stmt/Expr/Type hunks. Fallback is exact head+tail text;
+    // resolved composes `seed_canon + "::" + suffix` through the crate
+    // graph (impl methods indexed, vendored twins skipped).
+    use std::collections::HashMap;
+
+    use super::apply_general_hunk;
+    use crate::edits::TextEdit;
+
+    fn compiled_of(patch_text: &str) -> (rsmpl_patch::RsmplHunk, rsmpl_pattern::CompiledPattern) {
+        let mut parsed_patch = rsmpl_patch::parse_patch(patch_text).expect("test patch parses");
+        let hunk = match parsed_patch.files.remove(0).hunks.remove(0) {
+            rsmpl_patch::Hunk::Rsmpl(rh) => rh,
+            _ => panic!("want rsmpl hunk"),
+        };
+        let compiled = rsmpl_pattern::compile(&hunk).expect("test patch compiles");
+        (hunk, compiled)
+    }
+
+    fn run(
+        patch_text: &str,
+        src: &str,
+        graph: Option<(&crate::CrateGraph, &str)>,
+    ) -> Result<(usize, String), rsmpl_patch::StructuredError> {
+        let (hunk, compiled) = compiled_of(patch_text);
+        let parsed: syn::File = syn::parse_str(src).expect("src parses");
+        let index = crate::lines::LineIndex::new(src);
+        let mut edits = Vec::<TextEdit>::new();
+        let (n, _) = apply_general_hunk(&parsed, src, &index, &hunk, &compiled, &mut edits, graph)?;
+        let out = crate::edits::apply_edits(src, edits).expect("edits apply");
+        Ok((n, out))
+    }
+
+    fn graph_of(files: &[(&str, &str)]) -> (HashMap<String, String>, crate::CrateGraph) {
+        let map: HashMap<String, String> = files
+            .iter()
+            .map(|(p, t)| (p.to_string(), t.to_string()))
+            .collect();
+        let graph = crate::CrateGraph::build(&map);
+        (map, graph)
+    }
+
+    const MOD_SRC: &str = "pub mod oldm { pub fn foo() -> i32 { 1 } }\npub mod newm { pub fn foo() -> i32 { 1 } }\nuse crate::oldm;\nfn f() {\n    let x = oldm::foo();\n}\n";
+    const PREFIX: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::oldm\n# symbol New=crate::newm\n- let x = Old::foo();\n+ let x = New::foo();\n";
+
+    #[test]
+    fn wi4_prefix_resolved_short_spelling_fires() {
+        let (_m, graph) = graph_of(&[("src/lib.rs", MOD_SRC)]);
+        let (n, out) = run(PREFIX, MOD_SRC, Some((&graph, "src/lib.rs"))).expect("fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::newm::foo();"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_prefix_resolved_full_spelling_fires() {
+        let src = "pub mod oldm { pub fn foo() -> i32 { 1 } }\npub mod newm { pub fn foo() -> i32 { 1 } }\nfn f() {\n    let x = crate::oldm::foo();\n}\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, out) = run(PREFIX, src, Some((&graph, "src/lib.rs"))).expect("fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::newm::foo();"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_prefix_fallback_full_spelling_fires() {
+        let src = "pub mod oldm { pub fn foo() -> i32 { 1 } }\npub mod newm { pub fn foo() -> i32 { 1 } }\nfn f() {\n    let x = crate::oldm::foo();\n}\n";
+        let patch = PREFIX.replace("# symbol Old=", "# fallback=syntax\n# symbol Old=");
+        let (n, out) = run(&patch, src, None).expect("fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::newm::foo();"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_prefix_fallback_short_spelling_misses() {
+        // Exact head+tail text under fallback (SPEC 19.3): a short
+        // spelling never equals the expanded seed path.
+        let patch = PREFIX.replace("# symbol Old=", "# fallback=syntax\n# symbol Old=");
+        let (n, _) = run(&patch, MOD_SRC, None).expect("runs, matching nothing");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn wi4_prefix_wrong_suffix_misses() {
+        let src = "pub mod oldm { pub fn foo() -> i32 { 1 } pub fn bar() -> i32 { 2 } }\npub mod newm { pub fn foo() -> i32 { 1 } }\nuse crate::oldm;\nfn f() {\n    let x = oldm::bar();\n}\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, _) = run(PREFIX, src, Some((&graph, "src/lib.rs"))).expect("runs");
+        assert_eq!(n, 0, "suffix `bar` is not `foo`");
+    }
+
+    #[test]
+    fn wi4_prefix_vendored_twin_skipped() {
+        // Same text, different definition: resolution proves the head
+        // is not the seed, so the site is skipped, never rewritten.
+        let src = "pub mod oldm { pub fn foo() -> i32 { 1 } }\npub mod newm { pub fn foo() -> i32 { 1 } }\npub mod vendored { pub fn foo() -> i32 { 2 } }\nuse crate::vendored;\nfn f() {\n    let x = vendored::foo();\n}\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, _) = run(PREFIX, src, Some((&graph, "src/lib.rs"))).expect("runs");
+        assert_eq!(n, 0, "vendored copy must not match");
+    }
+
+    #[test]
+    fn wi4_prefix_method_resolved_via_impl_index() {
+        // Associated-function prefix resolves through the impl-method
+        // index (`crate::Old::make`).
+        let src = "pub struct Old;\npub struct New;\nimpl Old { pub fn make(v: u8) -> u8 { v } }\nimpl New { pub fn make(v: u8) -> u8 { v } }\nuse crate::Old;\nfn f() {\n    let x = Old::make(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::Old\n# symbol New=crate::New\n# expr E\n- let x = Old::make(E);\n+ let x = New::make(E);\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, out) = run(patch, src, Some((&graph, "src/lib.rs"))).expect("fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::New::make(1);"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_prefix_turbofish_hole_binds() {
+        // Suffix turbofish with a hole: `T` binds, stem verifies.
+        let src = "pub struct Old;\npub struct New;\nimpl Old { pub fn make<T>(v: T) -> T { v } }\nimpl New { pub fn make<T>(v: T) -> T { v } }\nuse crate::Old;\nfn f() {\n    let x = Old::make::<u8>(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::Old\n# symbol New=crate::New\n# expr E\n# type T\n- let x = Old::make::<T>(E);\n+ let x = New::make::<T>(E);\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, out) = run(patch, src, Some((&graph, "src/lib.rs"))).expect("fires");
+        assert_eq!(n, 1);
+        assert!(
+            out.contains("let x = crate::New::make::<u8>(1);"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn wi4_prefix_turbofish_parity_holds() {
+        // An arg-free stem never matches a turbofish site and vice
+        // versa (same parity as whole-path symbols).
+        let src = "pub struct Old;\npub struct New;\nimpl Old { pub fn make<T>(v: T) -> T { v } }\nimpl New { pub fn make<T>(v: T) -> T { v } }\nuse crate::Old;\nfn f() {\n    let x = Old::make::<u8>(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::Old\n# symbol New=crate::New\n# expr E\n- let x = Old::make(E);\n+ let x = New::make(E);\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, _) = run(patch, src, Some((&graph, "src/lib.rs"))).expect("runs");
+        assert_eq!(n, 0, "turbofish site needs a turbofish pattern");
+    }
+
+    #[test]
+    fn wi4_whole_path_stem_turbofish_fires() {
+        // `Old::<T>` whole-path stem: full spelling under fallback.
+        let src = "pub fn old_id<T>(v: T) -> T { v }\npub fn new_id<T>(v: T) -> T { v }\nfn f() {\n    let x = crate::old_id::<u8>(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# fallback=syntax\n# symbol Old=crate::old_id\n# symbol New=crate::new_id\n# expr E\n# type E2\n- let x = Old::<E2>(E);\n+ let x = New::<E2>(E);\n";
+        let (n, out) = run(patch, src, None).expect("fires");
+        assert_eq!(n, 1);
+        assert!(
+            out.contains("let x = crate::new_id::<u8>(1);"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn wi4_annot_nested_symbol_fires() {
+        // `let x: Vec<Old>` — the C8 gate admits symbol-only
+        // annotation types; the engine verifies structurally.
+        let src = "pub struct Old;\npub struct New;\nfn f() {\n    let x: Vec<Old> = vec![];\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::Old\n# symbol New=crate::New\n# expr E\n- let x: Vec<Old> = E;\n+ let x: Vec<New> = E;\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, out) = run(patch, src, Some((&graph, "src/lib.rs"))).expect("fires");
+        assert_eq!(n, 1);
+        assert!(
+            out.contains("let x: Vec<crate::New> = vec![];"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn wi4_struct_literal_path_pins_resolved() {
+        // Whole-path struct-literal names already fired in slice 1 —
+        // this pins the posture for the prefix family.
+        let src = "pub struct Old { pub f: i32 }\npub struct New { pub f: i32 }\nfn f() {\n    let x = Old { f: 1 };\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=s\n# lang=rust\n# sweep\n# symbol Old=crate::Old\n# symbol New=crate::New\n# expr E\n- let x = Old { f: E };\n+ let x = New { f: E };\n";
+        let (_m, graph) = graph_of(&[("src/lib.rs", src)]);
+        let (n, out) = run(patch, src, Some((&graph, "src/lib.rs"))).expect("fires");
+        assert_eq!(n, 1);
+        assert!(out.contains("let x = crate::New { f: 1 };"), "got:\n{out}");
+    }
+
+    #[test]
+    fn wi4_prefix_unresolvable_seed_fails_loud() {
+        let src = "fn f() {\n    let x = oldm::foo();\n}\n";
+        let files: HashMap<String, String> =
+            [("src/lib.rs".to_string(), "fn f() {}\n".to_string())]
+                .into_iter()
+                .collect();
+        let graph = crate::CrateGraph::build(&files);
+        let err = run(PREFIX, src, Some((&graph, "src/lib.rs"))).expect_err("must fail");
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::SymbolConflict);
+    }
+}
