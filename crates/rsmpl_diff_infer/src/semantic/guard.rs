@@ -44,6 +44,60 @@ pub(crate) fn guard_for(detector: &str) -> Guard {
     }
 }
 
+/// WI-7: one precision-allowance law (SPEC D.4). A proved site set
+/// (scratch-apply totality over the exact sites) prices
+/// `semantic <= ordinary + 16 * claimed_sites + filter_block_bytes`,
+/// where `filter_block_bytes` is the byte count of anchor lines the
+/// emission is required to carry (enclosing `impl`/`trait` headers).
+/// `n_claimed == 0` prices one site (the single-site floor); strict
+/// T375 (`semantic < ordinary`) remains for sweeps with no proof.
+pub(crate) fn precision_allowance(n_claimed: usize, filter_extra: usize) -> usize {
+    super::PRECISION_GUARD
+        .saturating_mul(n_claimed.max(1))
+        .saturating_add(filter_extra)
+}
+
+/// WI-7 (WI-2b residue): rendering-normalized whole-section length.
+///
+/// Real `git diff -U0` elides `,1` per hunk header while unit
+/// convention and synthetic builders write it explicitly — the same
+/// 4-bytes-per-hunk class `normalized_hunk_len` fixes per hunk. Whole
+/// sections sum raw `section.len()` today, so the same rendering flip
+/// moves multi-hunk verdicts. Guards must price the hunk *spans*, so
+/// this measures the canonical explicit-length headers plus the
+/// verbatim prelude/body bytes. Unparseable input falls back to raw
+/// length — normalization only ever grows to the explicit convention.
+pub(crate) fn normalized_section_len(section: &str) -> usize {
+    let mut prelude_len = 0usize;
+    let mut hunk_lens = 0usize;
+    let mut current: Option<String> = None;
+    let mut prelude_done = false;
+    for line in section.split_inclusive('\n') {
+        if line.starts_with("@@") {
+            if let Some(h) = current.take() {
+                hunk_lens += normalized_hunk_len(&h);
+            }
+            prelude_done = true;
+            current = Some(String::new());
+        }
+        match current.as_mut() {
+            Some(h) => h.push_str(line),
+            None => prelude_len += line.len(),
+        }
+    }
+    if let Some(h) = current.take() {
+        hunk_lens += normalized_hunk_len(&h);
+    }
+    // No `@@` at all (or trailing text without newline): `prelude_len`
+    // already holds every byte; keep the fallback exact.
+    let _ = prelude_done;
+    if hunk_lens == 0 {
+        section.len()
+    } else {
+        prelude_len + hunk_lens
+    }
+}
+
 /// WI-2b: rendering-normalized native hunk length for guard budgets.
 ///
 /// Real `git diff -U0` elides `,1` (`@@ -1 +1 @@`) while unit
@@ -202,5 +256,41 @@ mod tests {
         assert_eq!(normalized_hunk_len(garbage), garbage.len());
         let header_only = "@@ -1 +1 @@";
         assert_eq!(normalized_hunk_len(header_only), header_only.len());
+    }
+
+    #[test]
+    fn precision_allowance_scales_per_site_plus_filter() {
+        // WI-7 law: `16 * max(1, n) + filter_extra` from the one
+        // `PRECISION_GUARD` constant — never a per-detector literal.
+        assert_eq!(precision_allowance(0, 0), super::super::PRECISION_GUARD);
+        assert_eq!(precision_allowance(1, 0), super::super::PRECISION_GUARD);
+        assert_eq!(precision_allowance(2, 0), super::super::PRECISION_GUARD * 2);
+        assert_eq!(precision_allowance(3, 0), super::super::PRECISION_GUARD * 3);
+        // Method-filtered singles ride `16 * 2 + excess` (same value
+        // the whole-section arm open-coded as `32 + excess`).
+        assert_eq!(
+            precision_allowance(2, 7),
+            super::super::PRECISION_GUARD * 2 + 7
+        );
+    }
+
+    #[test]
+    fn normalized_section_len_elided_equals_explicit() {
+        // WI-2b residue: whole-section guards must price spans, not
+        // rendering — elided and explicit forms of the same section
+        // measure equal, at the explicit length.
+        let prelude = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n";
+        let body = "-fn foo() {\n+fn bar() {\n";
+        let elided = format!("{prelude}@@ -1 +1 @@\n{body}");
+        let explicit = format!("{prelude}@@ -1,1 +1,1 @@\n{body}");
+        assert_eq!(normalized_section_len(&elided), explicit.len());
+        assert_eq!(normalized_section_len(&explicit), explicit.len());
+        // Two hunks: the 4B delta applies per hunk (8 total).
+        let two_elided = format!("{prelude}@@ -1 +1 @@\n{body}@@ -5 +5 @@\n{body}");
+        let two_explicit = format!("{prelude}@@ -1,1 +1,1 @@\n{body}@@ -5,1 +5,1 @@\n{body}");
+        assert_eq!(normalized_section_len(&two_elided), two_explicit.len());
+        assert!(normalized_section_len(&two_elided) > two_elided.len());
+        // Hunk-free input falls back to the raw length.
+        assert_eq!(normalized_section_len(prelude), prelude.len());
     }
 }

@@ -100,6 +100,7 @@ mod item_span;
 mod mod_rename;
 mod pre_pass;
 mod precision_single;
+mod whole_single;
 
 pub(crate) use item_span::item_emission_header;
 pub(crate) use let_single::{
