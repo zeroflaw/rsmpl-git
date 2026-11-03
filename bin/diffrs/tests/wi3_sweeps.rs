@@ -385,23 +385,43 @@ fn wi3_qualified_macro_fires() {
 }
 
 #[test]
-fn wi3_qualified_macro_prefix_divergent_stays_ordinary() {
-    // Fixture 68: `crate::old` -> `crate::new` plus `other::old` ->
-    // `other::new` share no path class — veto side of fixture 67.
-    let (native_input, semantic) = convert_fixture("68-qualified-macro-stays-ordinary");
+fn wi3_qualified_macro_prefix_divergent_raises_per_prefix_singles() {
+    // Fixture 68 (WI-3 slice 3): `crate::old` -> `crate::new` plus
+    // `other::old` -> `other::new` share no path class, so the N>=2
+    // sweep vetoes — but each half proves its own site
+    // (`qualified_macro_holds` at n=1 plus the scratch byte-compare),
+    // so the section raises as two allow-one per-prefix singles
+    // (r1/r2, no `# allow=many`) — the WI-8 pair-partition posture
+    // (same as the slice-2 wi4b two-trait rewrite: fragmented but
+    // sound, `convert_fixture` already `--check`ed both rules above).
+    let (_native_input, semantic) = convert_fixture("68-qualified-macro-stays-ordinary");
     assert!(
-        !semantic.contains("rule="),
-        "prefix-divergent macros must stay ordinary, got: {semantic}"
+        semantic.contains("rule=r1"),
+        "crate half must fire, got: {semantic}"
     );
     assert!(
-        semantic.contains("-    crate::old_render_widget!(first_widget_argument);"),
-        "minus lines must be preserved, got: {semantic}"
+        semantic.contains("rule=r2"),
+        "other half must fire, got: {semantic}"
     );
-    let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
-    assert!(context.is_empty(), "zero-context, got: {context:?}");
     assert!(
-        semantic == normalize_native(&native_input),
-        "ordinary passthrough must equal normalized native, got: {semantic}"
+        semantic.contains("- crate::old_render_widget!(...)\n"),
+        "crate minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ crate::new_render_widget!(...)\n"),
+        "crate plus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("- other::old_render_widget!(...)\n"),
+        "other minus missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("+ other::new_render_widget!(...)\n"),
+        "other plus missing, got: {semantic}"
+    );
+    assert!(
+        !semantic.contains("# allow=many"),
+        "allow-one singles carry no allow directive, got: {semantic}"
     );
 }
 

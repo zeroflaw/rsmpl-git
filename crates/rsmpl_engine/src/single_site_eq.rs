@@ -303,11 +303,11 @@ fn fn_diet_erase(line_text: &str) -> Option<(String, String, String)> {
 /// Gates (anything else stays byte-identical): unique `(file, rule)`
 /// key; exactly one distinct `(s, e)` line span with `s == e`;
 /// exactly one minus + one plus line and zero context lines;
-/// directives ⊆ locality + hole declarations (symbol / fallback /
-/// follow / move / mode / repeat / optional / attrs / root shapes are
-/// owned by other items and never enter); pre/post lines present and
-/// different; no surviving declared hole name still a bare token in
-/// the literal pair.
+/// directives ⊆ locality + hole declarations + macro mode (symbol /
+/// fallback / follow / move / parse-mode / repeat / optional / attrs
+/// / root shapes are owned by other items and never enter); pre/post
+/// lines present and different; no surviving declared hole name still
+/// a bare token in the literal pair.
 pub(crate) fn unify_single_site_verbatim_to_literal(
     patch: &mut rsmpl_patch::Patch,
     pre: &HashMap<String, String>,
@@ -448,7 +448,12 @@ fn single_item_site(
 
 /// WI-1s1 gate: `Some((lit_minus, lit_plus))` when hunk `r` over
 /// `target` is a pure single-pair verbatim shape proving the single
-/// line site `s`, else `None` (byte-identical).
+/// line site `s`, else `None` (byte-identical). WI-3 slice 3 also
+/// admits `Directive::MacroMode` (the macro-rename verbatim family
+/// shares the D17 literal-instantiation discipline; the rewrite keeps
+/// each leg's own macro directive, so a macro leg and a non-macro leg
+/// over the same site never unify — pinned by
+/// `wi3_macro_mode_mismatch_stays_divergent`).
 fn gate_verbatim_single(
     r: &rsmpl_patch::RsmplHunk,
     target: &str,
@@ -462,6 +467,7 @@ fn gate_verbatim_single(
             Directive::Allow(_)
                 | Directive::Scope(_)
                 | Directive::LangRust
+                | Directive::MacroMode(_)
                 | Directive::MetaVar {
                     kind: MetavarKind::Pat | MetavarKind::Type | MetavarKind::Expr,
                     ..
@@ -489,7 +495,17 @@ fn gate_verbatim_single(
         .get(target)?
         .lines()
         .nth((s as usize).checked_sub(1)?)?;
-    let (lit_minus, lit_plus) = if is_bare_type_hunk(r) {
+    // WI-3 slice 3: macro-mode hunks instantiate through the verbatim
+    // arm, never the type-delta arm. A macro invocation body parses
+    // as `syn::Type`, so the type arm would carve a callee fragment
+    // (`old`/`new`) that never re-proves; the terminator-stripped
+    // expression form (`old_m!(a, 1)`, probed to re-prove) is what
+    // both legs share. (A `;`-terminated concrete macro pattern is
+    // rejected outright — `NAME!(...)` shape only — so the statement
+    // form is never a candidate.)
+    let (lit_minus, lit_plus) = if has_macro_mode(r) {
+        verbatim_literal_pair(pre_line, post_line)?
+    } else if is_bare_type_hunk(r) {
         concrete_type_delta(pre_line, post_line)?
     } else {
         verbatim_literal_pair(pre_line, post_line)?
@@ -513,6 +529,15 @@ fn gate_verbatim_single(
         return None;
     }
     Some((lit_minus, lit_plus))
+}
+
+/// Whether hunk `r` carries a `# macro=…` directive (WI-3 slice 3:
+/// the macro-rename verbatim family instantiates through the verbatim
+/// arm, never the type-delta arm).
+fn has_macro_mode(r: &rsmpl_patch::RsmplHunk) -> bool {
+    r.directives
+        .iter()
+        .any(|d| matches!(d, Directive::MacroMode(_)))
 }
 
 /// A bare-type hunk body: exactly one minus + one plus line, both

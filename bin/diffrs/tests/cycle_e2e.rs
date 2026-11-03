@@ -353,6 +353,9 @@ const CYCLE_OK: &[&str] = &[
     "102-use-rename-single",
     "19-trait-rename",
     "112-trait-sweep-single",
+    "09-token-tree",
+    "86-token-tree-single",
+    "97-macro-sweep-single",
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
@@ -374,10 +377,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "06-insert-use",
         "t375: single insertion anchor re-infers ordinary",
-    ),
-    (
-        "09-token-tree",
-        "t375: single macro invocation re-infers ordinary (macro detector is WI-3)",
     ),
     (
         "12-stmt-rewrite",
@@ -416,16 +415,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "75-macro-verbatim-single",
         "t375: single-site macro-verbatim rewrite re-infers ordinary",
-    ),
-
-    (
-        "86-token-tree-single",
-        "t375: single-site token-tree arg rewrite re-infers ordinary",
-    ),
-
-    (
-        "97-macro-sweep-single",
-        "t375: single-site macro-sweep rewrite re-infers ordinary",
     ),
 ];
 

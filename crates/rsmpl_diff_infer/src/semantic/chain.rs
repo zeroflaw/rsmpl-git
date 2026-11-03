@@ -967,6 +967,55 @@ pub(crate) fn compress_section(
                 used_rules.truncate(use_checkpoint);
             }
         }
+        // WI-3 slice 3: single-pair macro-rename single under the
+        // precision guard (same posture as the use-prefix single
+        // above; `macro_holds`/`qualified_macro_holds` at n=1 plus
+        // the T361 byte-compare inside is the uniqueness proof).
+        // `macro_rename` stays Strict for the N >= 2 sweep — only
+        // this n=1 arm prices proof over bytes.
+        let macro_checkpoint = used_rules.len();
+        if let Some(single) = attempt(
+            declined,
+            "macro_rename",
+            super::try_macro_rename_single(&minuses, &pluses, path, file_old, &changed, used_rules),
+        ) {
+            if let Some(prelude) = &rename_prelude {
+                if let Some(final_text) = reheader_rename(&single, prelude) {
+                    if final_text.len() <= section.len() + super::PRECISION_GUARD {
+                        push_section_prov(
+                            prov,
+                            &final_text,
+                            section,
+                            path,
+                            "macro_rename",
+                            &changed,
+                            file_old,
+                            macro_checkpoint,
+                            used_rules,
+                        );
+                        return Some(final_text);
+                    }
+                }
+                declined_guard(declined, "macro_rename", "precision-guard");
+                used_rules.truncate(macro_checkpoint);
+            } else if single.len() <= section.len() + super::PRECISION_GUARD {
+                push_section_prov(
+                    prov,
+                    &single,
+                    section,
+                    path,
+                    "macro_rename",
+                    &changed,
+                    file_old,
+                    macro_checkpoint,
+                    used_rules,
+                );
+                return Some(single);
+            } else {
+                declined_guard(declined, "macro_rename", "precision-guard");
+                used_rules.truncate(macro_checkpoint);
+            }
+        }
         return compress_section_per_hunk(
             section, path, file_old, used_rules, prov, suppressed, declined,
         );

@@ -1,11 +1,14 @@
-//! Macro-rename sweep (WI-3). Split from `super` per the D5 hygiene
-//! gate. One shape, infer-only (the engine already matches it — probed
-//! green): N >= 2 single macro invocations `old!(...)` -> `new!(...)`
-//! with per-site token-equal bodies (bodies vary across sites — the
-//! bench-17 hetero shape). Delimiters are unrestricted (the engine
-//! `...` matches `!()`, `![]`, and `!{}` alike, probed). Macro
-//! *interiors* stay ordinary (WI-9): a per-site body rewrite is not a
-//! rename.
+//! Macro-rename sweep + N=1 single (WI-3). Split from `super` per the
+//! D5 hygiene gate. Two shapes, infer-only (the engine already matches
+//! them — probed green): N >= 2 single macro invocations `old!(...)` ->
+//! `new!(...)` with per-site token-equal bodies (bodies vary across
+//! sites — the bench-17 hetero shape), and the N=1 lone rename as an
+//! allow-one verbatim single under the precision guard (WI-3 slice 3:
+//! `macro_holds` at n=1 plus the scratch byte-compare is the uniqueness
+//! proof; holed authored legs unify via the D17 verbatim arm).
+//! Delimiters are unrestricted (the engine `...` matches `!()`, `![]`,
+//! and `!{}` alike, probed). Macro *interiors* stay ordinary (WI-9): a
+//! per-site body rewrite is not a rename.
 
 use super::macro_parts::{
     delim_close, is_string_arg, macro_delim_open, macro_path, macro_raw_args, member_sites,
@@ -96,6 +99,120 @@ pub(crate) fn try_macro_rename_sweep(
     hunk.push_str("# macro=token_tree\n");
     hunk.push_str(&format!("- {old_path}!(...)\n+ {new_path}!(...)\n"));
     Some(hunk)
+}
+
+/// N=1 macro-rename single (WI-3 slice 3): one `old!(body)` →
+/// `new!(body)` invocation pair with a shared prefix, a last-segment
+/// name delta, and token-equal bodies compresses to the allow-one
+/// verbatim pair (`- old!(...)` / `+ new!(...)` under
+/// `# macro=token_tree`, no allow/scope directive — the WI-3 slice-1
+/// use-prefix single precedent). Uniqueness is proved by
+/// `macro_holds` / `qualified_macro_holds` at n=1 (exactly one `old`
+/// invocation in the file, opaque macro/string interiors veto) plus
+/// the `scratch_single_reproduces` byte-compare pre-reservation over
+/// the actual emission. The holed diet is never emitted (the N≥2
+/// `rename_hole_template` needs ≥2 sites by construction); a holed
+/// authored leg (fixture 86) unifies via the D17 verbatim equality
+/// arm, same posture as the WI-1s1 holed singles. Same-name interior
+/// edits (fixture 75) decline here (`parse_macro_pair` returns equal
+/// paths — the interior family owns them).
+pub(crate) fn try_macro_rename_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Option<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return None;
+    }
+    let pre = file_old?;
+    let (old_path, new_path) = parse_macro_pair(minuses[0], pluses[0])?;
+    if old_path == new_path {
+        return None;
+    }
+    let (o_pre, o_last) = split_macro_path(&old_path)?;
+    let (n_pre, n_last) = split_macro_path(&new_path)?;
+    if o_pre != n_pre || o_last == n_last {
+        return None;
+    }
+    if o_pre.is_empty() {
+        if !crate::totality::macro_holds(file_old, &o_last, minuses, changed) {
+            return None;
+        }
+    } else if !crate::totality::qualified_macro_holds(file_old, &old_path, minuses, changed) {
+        return None;
+    }
+    let checkpoint = used_rules.len();
+    let flat = |p: &str| p.replace("::", "_");
+    let rule = unique_rule(
+        used_rules,
+        &format!("macros_{}_to_{}", flat(&old_path), flat(&new_path)),
+    );
+    // Allow-one: ranged hunk with no `# allow` directive (the
+    // use-prefix single precedent); `# macro=token_tree` stays (the
+    // engine needs it — paren `...` matches every delimiter, probed).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str("# macro=token_tree\n");
+    hunk.push_str(&format!("- {old_path}!(...)\n+ {new_path}!(...)\n"));
+    // Defensive: the probes above already applied equivalent
+    // spellings, but the hunk header is new — never emit a guess.
+    if rsmpl_patch::parse_patch(&hunk).is_err() {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    if !macro_single_reproduces(pre, path, &hunk, changed, pluses) {
+        used_rules.truncate(checkpoint);
+        return None;
+    }
+    Some(hunk)
+}
+
+/// T361 byte-compare probe for the N=1 macro-rename single (the
+/// slot.rs `scratch_single_reproduces` precedent, file-local like the
+/// trait_methods.rs copy): the allow-one emission must real-apply to
+/// the pre-image byte-identical to the native single-line swap.
+/// `changed` cites the exact site; every other line stays verbatim.
+fn macro_single_reproduces(
+    pre: &str,
+    path: &str,
+    section: &str,
+    changed: &[usize],
+    pluses: &[&str],
+) -> bool {
+    let Ok(parsed) = rsmpl_patch::parse_patch(section) else {
+        return false;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    if rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).is_err() {
+        return false;
+    }
+    let post = &files[path];
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let post_lines: Vec<&str> = post.lines().collect();
+    if post_lines.len() != pre_lines.len() {
+        return false;
+    }
+    let changed_set: std::collections::HashSet<usize> = changed.iter().copied().collect();
+    for (i, &site) in changed.iter().enumerate() {
+        let Some(post_line) = post_lines.get(site.saturating_sub(1)) else {
+            return false;
+        };
+        if post_line.trim() != pluses[i].trim() {
+            return false;
+        }
+    }
+    for (idx, (pre_line, post_line)) in pre_lines.iter().zip(post_lines.iter()).enumerate() {
+        if changed_set.contains(&(idx + 1)) {
+            continue;
+        }
+        if pre_line != post_line {
+            return false;
+        }
+    }
+    true
 }
 
 /// WI-17a rename + hole candidate: uniform delimiter across all sites
@@ -887,6 +1004,90 @@ mod tests {
             "@@ -1,3 +1,3 @@\n fn m() {\n-    old_render_widget!(first_widget_argument);\n+    new_render_widget!(first_widget_argument);\n }\n",
         );
         assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
+    fn macro_rename_single_fires_bare_verbatim() {
+        // WI-3 slice 3 (fixture 09 shape): one bare rename with a
+        // token-equal body raises as the allow-one verbatim single.
+        let raw = section(
+            "f.rs",
+            "@@ -2,1 +2,1 @@ fn a() {\n-    old_mac!(1, foo(x));\n+    new_mac!(1, foo(x));\n }\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn a() {\n    old_mac!(1, foo(x));\n}\n")]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- old_mac!(...)\n"), "got:\n{out}");
+        assert!(out.contains("+ new_mac!(...)\n"), "got:\n{out}");
+        assert!(out.contains("# macro=token_tree\n"), "got:\n{out}");
+        assert!(
+            !out.contains("allow"),
+            "allow-one carries no allow directive, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn macro_rename_single_vetoes_twin_and_same_path() {
+        // An untouched same-name twin vetoes (count 2 at n=1).
+        let raw = section(
+            "f.rs",
+            "@@ -2,1 +2,1 @@ fn f() {\n-    old_m!(a, 1);\n+    new_m!(a, 1);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn f() {\n    old_m!(a, 1);\n    old_m!(b, 2);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none(),
+            "twin must veto"
+        );
+        // Same-name interior edits are not renames (fixture 75 posture).
+        let pre_same = pre_map(&[("f.rs", "fn f() {\n    let b = format!(\"x{}\", 1);\n}\n")]);
+        assert!(
+            super::try_macro_rename_single(
+                &["    let b = format!(\"x{}\", 1);"],
+                &["    let b = format!(\"y{}\", 1);"],
+                "f.rs",
+                Some(&pre_same["f.rs"]),
+                &[2],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "same-path interior must decline"
+        );
+        // Prefix mismatch (two renamed segments) stays ordinary.
+        assert!(
+            super::try_macro_rename_single(
+                &["    a::old!(1);"],
+                &["    b::new!(1);"],
+                "f.rs",
+                Some("fn f() {\n    a::old!(1);\n}\n"),
+                &[2],
+                &mut Vec::new(),
+            )
+            .is_none(),
+            "prefix mismatch must decline"
+        );
+    }
+
+    #[test]
+    fn macro_rename_single_fires_qualified() {
+        // Qualified renames ride the same arm via `qualified_macro_holds`.
+        let pre = pre_map(&[("f.rs", "fn f() {\n    crate::old_m!(a);\n}\n")]);
+        let out = super::try_macro_rename_single(
+            &["    crate::old_m!(a);"],
+            &["    crate::new_m!(a);"],
+            "f.rs",
+            Some(&pre["f.rs"]),
+            &[2],
+            &mut Vec::new(),
+        )
+        .expect("qualified single must fire");
+        assert!(out.contains("- crate::old_m!(...)\n"), "got:\n{out}");
+        assert!(out.contains("+ crate::new_m!(...)\n"), "got:\n{out}");
+        assert!(out.contains("# macro=token_tree\n"), "got:\n{out}");
     }
 
     #[test]

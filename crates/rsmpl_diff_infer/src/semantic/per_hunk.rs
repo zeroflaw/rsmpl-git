@@ -148,6 +148,22 @@ pub(crate) fn compress_balanced_pair_body(
             declined_guard(declined, "use_prefix", "precision-guard");
             used_rules.truncate(checkpoint);
         }
+        // WI-3 slice 3: single-pair macro-rename single under the
+        // precision guard (uniqueness proved by `macro_holds` /
+        // `qualified_macro_holds` at n=1 plus the T361 byte-compare
+        // inside; `guard_for("macro_rename")` stays Strict for multis).
+        if let Some(single) = attempt(
+            declined,
+            "macro_rename",
+            super::try_macro_rename_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if body.len() <= hunk_len + super::PRECISION_GUARD {
+                return Some((body.to_string(), "macro_rename"));
+            }
+            declined_guard(declined, "macro_rename", "precision-guard");
+            used_rules.truncate(checkpoint);
+        }
         // WI-7 slice-6: bare-call arg-template wrap single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,

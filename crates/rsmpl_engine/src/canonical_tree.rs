@@ -1159,4 +1159,64 @@ mod tests {
             "declaration never unifies with definition:\n{a}\nvs\n{b}"
         );
     }
+
+    const MACRO_SINGLE_PRE: &str = "fn f() {\n    old_m!(a, 1);\n}\n";
+
+    #[test]
+    fn wi3_macro_verbatim_single_instantiates_to_literal() {
+        // WI-3 slice 3 (fixture 09/97): the authored verbatim `...`
+        // sweep spelling and the inferred allow-one verbatim single
+        // prove the same one line site; both canonicalize to the
+        // instantiated literal pair (`# macro=token_tree` kept on both).
+        let p = pre(&[("src/lib.rs", MACRO_SINGLE_PRE)]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n# macro=token_tree\n- old_m!(...)\n+ new_m!(...)\n";
+        let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n# macro=token_tree\n- old_m!(...)\n+ new_m!(...)\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- old_m!(a, 1)\n+ new_m!(a, 1)\n"),
+            "literal form:\n{a}"
+        );
+        assert!(a.contains("# macro=token_tree"), "macro kept:\n{a}");
+        let ka = single_site_post_key(&p, authored).expect("authored applies");
+        let kb = single_site_post_key(&p, inferred).expect("inferred applies");
+        assert_eq!(ka, kb, "same single site, same post-tree");
+    }
+
+    #[test]
+    fn wi3_macro_holed_single_instantiates_to_literal() {
+        // WI-3 slice 3 (fixture 86): the authored holed spellings
+        // (`E` undeclared — no `# expr` directive) and the inferred
+        // verbatim single prove the same one line site; both
+        // canonicalize to the instantiated literal pair.
+        let p = pre(&[("src/lib.rs", MACRO_SINGLE_PRE)]);
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# scope=file\n# allow=many\n# macro=token_tree\n- old_m!(E, 1)\n+ new_m!(E, 1)\n";
+        let inferred = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n# macro=token_tree\n- old_m!(...)\n+ new_m!(...)\n";
+        let a = canonicalize_with_tree(authored, &p).unwrap();
+        let b = canonicalize_with_tree(inferred, &p).unwrap();
+        assert_eq!(a, b, "authored:\n{a}\ninferred:\n{b}");
+        assert!(
+            a.contains("- old_m!(a, 1)\n+ new_m!(a, 1)\n"),
+            "literal form:\n{a}"
+        );
+    }
+
+    #[test]
+    fn wi3_macro_mode_mismatch_stays_divergent() {
+        // Negative control: a `# macro=token_tree` leg and a bare leg
+        // over the same site keep different directives, so they never
+        // unify (the MacroMode gate addition cannot launder a macro
+        // rewrite into a non-macro rewrite).
+        let p = pre(&[("src/lib.rs", MACRO_SINGLE_PRE)]);
+        let macro_leg = "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n# macro=token_tree\n- old_m!(a, 1)\n+ new_m!(a, 1)\n";
+        let bare_leg =
+            "diff --git src/lib.rs\n@@ -2,1 @@ rule=r1\n- old_m!(a, 1)\n+ new_m!(a, 1)\n";
+        let a = canonicalize_with_tree(macro_leg, &p).unwrap();
+        let b = canonicalize_with_tree(bare_leg, &p).unwrap();
+        assert_ne!(
+            a, b,
+            "macro vs non-macro legs stay divergent:\n{a}\nvs\n{b}"
+        );
+    }
 }

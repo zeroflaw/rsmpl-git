@@ -9821,6 +9821,17 @@ stripping is deliberate. Equalities per origin close the contract:
   pair) instantiate instead to the shared concrete inline form
   `fn {name}(...) { ... }` for definitions and `fn {name}(...) ;`
   for trait declarations (`{` vs `;` never unify), frame dropped.
+  Macro-rename hunks (`# macro=token_tree` plus one minus/plus pair)
+  instantiate through the verbatim arm, never the type-delta arm (a
+  macro invocation body parses as a type, so the type arm would carve
+  a callee fragment that never re-proves): both legs rewrite to the
+  terminator-stripped expression pair (`old_m!(a, 1)` — a
+  `;`-terminated concrete macro pattern is rejected outright,
+  `NAME!(...)` shape only — so an authored verbatim `...` leg, an
+  authored holed leg (`E` undeclared), and the inferred allow-one
+  verbatim single share one literal form, `# macro=token_tree` kept
+  on every leg; a macro leg and a non-macro leg over the same site
+  keep different directives and stay divergent.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
 (144), all example benches (32 applyrs, 48 diffrs), plus the history_e2e pins. Out of scope
@@ -9830,9 +9841,14 @@ cycle must still be tree-lossless).
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser
-deliberately leaves ordinary (`04`, `06`, `09`, `13`,
-`19`, `22` — definition-shape singles among them fire under
+deliberately leaves ordinary (`04`, `06`, `13`,
+`22` — definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
+macro-rename singles fire as allow-one verbatim `old!(...)` /
+`new!(...)` hunks under `# macro=token_tree` (one invocation,
+token-equal bodies, `macro_holds` at n=1 plus the scratch
+byte-compare; holed authored legs unify via the verbatim literal
+arm); same-name macro-interior edits stay with the interior family;
 return-carrying/vis-carrying fn singles still need their slice-2
 detectors); heterogeneous sites no template fires on stay
   ordinary (interleaved same-class groups — A B A line order stays
