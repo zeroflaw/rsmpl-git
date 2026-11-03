@@ -26,11 +26,16 @@ pub use parser::{
     ParseError,
 };
 
-/// WI-20: single source of truth for the JSON report schema version
+/// WI-23: single source of truth for the JSON report schema version
 /// (SPEC D.2). `applyrs`, `diffrs`, and the `gitrs` dispatcher all take
 /// the number from here — never a per-binary literal — so the `gitrs`
-/// version-skew handshake transitively pins schema parity. v4: the
-/// WI-2 `follow_skipped` prose string is removed (structured
-/// `follow_skipped_details` carry the signal); everything else is
-/// additive over v3.
-pub const REPORT_VERSION: u32 = 4;
+/// version-skew handshake transitively pins schema parity. v5 collects
+/// the already-shipped WI-17 provenance completion (closed reason
+/// taxonomy, numbered guard vetoes, `totality:`/`veto:`/`precondition:`
+/// verdicts), the WI-1 equality fields, the WI-7 guard numbers, and the
+/// `verified` completeness tightening; v4's only breaking change was the
+/// WI-20 `follow_skipped` prose-string removal (structured
+/// `follow_skipped_details` carry the signal). No v4 compatibility shim:
+/// the parser accepts both long and short canonical forms (D6), but
+/// reports always carry the current number.
+pub const REPORT_VERSION: u32 = 5;

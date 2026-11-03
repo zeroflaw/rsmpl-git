@@ -106,7 +106,7 @@ fn unknown_subcommand_json_is_envelope() {
 // `rsmpl_patch::REPORT_VERSION` constant, and the sibling
 // version-skew handshake transitively pins schema parity.
 #[test]
-fn tri_way_envelope_reports_unified_schema_v4() {
+fn tri_way_envelope_reports_unified_schema_v5() {
     assert!(
         sibling_applyrs().exists() && sibling_diffrs().exists(),
         "siblings missing next to the dispatcher"

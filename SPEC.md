@@ -7031,7 +7031,7 @@ prints one JSON object to stdout:
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "rules": [{"rule": "rename_calls", "file": "src/lib.rs", "matches": 1, "spans": [[10, 12]], "semantics": "instantiated", "sites": [{"span": [10, 12], "bindings": {"E": "old_call"}}]}],
   "files": [{"path": "src/lib.rs", "added": 1, "removed": 1, "post_sha": "<sha-256 hex of the post-image>"}],
   "diff": "diff --git ... (lowered concrete patch, no RSmPL directives)",
@@ -7159,12 +7159,14 @@ prints one JSON object to stdout:
   shown under `full`). Carried unchanged from `version: 3` into
   `version: 4` (like the other per-rule evidence keys; `version: 2`
   added them within v2).
-- `version` is the JSON report schema version (`4` = this contract:
-  `checked.semantics` word (`verified`|`partial`), per-rule `semantics`
-  words; `v3` added the `semantics` words and evidence keys over the v2
-  boolean `semantics`; `v2` added them over `v1`'s boolean `check`,
-  first-site `bindings`, and `verified`; `v4` removes the `follow_skipped`
-  prose string and unifies `diffrs` on the same number). Agents
+- `version` is the JSON report schema version (`5` = this contract:
+  WI-17's completed provenance (closed reason taxonomy, numbered guard
+  vetoes, `totality:`/`veto:`/`precondition:` verdicts), WI-1's equality
+  fields, and WI-7's guard numbers, plus the `verified` completeness
+  tightening below; `v4` removed the `follow_skipped` prose string and
+  unified `diffrs` on the same number; `v3` added the `semantics` words
+  and evidence keys over the v2 boolean `semantics`; `v2` added them
+  over `v1`'s boolean `check`, first-site `bindings`, and `verified`). Agents
   pin parsing on it; any future breaking JSON change bumps it
   (additive keys like `history`, `post_sha`, `sites_truncated`,
   `bindings_truncated_chars`, `follow_files`, `follow_source`,
@@ -7195,9 +7197,9 @@ prints one JSON object to stdout:
   line per blocking rule (plus `incomplete: ordinary hunks present`
   when ordinary hunks block and `incomplete: rule <name> (<file>):
   semantics <word>` when the rule word itself blocks); JSON stays
-  stdout-only with no such lines. This completeness clause is a breaking
-  meaning change of `verified` (v5; the version bump lands in its own
-  item, the derivation lands here);
+  stdout-only with no such lines. This completeness clause is the breaking
+  meaning change of `verified` that schema `version: 5` freezes (the
+  derivation lives here; the bump lands with it);
   `build` is `"pass"` iff `--verify build`
   ran, else `"skipped"` (a build failure exits 2 with the `{error}`
   envelope below, never a success payload). Failures never reach this
@@ -7272,7 +7274,7 @@ prints one JSON object to stdout:
   the stderr diagnostic.
 
 ```json
-{"version": 4, "error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
+{"version": 5, "error": {"code": "RSMPL_MATCH_CONFLICT", "rule": "r", "file": "src/lib.rs", "range": "1..2", "reason": "no match found", "suggestion": "read `src/lib.rs` to list valid ranges; check the pattern or add `# optional`"}}
 
 ```
 
@@ -7694,7 +7696,7 @@ emissions rebuild only the `diff --git` header and would silently
 drop the mode flip, while the per-hunk prelude keeps the mode lines
 (T401).
 
-`diffrs --format json` (default `text`) prints `{"version": 4, "files":
+`diffrs --format json` (default `text`) prints `{"version": 5, "files":
 [{path}], "patch": "<RSmPL-Git patch>", "hunks": [...]}` to stdout
 (text mode prints only the patch). Failures carry the same error
 object as `applyrs` (`code/rule/file/range/reason/suggestion/repair`
@@ -7831,7 +7833,7 @@ never over-claim remainder lines), `declined` is the section's chain-level list
 design — the whole-hunk chain attempt already records per-family evidence).
 Sections nothing tried (headers-only, non-`.rs`)
 stay silent passthrough, as do pre-pass-emitted sections with no
-native hunk (already semantic). `version` is `4` — unified with `applyrs` via the
+native hunk (already semantic). `version` is `5` — unified with `applyrs` via the
 single `rsmpl_patch::REPORT_VERSION` constant (WI-20; `v2`/`v3`
 carried the same success keys with their own number while sharing the
 error object, `v1` with a hand-built error payload).
