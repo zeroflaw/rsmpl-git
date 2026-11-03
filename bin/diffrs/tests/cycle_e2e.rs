@@ -380,7 +380,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "12-stmt-rewrite",
-        "hetero: header+let mixed single block; v1 fuses pure let runs only (WI-5d), no sub-hunk split or header+body joint shape (WI-19c permanent non-goal: hunk atomicity, a single mixed native hunk never splits)",
+        "hetero (WI-15 slice 1): same-name param-evolution header (Vec<u32> → Box<[u32]>, no rename so no fn-joint def) fused with a binder-change `let count` → `let n` line (D11/D16 capture: no binder-identity machinery) plus a same-binder `let bumped` line. The unproven line is exactly `let count = values.len() as u32;` (binder rename with a live use on the next line); the other two lines re-infer as a type single + a verbatim single. A rename+body twin WITH calls now splits per WI-15 (header follow + verbatim leftovers); this fixture has neither a rename nor calls.",
     ),
     (
         "13-sig-evolution",

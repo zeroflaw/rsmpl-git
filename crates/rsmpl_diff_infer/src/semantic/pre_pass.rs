@@ -10,7 +10,9 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use super::prov::HunkProvenance;
-use super::{cross_sweep, fn_joint, item_intent, item_joint_impl, member, mod_rename, moves, prov};
+use super::{
+    cross_sweep, fn_joint_driver, item_intent, item_joint_impl, member, mod_rename, moves, prov,
+};
 
 /// Run the whole-patch pre-passes over `sections`.
 ///
@@ -89,7 +91,7 @@ pub(crate) fn run_pre_passes<'a>(
     let joint_rules_before = used_rules.len();
     let mut joint_suppressed: HashSet<(String, String)> = HashSet::new();
     if let Some((rewritten, def_path, rule, suppressed)) =
-        fn_joint::try_fn_joint_intent(current.as_ref(), pre, used_rules)
+        fn_joint_driver::try_fn_joint_intent(current.as_ref(), pre, used_rules)
     {
         joint_suppressed = suppressed;
         if rule.is_empty() {

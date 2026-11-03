@@ -74,4 +74,9 @@ pub(crate) struct Fire {
     /// WI-4f-next claimed native hunk bytes (hunk texts only, no `diff`
     /// header). Used for T375 only when `leftover` is nonempty.
     pub(crate) claimed_hunk_bytes: usize,
+    /// WI-15 slice 1: extra emission-side bytes for a split def hunk
+    /// (the synthesized tight `@@` headers of parked body hunks).
+    /// Zero on every non-split fire; the fire gate prices it on the
+    /// emission side under the precision allowance.
+    pub(crate) split_extra: usize,
 }

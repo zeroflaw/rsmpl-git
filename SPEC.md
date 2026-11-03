@@ -7918,7 +7918,7 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   Rust-parsed, so no cross-file follow can reach into it — only
   fully-collapsed (follow-owned) use-only files compose; def files
   stay pure (any unclaimed pair in a def path vetoes).
-- Rename+body joint (WI-20, `let`-single widened WI-13 slice 1, two-pair widened WI-13 slice 2, three-pair widened WI-13 slice 3, slot-evolution triple widened WI-13 slice 4, detector `fn_joint`): a rename-only header (slices 1–3) or a Joint-A-shaped evolving header (slice 4: evolving ⊆ {vis, qual, params, ret} with params or ret evolving, at most two evolve, generics/where preserved) plus one to three body line pairs (each pair both sides one `syn::Expr`, or both sides one plain same-binder `let` with an init and no attributes, differing text) plus callee-only calls raises to the single follow hunk carrying the header `...` pair plus the raw body pair lines (`- x + 1` / `+ x + 2`, `- let y = 1;` / `+ let y = 2;`); the engine applies the header evolution through the shared splice and each body pair span-scoped inside the renamed body (one `body`-labelled edit per pair, hard `RSMPL_MATCH_CONFLICT` per pair on zero/multiple/out-of-body hits, never a sweep). Non-Joint-A slot evolutions (generics evolution, three slot evolutions, vis-only evolution, B1-shaped arg evolutions), attr deltas, binder-changing `let` pairs (per-pair veto), init-less `let` pairs, four-or-more body pairs, multi-line bodies, and twin in-body hits suppress as today; totality is the same scratch-apply probe plus the byte-win guard.
+- Rename+body joint (WI-20, `let`-single widened WI-13 slice 1, two-pair widened WI-13 slice 2, three-pair widened WI-13 slice 3, slot-evolution triple widened WI-13 slice 4, detector `fn_joint`): a rename-only header (slices 1–3) or a Joint-A-shaped evolving header (slice 4: evolving ⊆ {vis, qual, params, ret} with params or ret evolving, at most two evolve, generics/where preserved) plus one to three body line pairs (each pair both sides one `syn::Expr`, or both sides one plain same-binder `let` with an init and no attributes, differing text) plus callee-only calls raises to the single follow hunk carrying the header `...` pair plus the raw body pair lines (`- x + 1` / `+ x + 2`, `- let y = 1;` / `+ let y = 2;`); the engine applies the header evolution through the shared splice and each body pair span-scoped inside the renamed body (one `body`-labelled edit per pair, hard `RSMPL_MATCH_CONFLICT` per pair on zero/multiple/out-of-body hits, never a sweep). Non-Joint-A slot evolutions (generics evolution, three slot evolutions, vis-only evolution, B1-shaped arg evolutions), attr deltas, binder-changing `let` pairs (per-pair veto), init-less `let` pairs, four-or-more body pairs, multi-line bodies, and twin in-body hits suppress as today; totality is the same scratch-apply probe plus the byte-win guard. WI-15 slice 1: a body pair the joint declines (binder-changing `let`, init-less `let`) no longer sinks a provable header+calls intent when fused in the def hunk — the def-hunk split (see the Joint-A cell) fires the header+calls as a plain follow hunk with the declined bodies as verbatim leftovers.
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`; two-slot
   widened WI-8 slice 1): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
@@ -7931,17 +7931,32 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
    cross-file shapes stay ordinary, see below) — compresses to
   the single header-pair hunk with `# sweep` + `# follow=uses`, the
   pair carrying both deltas (`- fn foo(x: i32) { ... }` /
-  `+ fn bar(x: u32) { ... }`, native spacing preserved). The vis stays
-  in the WI-1 closed set and may now evolve alongside the
-  params/return delta (two slots: vis+params, vis+return; the check
-  normalizes `syn` pretty spacing, so `pub ( crate )` admits like
-  `pub(crate)`); qual/generics/where are
-  preserved and a third evolving slot (vis+params+return) vetoes;
-  only the call-callee-only class fires (arguments
-  token-identical — the follow pass never adds arguments, so a hunk
-  claiming otherwise would fail its own probe). Totality is the same
-  scratch-apply probe plus the unique-definition guard and the
-  byte-win guard. Claim-then-veto suppresses instead of fragmenting:
+ `+ fn bar(x: u32) { ... }`, native spacing preserved). The vis stays
+ in the WI-1 closed set and may now evolve alongside the
+ params/return delta (two slots: vis+params, vis+return; the check
+ normalizes `syn` pretty spacing, so `pub ( crate )` admits like
+ `pub(crate)`); qual/generics/where are
+ preserved and a third evolving slot (vis+params+return) vetoes;
+ only the call-callee-only class fires (arguments
+ token-identical — the follow pass never adds arguments, so a hunk
+ claiming otherwise would fail its own probe). Totality is the same
+ scratch-apply probe plus the unique-definition guard and the
+ byte-win guard. WI-15 slice 1 (def-hunk split): when the def hunk
+ fuses the header pair with one to three body statement pairs (each
+ side a `syn::Stmt` or `syn::Expr` — binder-changing lets, init-less
+ lets, plain expressions) that the body joint declines, the header
+ plus call-site pairs still fire as this follow hunk while each body
+ pair parks as a tight verbatim leftover hunk in the same section
+ (original coordinates; the chain pass may re-harvest admittable
+ bodies as singles afterwards). The split needs a Joint-A-shaped or
+ rename-only header (rename-only admission is disjoint from
+ `item_intent`: it requires a nonempty parked set), at most three
+ parked pairs, no attr/doc/item lines in the def hunk, no
+ attr-shaped unbalanced hunk in the group, and a reduced callee-only
+ claim; B1-shaped headers with in-hunk bodies still suppress
+ (slice-2 residue). The parked bytes leave the claimed side of the
+ gate while the synthesized header overhead prices emission-side
+ under the precision allowance. Claim-then-veto suppresses instead of fragmenting:
   a joint shape that fails any fire gate (non-single-expr body delta,
   attr delta, arg-delta
   calls, generics/where/qual delta, vis-only or triple-slot delta,
@@ -9066,9 +9081,15 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   run is an earlier detector's class and its verdict (fire or veto)
   stands, never undercut by a narrower re-spelling here. Guards:
   mixed runs decline (a header, expression, or any non-plain-`let`
-  member — permanent non-goal, no sub-hunk partition and no header+body
-  joint engine shape (full-history probe: 0/2473 paired hunks over 467
-  commits hold a splittable hetero let window); one-sided ascriptions decline
+  member — permanent non-goal for the window fuser itself (WI-15
+  slice 1 splits a fused `fn`-header-plus-statement def hunk one level
+  up, in the fn-joint pre-pass: one to three `syn::Stmt`/`syn::Expr`
+  body pairs park as verbatim leftovers while a Joint-A-shaped or
+  rename-only header still fires its follow; more than three bodies,
+  attr/doc/item lines, attr-shaped company, interleaved order, and
+  B1-shaped headers stay unsplit by construction. Full-history probe:
+  0/2473 paired hunks over 467 commits hold a splittable hetero let
+  window); one-sided ascriptions decline
   (a type-add/removal inside the run is another detector's class);
   K = 1 true singles stay ordinary (Section D.4 N = 1 rule); K > 4
   exceeds the `Sequence` engine arm's exact-K bound; all-identical
@@ -10048,6 +10069,8 @@ heterogeneous sites no template fires on stay
   uses, e.g. the first hunk of `99-partition-partial-mixed` — and no
   header+body joint shape in a single pair. Mixed hunks whose runs all
   prove now split per WI-4 (diffrs fixture `129-subhunk-partition-fires`),
+  and fused `fn`-header-plus-statement def hunks split per WI-15 slice 1
+  (Joint-A/rename-only header follow plus verbatim body leftovers),
   so only the narrowed residue re-diffs mixed by construction (WI-5d
   `single_block` still fuses pure let runs only); `14` divergent single-file renames whose
   deltas never share one intent — struct/enum/const/mod/nested-`Helper`/

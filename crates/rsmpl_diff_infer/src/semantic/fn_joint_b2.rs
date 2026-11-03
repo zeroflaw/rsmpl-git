@@ -132,6 +132,7 @@ pub(crate) fn attr_joint_fire(
         claimed_secs: Vec::new(),
         leftover: HashMap::new(),
         claimed_hunk_bytes: 0,
+        split_extra: 0,
         joint: Joint::B2 {
             attr_line,
             attr_add,

@@ -376,6 +376,7 @@ pub(crate) fn joint_workspace_candidate(
             claimed_secs,
             leftover,
             claimed_hunk_bytes,
+            split_extra: 0,
             joint,
         }),
         def_path,

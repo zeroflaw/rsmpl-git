@@ -27,8 +27,10 @@ mod fn_joint;
 mod fn_joint_b2;
 mod fn_joint_body;
 mod fn_joint_calls;
+mod fn_joint_driver;
 mod fn_joint_emit;
 mod fn_joint_sig;
+mod fn_joint_split;
 mod fn_joint_types;
 mod fn_joint_ws;
 pub(crate) mod frame;
@@ -641,10 +643,12 @@ mod tests {
         )];
         let out = infer_semantic_with_pre_images(&native, &pre).expect("N=2 joint must fire");
         let mut used = Vec::new();
-        assert!(
-            super::fn_joint::try_fn_joint_intent(std::slice::from_ref(&out), &pre, &mut used)
-                .is_none()
-        );
+        assert!(super::fn_joint_driver::try_fn_joint_intent(
+            std::slice::from_ref(&out),
+            &pre,
+            &mut used
+        )
+        .is_none());
         assert!(used.is_empty());
         assert!(super::item_intent::try_item_intent_sweep(
             std::slice::from_ref(&out),

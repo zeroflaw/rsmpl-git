@@ -167,6 +167,7 @@ pub(crate) fn try_body_joint(
         joint: Joint::Body { bodies },
         leftover: HashMap::new(),
         claimed_hunk_bytes,
+        split_extra: 0,
     }))
 }
 
@@ -561,9 +562,12 @@ mod tests {
     }
 
     #[test]
-    fn body_joint_let_binder_change_suppresses() {
-        // Binder-changing `let` pairs belong to D11/D16 capture —
-        // wholly ordinary, never a joint.
+    fn body_joint_let_binder_change_fires_with_split_leftover() {
+        // WI-15 slice 1: a binder-changing `let` pair is no joint body
+        // (D11/D16 capture — the joint never rewrites the binder), but
+        // it no longer sinks the provable header+calls intent. The def
+        // hunk splits: the rename rides one follow hunk, the binder
+        // pair a verbatim leftover hunk.
         let pre = pre_map(&[(
             "src.rs",
             "fn foo(x: i32) -> i32 {\n    let y = 1;\n    y\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
@@ -572,17 +576,28 @@ mod tests {
             "src.rs",
             "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let y = 1;\n+fn bar(x: i32) -> i32 {\n+    let z = 1;\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
-        let full = infer_semantic_with_pre_images(&sections, &pre);
-        assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "binder-changing let shape must stay wholly ordinary, got: {full:?}"
+        let full = infer_semantic_with_pre_images(&sections, &pre)
+            .expect("split header+calls intent must fire");
+        assert!(full.contains("# follow=uses"), "got:\n{full}");
+        assert!(full.contains("-    let y = 1;\n"), "got:\n{full}");
+        assert!(full.contains("+    let z = 1;\n"), "got:\n{full}");
+        validated_live(&full, &pre);
+        let parsed = rsmpl_patch::parse_patch(&full).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    let z = 1;\n    y\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "split must round-trip byte-identical"
         );
     }
 
     #[test]
-    fn body_joint_two_pair_second_binder_change_suppresses() {
-        // Per-pair veto: a clean first pair does not save a
-        // binder-changing second pair (D11/D16 capture).
+    fn body_joint_two_pair_second_binder_change_fires_with_split_leftover() {
+        // WI-15 slice 1: per-pair partition — the clean Expr pair is
+        // re-harvested as a single by the chain pass over the rebuilt
+        // section, while the binder-changing pair stays a verbatim
+        // leftover beside the header follow hunk.
         let pre = pre_map(&[(
             "src.rs",
             "fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    y * 2\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
@@ -591,17 +606,29 @@ mod tests {
             "src.rs",
             "@@ -1,3 +1,3 @@\n-fn foo(x: i32) -> i32 {\n-    let y = x + 1;\n-    y * 2\n+fn bar(x: i32) -> i32 {\n+    let z = x + 1;\n+    y * 3\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
-        let full = infer_semantic_with_pre_images(&sections, &pre);
-        assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "two-pair shape with a binder change must stay wholly ordinary, got: {full:?}"
+        let full = infer_semantic_with_pre_images(&sections, &pre)
+            .expect("split header+calls intent must fire");
+        assert!(full.contains("# follow=uses"), "got:\n{full}");
+        assert!(full.contains("-    let y = x + 1;\n"), "got:\n{full}");
+        assert!(full.contains("+    let z = x + 1;\n"), "got:\n{full}");
+        assert!(full.contains("- E0 * 2\n"), "got:\n{full}");
+        assert!(full.contains("+ E0 * 3\n"), "got:\n{full}");
+        validated_live(&full, &pre);
+        let parsed = rsmpl_patch::parse_patch(&full).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    let z = x + 1;\n    y * 3\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "split must round-trip byte-identical"
         );
     }
 
     #[test]
-    fn body_joint_three_pair_third_binder_change_suppresses() {
-        // Per-pair veto at the new count: two clean pairs do not save
-        // a binder-changing third pair (D11/D16 capture).
+    fn body_joint_three_pair_third_binder_change_fires_with_split_leftover() {
+        // WI-15 slice 1: two clean pairs re-harvest as singles, the
+        // binder-changing third pair stays verbatim, the header rides
+        // the follow hunk — one partitioned section, byte-identical.
         let pre = pre_map(&[(
             "src.rs",
             "fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    let z = y * 2;\n    z + 0\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
@@ -610,28 +637,52 @@ mod tests {
             "src.rs",
             "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-    let y = x + 1;\n-    let z = y * 2;\n-    z + 0\n+fn bar(x: i32) -> i32 {\n+    let y = x + 2;\n+    let w = y * 2;\n+    z + 1\n@@ -7,2 +7,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
-        let full = infer_semantic_with_pre_images(&sections, &pre);
-        assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "three-pair shape with a binder change must stay wholly ordinary, got: {full:?}"
+        let full = infer_semantic_with_pre_images(&sections, &pre)
+            .expect("split header+calls intent must fire");
+        assert!(full.contains("# follow=uses"), "got:\n{full}");
+        assert!(full.contains("-    let z = y * 2;\n"), "got:\n{full}");
+        assert!(full.contains("+    let w = y * 2;\n"), "got:\n{full}");
+        assert!(full.contains("- E0 + 1\n"), "got:\n{full}");
+        assert!(full.contains("+ E0 + 2\n"), "got:\n{full}");
+        validated_live(&full, &pre);
+        let parsed = rsmpl_patch::parse_patch(&full).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    let y = x + 2;\n    let w = y * 2;\n    z + 1\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "split must round-trip byte-identical"
         );
     }
 
     #[test]
-    fn body_joint_non_let_body_suppresses() {
-        // A `let` without an init carries no init delta — ordinary.
+    fn body_joint_non_let_body_fires_with_split_leftover() {
+        // WI-15 slice 1: an init-less `let` carries no init delta, so
+        // it is no joint body — but like a binder change it parks as a
+        // verbatim leftover while the rename rides the follow hunk.
+        // (The call hunk cites the true sites 7,8: a stale range fails
+        // the D13 probe and suppresses instead — never guessed.)
         let pre = pre_map(&[(
             "src.rs",
             "fn foo(x: i32) -> i32 {\n    let y;\n    y = 1;\n    y\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
         )]);
         let sections = vec![section(
             "src.rs",
-            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let y;\n+fn bar(x: i32) -> i32 {\n+    let z;\n@@ -6,2 +6,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    let y;\n+fn bar(x: i32) -> i32 {\n+    let z;\n@@ -7,2 +7,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
-        let full = infer_semantic_with_pre_images(&sections, &pre);
-        assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "init-less let shape must stay wholly ordinary, got: {full:?}"
+        let full = infer_semantic_with_pre_images(&sections, &pre)
+            .expect("split header+calls intent must fire");
+        assert!(full.contains("# follow=uses"), "got:\n{full}");
+        assert!(full.contains("-    let y;\n"), "got:\n{full}");
+        assert!(full.contains("+    let z;\n"), "got:\n{full}");
+        validated_live(&full, &pre);
+        let parsed = rsmpl_patch::parse_patch(&full).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    let z;\n    y = 1;\n    y\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "split must round-trip byte-identical"
         );
     }
 }
