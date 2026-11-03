@@ -250,7 +250,7 @@ pub(crate) fn try_macro_rule_body_section(
         .iter()
         .zip(&covered_hunk)
         .filter(|(_, b)| **b)
-        .map(|(h, _)| h.len())
+        .map(|(h, _)| super::normalized_hunk_len(h))
         .sum();
     if bodies.iter().map(|b| b.len()).sum::<usize>() >= covered_len {
         used_rules.truncate(checkpoint);

@@ -376,8 +376,10 @@ pub(crate) fn try_subhunk_partition(
         .count();
     if fragment.len()
         > normalized_hunk_len(hunk)
-            + PRECISION_GUARD * n_claimed_pairs.max(1)
-            + 3 * PRECISION_GUARD * n_method_runs
+            + super::guard::precision_allowance(
+                n_claimed_pairs,
+                3 * PRECISION_GUARD * n_method_runs,
+            )
             + super::block_headers::filter_header_excess(&fragment)
     {
         used_rules.truncate(checkpoint);

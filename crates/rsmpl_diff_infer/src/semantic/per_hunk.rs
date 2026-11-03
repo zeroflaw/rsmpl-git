@@ -46,7 +46,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = evo.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), detector));
             }
             declined_guard(declined, detector, "precision-guard");
@@ -61,7 +61,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_call_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_sweep"));
             }
             declined_guard(declined, "call_sweep", "precision-guard");
@@ -76,7 +76,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_method_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_method"));
             }
             declined_guard(declined, "method_to_method", "precision-guard");
@@ -91,7 +91,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_method_to_fn_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_fn"));
             }
             declined_guard(declined, "method_to_fn", "precision-guard");
@@ -107,7 +107,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_general_expr_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "general_expr"));
             }
             declined_guard(declined, "general_expr", "precision-guard");
@@ -126,7 +126,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_type_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "type_sweep"));
             }
             declined_guard(declined, "type_sweep", "precision-guard");
@@ -142,7 +142,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_use_prefix_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "use_prefix"));
             }
             declined_guard(declined, "use_prefix", "precision-guard");
@@ -158,7 +158,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_macro_rename_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "macro_rename"));
             }
             declined_guard(declined, "macro_rename", "precision-guard");
@@ -176,7 +176,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
             declined_guard(declined, "call_arg_template", "precision-guard");
@@ -194,7 +194,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
             declined_guard(declined, "method_arg_template", "precision-guard");
@@ -210,7 +210,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_call_perm_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
             declined_guard(declined, "call_arg_template", "precision-guard");
@@ -226,7 +226,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_method_perm_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
             declined_guard(declined, "method_arg_template", "precision-guard");
@@ -242,7 +242,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_call_literal_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_literal"));
             }
             declined_guard(declined, "call_literal", "precision-guard");
@@ -261,7 +261,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_same_literal"));
             }
             declined_guard(declined, "method_same_literal", "precision-guard");
@@ -278,7 +278,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_subline_call_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_sweep"));
             }
             declined_guard(declined, "call_sweep", "precision-guard");
@@ -295,7 +295,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_subline_method_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_method"));
             }
             declined_guard(declined, "method_to_method", "precision-guard");
@@ -314,7 +314,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_to_fn"));
             }
             declined_guard(declined, "method_to_fn", "precision-guard");
@@ -331,7 +331,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_subline_perm_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
             declined_guard(declined, "call_arg_template", "precision-guard");
@@ -350,7 +350,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
             declined_guard(declined, "method_arg_template", "precision-guard");
@@ -367,7 +367,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_subline_general_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "general_expr"));
             }
             declined_guard(declined, "general_expr", "precision-guard");
@@ -391,7 +391,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_arg_template"));
             }
             declined_guard(declined, "method_arg_template", "precision-guard");
@@ -416,7 +416,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_arg_template"));
             }
             declined_guard(declined, "call_arg_template", "precision-guard");
@@ -433,7 +433,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_subline_literal_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "call_literal"));
             }
             declined_guard(declined, "call_literal", "precision-guard");
@@ -453,7 +453,7 @@ pub(crate) fn compress_balanced_pair_body(
             ),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "method_same_literal"));
             }
             declined_guard(declined, "method_same_literal", "precision-guard");
@@ -469,7 +469,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_repeat_fold_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "repeat_fold"));
             }
             declined_guard(declined, "repeat_fold", "precision-guard");
@@ -489,7 +489,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_typed_wrap_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "let_template"));
             }
             declined_guard(declined, "let_template", "precision-guard");
@@ -501,7 +501,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_untyped_wrap_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "let_template"));
             }
             declined_guard(declined, "let_template", "precision-guard");
@@ -513,7 +513,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_pat_swap_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "let_template"));
             }
             declined_guard(declined, "let_template", "precision-guard");
@@ -577,7 +577,7 @@ pub(crate) fn compress_balanced_pair_body(
             super::try_verbatim_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-            if body.len() <= hunk_len + super::PRECISION_GUARD {
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
                 return Some((body.to_string(), "verbatim"));
             }
             declined_guard(declined, "verbatim", "precision-guard");
@@ -608,17 +608,21 @@ pub(crate) fn compress_balanced_pair_body(
                     super::Guard::Precision => {
                         let filtered_single = minuses[0].starts_with([' ', '\t'])
                             && (detector == "sig_evolution" || detector == "fn_slot_sweep");
-                        let allow = if filtered_single {
-                            super::PRECISION_GUARD * 4 + super::filter_header_excess(body)
+                        if filtered_single {
+                            super::guard::within_precision(
+                                body.len(),
+                                hunk_len,
+                                4,
+                                super::filter_header_excess(body),
+                            )
                         } else {
-                            super::PRECISION_GUARD
-                        };
-                        body.len() <= hunk_len + allow
+                            super::guard::within_precision(body.len(), hunk_len, 1, 0)
+                        }
                     }
-                    super::Guard::Strict => body.len() < hunk_len,
+                    super::Guard::Strict => super::guard::within_strict(body.len(), hunk_len),
                 }
             } else {
-                body.len() < hunk_len
+                super::guard::within_strict(body.len(), hunk_len)
             };
             if wins {
                 Some((body.to_string(), detector))

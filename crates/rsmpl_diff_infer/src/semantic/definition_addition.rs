@@ -270,9 +270,9 @@ pub(crate) fn try_definition_addition_follow(
     }
     // Scaled precision guard: each emitted hunk carries the same
     // 16-byte proof budget as the WI-12 single shape.
-    let native_len: usize = hunks.iter().map(|h| h.len()).sum();
+    let native_len: usize = hunks.iter().map(|h| super::normalized_hunk_len(h)).sum();
     let emitted_len: usize = out.iter().map(|h| h.emitted.len()).sum();
-    if emitted_len > native_len + PRECISION_GUARD * out.len() {
+    if emitted_len > native_len + super::guard::precision_allowance(out.len(), 0) {
         used_rules.truncate(checkpoint);
         return None;
     }

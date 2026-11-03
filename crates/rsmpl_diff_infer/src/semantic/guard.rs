@@ -57,6 +57,23 @@ pub(crate) fn precision_allowance(n_claimed: usize, filter_extra: usize) -> usiz
         .saturating_add(filter_extra)
 }
 
+/// WI-7 slice 2: one decision point for byte guards. Proved site sets
+/// price `semantic <= ordinary + precision_allowance(n, extra)`; sweeps
+/// with no proof keep strict T375 (`semantic < ordinary`).
+pub(crate) fn within_precision(
+    body_len: usize,
+    ordinary_len: usize,
+    n_claimed: usize,
+    filter_extra: usize,
+) -> bool {
+    body_len <= ordinary_len.saturating_add(precision_allowance(n_claimed, filter_extra))
+}
+
+/// Strict T375 for sweeps with no proof (`semantic < ordinary`).
+pub(crate) fn within_strict(body_len: usize, ordinary_len: usize) -> bool {
+    body_len < ordinary_len
+}
+
 /// WI-7 (WI-2b residue): rendering-normalized whole-section length.
 ///
 /// Real `git diff -U0` elides `,1` per hunk header while unit
@@ -272,6 +289,19 @@ mod tests {
             precision_allowance(2, 7),
             super::super::PRECISION_GUARD * 2 + 7
         );
+    }
+
+    #[test]
+    fn within_precision_boundary_and_strict() {
+        // WI-7 slice 2: the one decision point — boundary equality wins
+        // under precision, loses under strict; scaling rides the same
+        // `precision_allowance` law (no per-detector formula).
+        assert!(within_precision(116, 100, 1, 0));
+        assert!(!within_precision(117, 100, 1, 0));
+        assert!(within_precision(100 + 32 + 7, 100, 2, 7));
+        assert!(!within_precision(100 + 32 + 8, 100, 2, 7));
+        assert!(!within_strict(100, 100));
+        assert!(within_strict(99, 100));
     }
 
     #[test]

@@ -884,10 +884,10 @@ pub(crate) fn compress_section(
         "partial",
         super::partial::try_partial_partition_section(section, path, file_old, used_rules),
     ) {
-        let allow = super::PRECISION_GUARD.saturating_mul(n_claimed.max(1));
+        let ordinary = super::guard::normalized_section_len(section);
         if let Some(prelude) = &rename_prelude {
             if let Some(final_text) = reheader_rename(&partial, prelude) {
-                if final_text.len() <= section.len() + allow {
+                if super::guard::within_precision(final_text.len(), ordinary, n_claimed, 0) {
                     push_section_prov(
                         prov,
                         &final_text,
@@ -904,7 +904,7 @@ pub(crate) fn compress_section(
             }
             declined_guard(declined, "partial", "precision-guard");
             used_rules.truncate(partial_checkpoint);
-        } else if partial.len() <= section.len() + allow {
+        } else if super::guard::within_precision(partial.len(), ordinary, n_claimed, 0) {
             push_section_prov(
                 prov,
                 &partial,
@@ -1234,7 +1234,12 @@ fn compress_section_per_hunk(
                 let body = add.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
                 // WI-2b: the span prices rendering-normalized (git elides
                 // `,1`, unit convention writes it), never the raw header.
-                if body.len() <= super::normalized_hunk_len(hunk) + super::PRECISION_GUARD {
+                if super::guard::within_precision(
+                    body.len(),
+                    super::normalized_hunk_len(hunk),
+                    1,
+                    0,
+                ) {
                     push_section_prov(
                         prov,
                         body,

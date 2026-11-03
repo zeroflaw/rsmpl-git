@@ -510,13 +510,13 @@ pub(crate) fn try_verbatim_sweep(
         .iter()
         .zip(&covered_hunk)
         .filter(|(_, b)| **b)
-        .map(|(h, _)| h.len())
+        .map(|(h, _)| super::normalized_hunk_len(h))
         .sum();
     let joined_orig_len: usize = hunks
         .iter()
         .enumerate()
         .filter(|(i, _)| split_leftovers[*i].is_some())
-        .map(|(_, h)| h.len())
+        .map(|(_, h)| super::normalized_hunk_len(h))
         .sum();
     // WI-1b: ranged bodies per group when spans are disjoint and ≤64;
     // overlapping groups share the sweep dummy (SPEC 10.6).

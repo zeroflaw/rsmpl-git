@@ -346,7 +346,7 @@ pub(crate) fn try_partial_delete_hunk(
             out.push_str("+\n");
         }
     }
-    if out.len() < hunk.len() {
+    if out.len() < super::guard::normalized_hunk_len(hunk) {
         Some(out)
     } else {
         used_rules.truncate(checkpoint);
