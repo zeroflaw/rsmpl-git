@@ -301,6 +301,32 @@ pub(crate) fn evolved_pairs_for_item(
                 }),
             });
         }
+        // E2 slice 2b: trait body-joint pairs (move+rename plus one
+        // method rename). The paste carries the joint template
+        // (`trait <old> as <new> { fn <m_old> as <m_new>; ... }`);
+        // mutually exclusive with both arms above (self-ref pairs pass
+        // the single scan but fail any method rename; abstract pairs
+        // have token-equal methods).
+        for (first, last, prefix, old, name, m_old, m_new) in
+            super::move_evolve_container::find_trait_body_joint_hits(&item.text, pbody)
+        {
+            let template =
+                rsmpl_pattern::trait_body_joint_template(&prefix, &old, &name, &m_old, &m_new);
+            pairs.push(MovePair {
+                minus_hunk_key: minus_key,
+                plus_hunk_key: plus_key,
+                item: item.clone(),
+                plus_first: first,
+                plus_last: last,
+                evolved: Some(EvolvedPair {
+                    kind: EvolvedKind::Trait,
+                    prefix,
+                    name,
+                    static_mut: false,
+                    template: Some(template),
+                }),
+            });
+        }
     }
     pairs
 }
@@ -621,5 +647,54 @@ mod tests {
         );
         assert!(!text.contains(" as "), "no `as` template, got:\n{text}");
         validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn trait_body_joint_fires_with_joint_paste() {
+        // E2 slice 2b: move+rename plus one method rename fires as one
+        // evolving cut/paste with the joint template.
+        let minus = "trait Old {\n    fn m_old(&self);\n    fn keep(&self);\n}\n";
+        let plus = "trait New {\n    fn m_new(&self);\n    fn keep(&self);\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,5 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,6 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("trait joint must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("+ trait Old as New { fn m_old as m_new; ... }"),
+            "paste must carry the trait joint template, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn trait_body_two_method_renames_stay_ordinary() {
+        // E2 slice 2b: two method renames belong to no joint shape — the
+        // move sweep declines (stays ordinary downstream).
+        let minus = "trait Old {\n    fn a(&self);\n    fn b(&self);\n}\n";
+        let plus = "trait New {\n    fn c(&self);\n    fn d(&self);\n}\n";
+        let a_minus: String = minus.lines().map(|l| format!("-{l}\n")).collect();
+        let a = format!("diff --git a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,4 +2,0 @@\n{a_minus}");
+        let b_plus: String = plus.lines().map(|l| format!("+{l}\n")).collect();
+        let b = format!("diff --git b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -2,0 +3,5 @@\n{b_plus}");
+        let pre = pre_map(&[
+            ("a.rs", &format!("fn keep() {{}}\n{minus}")),
+            ("b.rs", "fn keep2() {}\n"),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used);
+        assert!(
+            out.is_none() || !out.unwrap().join("").contains(" as "),
+            "two method renames must not claim any `as` template"
+        );
     }
 }

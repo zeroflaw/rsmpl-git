@@ -143,6 +143,203 @@ pub fn parse_trait_body_evolution_template(text: &str) -> Option<(String, String
     parse_container_body_template(text, "trait", valid_trait_evolution_prefix)
 }
 
+/// E2 slice 2b `trait` body-joint evolution-paste template:
+/// `trait <old> as <new> { fn <m_old> as <m_new>; ... }` (prefix rides
+/// verbatim: `pub trait Old as New { fn m_old as m_new; ... }`).
+/// Returns `(prefix, old, new, m_old, m_new)`. Single-line only. The
+/// self-ref `parse_trait_body_evolution_template` declines this form
+/// (second ` as ` veto) and the abstract parser declines the first, so
+/// the engine dispatches the joint first — disjoint by construction.
+/// All four idents must be pairwise distinct (the splice double-scans
+/// `Old→New` then `m_old→m_new`, so any cross-talk would corrupt).
+pub fn parse_trait_body_joint_template(
+    text: &str,
+) -> Option<(String, String, String, String, String)> {
+    let line = text.trim();
+    if line.lines().count() != 1 || !line.contains("...") {
+        return None;
+    }
+    let brace = line.find('{')?;
+    let (head, body) = line.split_at(brace);
+    let (prefix, old, new) = parse_trait_as_head(head)?;
+    // Body: `fn <m_old> as <m_new>; ... }`, nothing else.
+    let mut rest = body[1..].trim_start();
+    rest = rest.strip_prefix("fn")?;
+    if rest.starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let (m_old, tail) = take_ident(rest.trim_start())?;
+    let tail = tail.trim_start().strip_prefix("as")?;
+    if tail.starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let (m_new, tail) = take_ident(tail.trim_start())?;
+    let tail = tail.trim_start().strip_prefix(';')?;
+    let tail = tail.trim_start().strip_prefix("...")?;
+    let tail = tail.trim();
+    let tail = tail.strip_suffix('}').unwrap_or(tail).trim();
+    if !tail.is_empty() {
+        return None;
+    }
+    if m_old == m_new || old == m_old || old == m_new || new == m_old || new == m_new {
+        return None;
+    }
+    Some((prefix, old, new, m_old, m_new))
+}
+
+/// `<prefix> trait <old> as <new>` with nothing trailing (E2 slice 2b
+/// joint head). Mirrors the head half of `parse_container_body_template`
+/// with the `trait` keyword fixed and an empty-tail requirement.
+fn parse_trait_as_head(head: &str) -> Option<(String, String, String)> {
+    let bytes = head.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut kw_pos = None;
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if bytes[i..].starts_with(b"trait")
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && bytes.get(i + 5).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            kw_pos = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let kw_pos = kw_pos?;
+    let prefix = &head[..kw_pos];
+    if !valid_trait_evolution_prefix(prefix) {
+        return None;
+    }
+    let (old, tail) = take_ident(head[kw_pos + 5..].trim_start())?;
+    let tail = tail.trim_start().strip_prefix("as")?;
+    if tail.starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let (new, tail) = take_ident(tail.trim_start())?;
+    if old == new || !tail.trim().is_empty() {
+        return None;
+    }
+    Some((prefix.to_string(), old, new))
+}
+
+/// Word-bounded leading ident of `s` plus the remainder (`None` when `s`
+/// leads with no ident). Shared by the joint head and body parsers.
+fn take_ident(s: &str) -> Option<(String, &str)> {
+    let mut len = 0;
+    for c in s.chars() {
+        if c == '_' || c.is_ascii_alphanumeric() {
+            len += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if len == 0 {
+        return None;
+    }
+    Some((s[..len].to_string(), &s[len..]))
+}
+
+/// E2 slice 2b joint paste template: the plus-side prefix verbatim,
+/// `<old> as <new>`, plus the single method rename `fn <m_old> as
+/// <m_new>;` ahead of the `...` body marker. `prefix` is trimmed; an
+/// empty prefix yields a bare header.
+pub fn trait_body_joint_template(
+    prefix: &str,
+    old: &str,
+    new: &str,
+    m_old: &str,
+    m_new: &str,
+) -> String {
+    let pre = prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("trait {old} as {new}")
+    } else {
+        format!("{pre} trait {old} as {new}")
+    };
+    format!("{head} {{ fn {m_old} as {m_new}; ... }}")
+}
+
+/// E2 slice 2b: why a captured trait body cannot take a binding-blind
+/// method rename. A `syn` occurrence classifier shared by the joint
+/// splice and the joint pairing: the renamed method's own ident is
+/// expected (its definition plus word-bounded self-calls rename along),
+/// but a macro name or an attribute interior spelling `m_old` is a
+/// distinct namespace and vetoes. Returns the earliest veto. Unparsable
+/// text yields `None` — the caller's parse gate owns it.
+pub fn trait_joint_method_veto(
+    minus_text: &str,
+    m_old: &str,
+) -> Option<crate::pattern_evolution::BodyVeto> {
+    use quote::ToTokens;
+    use syn::spanned::Spanned;
+    use syn::visit::Visit;
+
+    if m_old.is_empty() || !minus_text.contains(m_old) {
+        return None;
+    }
+    struct Probe<'a> {
+        m_old: &'a str,
+        macro_line: Option<usize>,
+        attr_line: Option<usize>,
+    }
+    impl<'ast> Visit<'ast> for Probe<'_> {
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            if node
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == self.m_old)
+            {
+                let line = node.path.span().start().line;
+                if self.macro_line.is_none_or(|l| line < l) {
+                    self.macro_line = Some(line);
+                }
+            }
+            // Do not descend into macro token trees: every ident inside
+            // is a distinct namespace (mirrors `item_body_evolution_veto`).
+        }
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            if word_bounded_contains(&node.to_token_stream().to_string(), self.m_old) {
+                let line = node.span().start().line;
+                if self.attr_line.is_none_or(|l| line < l) {
+                    self.attr_line = Some(line);
+                }
+            }
+        }
+    }
+    let Ok(item) = syn::parse_str::<syn::ItemTrait>(minus_text) else {
+        return None;
+    };
+    let mut probe = Probe {
+        m_old,
+        macro_line: None,
+        attr_line: None,
+    };
+    probe.visit_item_trait(&item);
+    match (probe.attr_line, probe.macro_line) {
+        (Some(a), Some(m)) => Some(if m < a {
+            crate::pattern_evolution::BodyVeto {
+                kind: "macro",
+                line: m,
+            }
+        } else {
+            crate::pattern_evolution::BodyVeto {
+                kind: "attribute",
+                line: a,
+            }
+        }),
+        (Some(a), None) => Some(crate::pattern_evolution::BodyVeto {
+            kind: "attribute",
+            line: a,
+        }),
+        (None, Some(m)) => Some(crate::pattern_evolution::BodyVeto {
+            kind: "macro",
+            line: m,
+        }),
+        (None, None) => None,
+    }
+}
+
 /// Single-line container body-evolution paste template: the plus-side
 /// prefix verbatim, `<old> as <new>`, `{ ... }` body marker. `prefix`
 /// is trimmed; an empty prefix yields a bare header.
@@ -468,6 +665,129 @@ mod tests {
         // Attribute interiors are opaque to the rename.
         let attr = "#[derive(Old)]\ntrait Old {\n    fn f(&self);\n}";
         let veto = item_body_evolution_veto(attr, "Old").expect("attr vetoes");
+        assert_eq!(veto.kind, "attribute");
+    }
+
+    #[test]
+    fn trait_joint_templates_accept() {
+        // E2 slice 2b: the one-method-rename joint form.
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn m_old as m_new; ... }"),
+            Some((
+                "".to_string(),
+                "Old".to_string(),
+                "New".to_string(),
+                "m_old".to_string(),
+                "m_new".to_string()
+            ))
+        );
+        assert_eq!(
+            parse_trait_body_joint_template("pub trait Old as New { fn m_old as m_new; ... }"),
+            Some((
+                "pub ".to_string(),
+                "Old".to_string(),
+                "New".to_string(),
+                "m_old".to_string(),
+                "m_new".to_string()
+            ))
+        );
+        // Builder round-trips through the parser.
+        let built = trait_body_joint_template("pub ", "Old", "New", "m_old", "m_new");
+        assert_eq!(built, "pub trait Old as New { fn m_old as m_new; ... }");
+        assert_eq!(
+            parse_trait_body_joint_template(&built).map(|t| t.3),
+            Some("m_old".to_string())
+        );
+        assert_eq!(
+            trait_body_joint_template("", "Old", "New", "m_old", "m_new"),
+            "trait Old as New { fn m_old as m_new; ... }"
+        );
+    }
+
+    #[test]
+    fn trait_joint_templates_reject() {
+        // The self-ref form belongs to its own parser.
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { ... }"),
+            None
+        );
+        // Same-name joints are vacuous.
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as Old { fn m as m; ... }"),
+            None
+        );
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn m as m; ... }"),
+            None
+        );
+        // Cross-talk between the two renames is unsound (the splice
+        // double-scans, so any shared ident would corrupt).
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn New as m_new; ... }"),
+            None
+        );
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn m_old as Old; ... }"),
+            None
+        );
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn Old as m_new; ... }"),
+            None
+        );
+        // Marker-less and multi-line stay loud downstream.
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn m_old as m_new; }"),
+            None
+        );
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New {\n fn m_old as m_new; ... \n}"),
+            None
+        );
+        // A second method joint belongs to no shape.
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn a as b; fn c as d; ... }"),
+            None
+        );
+        // Missing `;` between the method rename and the marker.
+        assert_eq!(
+            parse_trait_body_joint_template("trait Old as New { fn m_old as m_new ... }"),
+            None
+        );
+        // Wrong-kind keywords never cross-claim.
+        assert_eq!(
+            parse_struct_body_evolution_template("trait Old as New { fn m_old as m_new; ... }"),
+            None
+        );
+    }
+
+    #[test]
+    fn trait_joint_ownership_disjoint() {
+        // The joint dispatches first: neither sibling parser claims it.
+        let joint = "trait Old as New { fn m_old as m_new; ... }";
+        assert_eq!(parse_trait_body_evolution_template(joint), None);
+        assert_eq!(
+            crate::pattern_evolution::parse_trait_evolution_template(joint),
+            None
+        );
+        assert!(crate::pattern_evolution::is_evolution_template(joint));
+        // Untouched shapes still parse where they belong.
+        assert!(parse_trait_body_evolution_template("trait Old as New { ... }").is_some());
+    }
+
+    #[test]
+    fn trait_joint_method_veto_matrix() {
+        // The renamed method's own ident never vetoes.
+        let firing = "trait Old {\n    fn m_old(&self);\n}";
+        assert_eq!(trait_joint_method_veto(firing, "m_old"), None);
+        // Absent ident never vetoes.
+        assert_eq!(trait_joint_method_veto(firing, "other"), None);
+        // A macro named like the method is a distinct namespace.
+        let mac = "trait Old {\n    fn m_old(&self);\n    m_old!();\n}";
+        let veto = trait_joint_method_veto(mac, "m_old").expect("macro vetoes");
+        assert_eq!((veto.kind, veto.line), ("macro", 3));
+        // Attribute interiors are opaque to the rename.
+        let attr = "trait Old {\n    #[doc = \"m_old\"]\n    fn m_old(&self);\n}";
+        let veto = trait_joint_method_veto(attr, "m_old").expect("attr vetoes");
         assert_eq!(veto.kind, "attribute");
     }
 }

@@ -9572,10 +9572,15 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     `trait New { fn make() -> New }`) as one intent with the
     `+ trait Old as New { ... }` paste (name-only scope, full-text
     agreement through the shared rename scanner, method/macro/attr
-    binding vetoes). The method-rename twin
-    (`trait Old { fn m_old }` → `trait New { fn m_new }`)
-    stays ordinary pending the one-method-rename joint
-    (E2 slice 2b owner). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
+    E2 slice 2b fires the one-method-rename joint
+    (`trait Old { fn m_old }` → `trait New { fn m_new }`) as one intent
+    with the `+ trait Old as New { fn m_old as m_new; ... }` paste
+    (name-only scope, full-text double-scan agreement, Old-side
+    method/macro/attr vetoes plus the `m_old` macro/attr joint veto;
+    all four idents pairwise distinct; exactly one method renamed —
+    two-method renames stay ordinary). Attr+joint composition stays
+    ordinary (the attr-added arm strips then calls the abstract
+    matcher, which vetoes item deltas). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Two added attrs, `//!` /

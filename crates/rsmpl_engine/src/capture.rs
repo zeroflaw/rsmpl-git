@@ -368,6 +368,23 @@ pub(crate) fn splice_evolved_header(
             rule,
         );
     }
+    // E2 slice 2b: the `trait <old> as <new> { fn <m_old> as <m_new>; ... }`
+    // body-joint form is checked before the self-ref `as` form (the
+    // self-ref parser declines the second ` as `, so the two shapes are
+    // disjoint, but the joint is more specific and dispatches first).
+    if let Some((new_prefix, old_t, new_t, m_old, m_new)) =
+        rsmpl_pattern::parse_trait_body_joint_template(template.trim())
+    {
+        return crate::capture_container_body::splice_trait_body_joint(
+            captured,
+            &new_prefix,
+            &old_t,
+            &new_t,
+            &m_old,
+            &m_new,
+            rule,
+        );
+    }
     // E2 slice 2a: the `trait <old> as <new>` body-evolving form is
     // checked before the abstract trait form (the abstract parser
     // declines the `as` spelling by ownership; the splice lives in the

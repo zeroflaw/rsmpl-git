@@ -706,9 +706,10 @@ pub(crate) fn mod_evolution_template(prefix: &str, name: &str) -> String {
 /// engine's scalar cut isolates the whole trait via `outermost_spans`
 /// and `splice_trait_header` keeps the body verbatim, both probed
 /// `verified`); any method delta (rename/add/remove/signature) vetoes
+/// `verified`); any method delta (rename/add/remove/signature) vetoes
 /// the abstract gate (self-ref renames ride the E2 slice-2a
-/// `trait Old as New` body-evolving finder; method renames need the
-/// slice-2b joint).
+/// `trait Old as New` body-evolving finder; one-method renames ride the
+/// slice-2b joint finder).
 /// Any `auto` token or `impl Trait for` restriction on either side
 /// vetoes (mirroring the authoring-side `auto trait` rejection).
 /// `unsafe` rides verbatim in the prefix like `fn` qualifiers /

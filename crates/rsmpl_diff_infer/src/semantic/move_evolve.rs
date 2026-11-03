@@ -1539,11 +1539,10 @@ mod tests {
 
     #[test]
     fn trait_method_rename_stays_ordinary() {
-        // E2 slice 2a landed the `trait Old as New` self-ref splice
-        // (proved in `move_evolve_container`); the remainder (slice 2b
-        // owner) is the one-method-rename joint: a method rename inside
-        // an otherwise header-only trait evolution vetoes the abstract
-        // gate here.
+        // E2 slice 2b landed the `trait Old as New { fn m_old as m_new; ... }`
+        // joint (proved in `move_evolve_container`); the one-method-rename
+        // pair vetoes the abstract gate here by construction and fires
+        // through the joint finder instead.
         let minus = item_trait("trait Old {\n    fn m_old(&self);\n}");
         let plus = item_trait("trait New {\n    fn m_new(&self);\n}");
         assert_eq!(trait_evolved_match(&minus, &plus), None);

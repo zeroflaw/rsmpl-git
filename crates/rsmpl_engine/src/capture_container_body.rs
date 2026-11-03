@@ -962,6 +962,156 @@ pub(crate) fn splice_trait_body_evolution(
     Ok(lines.join("\n"))
 }
 
+/// E2 slice 2b: splice a captured `trait` item under a body-joint
+/// template header (`pub trait Old as New { fn m_old as m_new; ... }`).
+/// The template's visibility prefix (+ optional `unsafe`) and new ident
+/// replace the capture's `trait <Old>` header span; the captured suffix
+/// (generics/supertraits/`{...items}`) and body rename `Old` → `New`
+/// then `m_old` → `m_new` through
+/// [`rsmpl_pattern::rename_ident_in_code`]. Pairwise distinctness plus
+/// both vetoes (the WI-2
+/// [`rsmpl_pattern::item_body_evolution_veto`] boundary for `Old`, the
+/// [`rsmpl_pattern::trait_joint_method_veto`] boundary for `m_old`) keep
+/// the double scan sound: the raiser proves the same double scan, so
+/// pairing and splice agree by construction.
+pub(crate) fn splice_trait_body_joint(
+    captured: &str,
+    new_prefix: &str,
+    old_t: &str,
+    new_t: &str,
+    m_old: &str,
+    m_new: &str,
+    rule: &str,
+) -> Result<String, StructuredError> {
+    let fail = |msg: String| {
+        StructuredError::new(ErrorCode::PatternConflict, msg)
+            .with_rule(rule)
+            .with_repair(StructuredError::fix_pattern_repair(
+                "trait-joint-paste",
+                "write `+ <vis>trait <Old> as <New> { fn <m_old> as <m_new>; ... }` (exactly the trait rename plus one method rename, pairwise-distinct idents), or split the move",
+            ))
+    };
+    if old_t.is_empty() || new_t.is_empty() || m_old.is_empty() || m_new.is_empty() {
+        return Err(fail("joint paste needs four non-empty idents".to_string()));
+    }
+    if old_t == new_t
+        || m_old == m_new
+        || old_t == m_old
+        || old_t == m_new
+        || new_t == m_old
+        || new_t == m_new
+    {
+        return Err(fail(format!(
+            "joint paste idents must be pairwise distinct (got trait `{old_t}` as `{new_t}`, method `{m_old}` as `{m_new}`)"
+        )));
+    }
+    let file: syn::File = syn::parse_str(captured).map_err(|e| {
+        fail(format!(
+            "evolution paste captured text is not a Rust file: {e}"
+        ))
+    })?;
+    let old_name: String = match file.items.as_slice() {
+        [syn::Item::Trait(t)] => t.ident.to_string(),
+        _ => {
+            return Err(fail(
+                "evolution paste needs a captured `trait` item for a `trait <Old> as <New> { fn <m_old> as <m_new>; ... }` template"
+                    .to_string(),
+            ));
+        }
+    };
+    if old_name != old_t {
+        return Err(fail(format!(
+            "body-joint paste names `{old_t}` but the capture holds `trait {old_name}`"
+        )));
+    }
+    if let Some(veto) = rsmpl_pattern::item_body_evolution_veto(captured, &old_name) {
+        return Err(fail(format!(
+            "body-joint paste vetoes: `{old_name}` has a {} occurrence at captured line {} (rename it by hand or split the move)",
+            veto.kind, veto.line
+        )));
+    }
+    if let Some(veto) = rsmpl_pattern::trait_joint_method_veto(captured, m_old) {
+        return Err(fail(format!(
+            "body-joint paste vetoes: `{m_old}` has a {} occurrence at captured line {} (rename it by hand or split the move)",
+            veto.kind, veto.line
+        )));
+    }
+    let mut target: Option<usize> = None;
+    for (idx, line) in captured.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+            continue;
+        }
+        if trait_line_ident(line).as_deref() == Some(old_name.as_str()) {
+            target = Some(idx);
+            break;
+        }
+    }
+    let idx = target.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `trait {old_name}` header line"
+        ))
+    })?;
+    // One helper: the joint double-scan (trait rename, then method
+    // rename) shared by the header suffix and the body below.
+    let joint_rename = |text: &str| {
+        let once = rsmpl_pattern::rename_ident_in_code(text, &old_name, new_t);
+        rsmpl_pattern::rename_ident_in_code(&once, m_old, m_new)
+    };
+    let mut lines: Vec<String> = captured.lines().map(str::to_string).collect();
+    let line = lines[idx].clone();
+    let ws_len = line.len() - line.trim_start().len();
+    let (ws, rest) = line.split_at(ws_len);
+    let mut kw_at = None;
+    let mut search = rest;
+    let mut base = 0;
+    while let Some(pos) = search.find("trait") {
+        let before = search.as_bytes().get(pos.wrapping_sub(1));
+        let before_ok =
+            pos == 0 || before.is_some_and(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        let after = &search[pos + 5..];
+        let after_ok = after.starts_with(|c: char| c.is_whitespace());
+        if before_ok && after_ok && after.trim_start().starts_with(old_name.as_str()) {
+            let tail = &after.trim_start()[old_name.len()..];
+            let boundary = tail
+                .chars()
+                .next()
+                .map(|c| c != '_' && !c.is_ascii_alphanumeric())
+                .unwrap_or(true);
+            if boundary {
+                kw_at = Some(base + pos);
+                break;
+            }
+        }
+        search = &search[pos + 5..];
+        base += pos + 5;
+    }
+    let kw_at = kw_at.ok_or_else(|| {
+        fail(format!(
+            "captured text has no `trait {old_name}` header line"
+        ))
+    })?;
+    let after_kw = &rest[kw_at + 5..];
+    let trimmed = after_kw.trim_start();
+    let suffix = trimmed[old_name.len()..].to_string();
+    let renamed_suffix = joint_rename(&suffix);
+    let pre = new_prefix.trim_end();
+    let head = if pre.is_empty() {
+        format!("trait {new_t}")
+    } else {
+        format!("{pre} trait {new_t}")
+    };
+    lines[idx] = format!("{ws}{head}{renamed_suffix}");
+    if idx + 1 < lines.len() {
+        let body = lines[idx + 1..].join("\n");
+        let renamed = joint_rename(&body);
+        let mut new_lines: Vec<String> = renamed.split('\n').map(str::to_string).collect();
+        lines.truncate(idx + 1);
+        lines.append(&mut new_lines);
+    }
+    Ok(lines.join("\n"))
+}
+
 /// The ident of a `trait <Ident>` header line (`None` when the line
 /// holds no word-bounded `trait` + ident pair).
 pub(crate) fn trait_line_ident(line: &str) -> Option<String> {
@@ -1542,5 +1692,33 @@ mod tests {
             splice_repair_write_instead(&err).contains("+ <vis>const <New> = ...;"),
             "got: {err:?}"
         );
+    }
+
+    #[test]
+    fn trait_joint_splice_renames_trait_and_method() {
+        // E2 slice 2b: the joint paste renames the trait plus the one
+        // method (self-ref signature rides along).
+        let cap = "trait Old {\n    fn m_old() -> Old;\n    fn keep(&self);\n}";
+        let out = splice_evolved_header(cap, "trait Old as New { fn m_old as m_new; ... }", "r")
+            .expect("trait joint splice must fire");
+        assert!(out.contains("trait New {"), "got:\n{out}");
+        assert!(out.contains("fn m_new() -> New;"), "got:\n{out}");
+        assert!(out.contains("fn keep(&self);"), "got:\n{out}");
+        assert!(!out.contains("Old"), "old trait name gone, got:\n{out}");
+        assert!(!out.contains("m_old"), "old method name gone, got:\n{out}");
+    }
+
+    #[test]
+    fn trait_joint_splice_vetoes() {
+        // Cross-talk idents never parse (the joint template parser
+        // requires pairwise distinctness, so no splice runs).
+        let cap = "trait Old {\n    fn m_old(&self);\n}";
+        splice_evolved_header(cap, "trait Old as New { fn New as m_new; ... }", "r")
+            .expect_err("cross-talk joint must not parse");
+        // Macro occurrence of the method name vetoes.
+        let mac = "trait Old {\n    fn m_old(&self);\n    m_old!();\n}";
+        let err = splice_evolved_header(mac, "trait Old as New { fn m_old as m_new; ... }", "r")
+            .expect_err("macro capture must veto");
+        assert!(err.to_string().contains("macro"), "got: {err}");
     }
 }
