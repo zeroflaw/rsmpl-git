@@ -73,7 +73,9 @@ renames use the terse form plus `rule=` (SPEC 7.1).
   `symbol: resolved`) or `# fallback=syntax` (exact text, `symbol: syntax`),
   `# symbol Old=crate::old_api` + `# symbol New=crate::new_api`.
   `use crate::old_api;` lets bare `old_api(...)` match; general positions
-  take whole paths and single-leading prefixes (`Old::foo`, `Old::make::<T>`).
+  take whole paths and single-leading prefixes (`Old::foo`, `Old::make::<T>`);
+  field types take the same law (`x: Old`, `x: Vec<Old>`), use-prefixes
+  take a symbol head (`use Old`, `use Old::sub`).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/
   `const`/`static`/`mod`/`union`/`impl`), one ident edit — or one ident
   edit plus one closed-set vis step (`- pub struct Old` / `+ pub(crate) struct New`;
@@ -112,13 +114,11 @@ gitrs apply --file change.rsmpl --output full.patch   # full diff while preview 
 gitrs apply --file change.rsmpl                       # apply for real
 ```
 
-- Verified lowering is always 0-context; `--diff-max-lines` trims only the
-  preview, `--context N` renders reported/`--output` for vanilla `git apply`;
-  truncated stdout is review-only, never pipe it to `git apply` (D.2.1/D.2.2).
+- Verified lowering is always 0-context; `--diff-max-lines` trims only the preview,
+  `--context N` renders reported/`--output` for vanilla `git apply` — truncated stdout is review-only, never pipe it (D.2.1/D.2.2).
 - Lint without a checkout: `--repo /tmp/empty --check` — `no match found` is the pass signal (SPEC D.2.4); re-check after.
 - Verify the JSON `matches` count equals the sites you read — fewer means
-  a site (e.g. inside a macro) needs an ordinary hunk; per-rule `spans`
-  (`[[start,end], …]`, original-source lines) need no re-read.
+  a site (e.g. inside a macro) needs an ordinary hunk (`spans` need no re-read).
 - Piped patches avoid temp files: `cat change.rsmpl | gitrs apply --check`
   (no input flags means stdin; `--file -` is the explicit alias; `--patch`
   passes the diff inline, archived to `<repo>/.history/`, SPEC D.1).
@@ -131,7 +131,7 @@ gitrs apply --file change.rsmpl                       # apply for real
 |---|---|
 | `RSMPL_RANGE_CONFLICT` | read the file, fix the range |
 | `RSMPL_PARSE_CONFLICT` | target doesn't parse / empty patch — read file, add `diff --git` (count mismatch: if counts look right, check 1-char marker indent — an unprefixed line never enters the body; when the error names `suspect line N`, prefix line N with its marker and recount — `expected_header` is null there, SPEC 25.2) |
-| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# root=item` needs a single declared metavar (C16); `# repeat` needs a call/general-expr shape + bare spelling; `# symbol` is call-shape or general whole-path-or-single-prefix only (C14); lone `# fallback` without `# symbol` + non-default `# attrs=` on call/macro shapes rejected (C15); same name under two kinds rejected, check SPEC 9.4; general template rewriting bound binder idents without binder identity rejected (C21 — multi-leaf destructuring renames need a single-binder spelling or an ordinary hunk; Stmt single-leaf destructuring completes like `let`; sequences exempt except a rename-once `let` rename (plain/destructuring, with authored init-substitution of later in-window uses, per-occurrence exclusion with hole-bound surfacing, outer-scope `new` declining follow with `capture-risk` orphans), which completes like `let`) |
+| `RSMPL_PATTERN_CONFLICT` | check SPEC 18.6 table; unknown directive/header-tag/`# root=` rejected; `# root=item` needs a single declared metavar (C16); `# repeat` needs a call/general-expr shape + bare spelling; `# symbol` is call-shape, general whole-path-or-single-prefix, field-type, or use-prefix-head only (C14); lone `# fallback` without `# symbol` + non-default `# attrs=` on call/macro shapes rejected (C15); same name under two kinds rejected, check SPEC 9.4; general template rewriting bound binder idents without binder identity rejected (C21 — multi-leaf destructuring renames need a single-binder spelling or an ordinary hunk; Stmt single-leaf destructuring completes like `let`; sequences exempt except a rename-once `let` rename (plain/destructuring, with authored init-substitution of later in-window uses, per-occurrence exclusion with hole-bound surfacing, outer-scope `new` declining follow with `capture-risk` orphans), which completes like `let`) |
 | `RSMPL_MATCH_CONFLICT` | `no match found` (+ best-match preview in `reason`) — fix range/pattern, add `# optional`, or retry with `# sweep` + `@@ -1,1 @@`; stale ranged hunk retries once file-scoped with `drift` evidence (terse: uniqueness gate; anchored: context must agree, else original conflict, SPEC 10.8); too many — add `# allow=many`; if the preview shows mixed `let-else`/macro-type, use an ordinary hunk (SPEC 18.6 R1/R2/R4/R5; fn-body `use` — SPEC 14.9); matcher partial overlap (`partially overlapping matches cannot be merged`, MATCH, rule+file, no suggestion, SPEC 17.6/25.4) vs plan-stage overlap (`overlapping edits cannot be merged`, GIT, file-only + suggestion, SPEC 10.6/25.7) |
 | `RSMPL_SYMBOL_CONFLICT` | add `# fallback=syntax` |
 | `RSMPL_CAPTURE_CONFLICT` | `# use=N` without `# bind=N` anywhere in the patch — fix names (order irrelevant, paste may precede cut, SPEC 20.3) |

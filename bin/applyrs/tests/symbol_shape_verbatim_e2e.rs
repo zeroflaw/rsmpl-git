@@ -1,13 +1,14 @@
-//! T276 (WI-4 slice 1) + WI-4 slice 2a: engine-verbatim `# symbol`-in-
-//! wrong-shape (SPEC 18.6 C14) reasons.
+//! T276 (WI-4 slice 1) + WI-4 slice 2a + slice 2b: engine-verbatim
+//! `# symbol`-in-wrong-shape (SPEC 18.6 C14) reasons.
 //!
-//! SPEC 18.6 C14 enumerates the admitted positions (call shapes plus
-//! general whole-path and single-leading-prefix uses) and the named
-//! offending slot for the rest. The macro hunk below pins the shape
-//! label; the sequence hunk pins the remaining General label; the
-//! non-leading-segment hunk pins the slot-naming repair shape. General
-//! whole-path and prefix uses compile since WI-4 slices 1–2a — their
-//! pins live in `pattern_compilation` and the `matcher_symbol` /
+//! SPEC 18.6 C14 enumerates the admitted positions (call shapes, general
+//! whole-path and single-leading-prefix uses, field-type evolution, and
+//! use-prefix renames) and the named offending slot for the rest. The
+//! macro hunk below pins the shape label; the sequence hunk pins the
+//! remaining General label; the non-leading-segment hunk pins the
+//! slot-naming repair shape. General whole-path and prefix uses compile
+//! since WI-4 slices 1–2a, field-type and use-prefix since slice 2b —
+//! their pins live in `pattern_compilation` and the `matcher_symbol` /
 //! `matcher_general_apply` unit tests.
 //! Text output omits the null `range:`/`suggestion:` lines; the JSON
 //! envelope carries explicit nulls.
@@ -72,13 +73,13 @@ fn symbol_in_sequence_names_shape_verbatim() {
     );
     assert!(
         stderr.contains(
-            "this general statement-sequence hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"
+            "this general statement-sequence hunk cannot use `# symbol` — use a call-shape, general, field-type, or use-prefix symbol hunk, or a concrete path pattern"
         ),
         "got: {stderr}"
     );
     assert_eq!(
         v["error"]["reason"],
-        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this general statement-sequence hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"),
+        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver), general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix), field-type evolution (`struct S {` + `x: Old` — whole-path, nested, or single-leading-prefix type), and use-prefix renames (`use Old…` — whole-prefix or single-leading symbol head, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this general statement-sequence hunk cannot use `# symbol` — use a call-shape, general, field-type, or use-prefix symbol hunk, or a concrete path pattern"),
         "got: {v}"
     );
 }
@@ -108,13 +109,13 @@ fn symbol_in_macro_names_shape_verbatim() {
     let (stderr, v) = check_both(patch, "a.rs", "fn f() { foo!(x); }\n");
     assert!(
         stderr.contains(
-            "this macro hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"
+            "this macro hunk cannot use `# symbol` — use a call-shape, general, field-type, or use-prefix symbol hunk, or a concrete path pattern"
         ),
         "got: {stderr}"
     );
     assert_eq!(
         v["error"]["reason"],
-        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this macro hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern"),
+        serde_json::json!("`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver), general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix), field-type evolution (`struct S {` + `x: Old` — whole-path, nested, or single-leading-prefix type), and use-prefix renames (`use Old…` — whole-prefix or single-leading symbol head, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this macro hunk cannot use `# symbol` — use a call-shape, general, field-type, or use-prefix symbol hunk, or a concrete path pattern"),
         "got: {v}"
     );
 }

@@ -58,6 +58,39 @@ pub(crate) fn seed_canons_for(
     Ok(canons)
 }
 
+/// WI-4 slice 2b: shared minus-side seed verification for symbol hunks
+/// (SPEC 19.3). Under `# fallback=syntax` (or with no declared symbols)
+/// there is nothing to prove: returns the empty map and per-site checks
+/// run textually. Otherwise every minus-side seed must resolve through
+/// the crate graph (plus-only seeds name the rewrite target and are
+/// skipped); with no semantic environment the hunk fails with
+/// `RSMPL_SYMBOL_CONFLICT` (no index, no proof — the call-matcher law).
+/// `minus_sub` is the substituted minus text: only symbols with a
+/// whole-token occurrence in it are verified.
+pub(crate) fn verify_symbol_seeds(
+    symbols: &HashMap<String, String>,
+    minus_sub: &str,
+    fallback_syntax: bool,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
+    rule: &str,
+) -> Result<HashMap<String, String>, StructuredError> {
+    if symbols.is_empty() || fallback_syntax {
+        return Ok(HashMap::new());
+    }
+    let Some((graph, _file)) = symbol_graph else {
+        // Mirror the call-matcher gate (SPEC 19.3): no index, no proof.
+        let sym = symbols.keys().next().cloned().unwrap_or_default();
+        return Err(StructuredError::new(
+            ErrorCode::SymbolConflict,
+            format!("symbol `{sym}` could not be resolved (no semantic environment in v0.1)"),
+        )
+        .with_rule(rule)
+        .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
+        .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
+    };
+    seed_canons_for(symbols, minus_sub, graph, rule)
+}
+
 /// Whole-path symbol verdict for a pattern placeholder naming a symbol.
 /// Returns `None` when `name` is an ordinary placeholder (the caller runs
 /// its historical arm); `Some(verdict)` otherwise. Bindings are pre-bound

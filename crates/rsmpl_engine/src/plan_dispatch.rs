@@ -139,6 +139,7 @@ pub(crate) fn apply_rsmpl_hunk(
                 rh,
                 compiled,
                 edits,
+                symbol_graph.map(|g| (g, path)),
             )
         }
         PatternKind::StructRenameFieldEvo { .. } => {
@@ -218,6 +219,7 @@ pub(crate) fn apply_rsmpl_hunk(
             rh,
             compiled,
             edits,
+            symbol_graph.map(|g| (g, path)),
         )
         .map(|n| (n, vec![empty(); n])),
         PatternKind::UseRegroup { .. } => matcher_use::apply_use_regroup_hunk(

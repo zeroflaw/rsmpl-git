@@ -687,7 +687,10 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
     // text through seeded bindings (SPEC 19.3); General Stmt/Expr/Type
     // whole-path symbols match the same way through the general matcher
     // (a single-segment path naming the symbol, never a `::` prefix or
-    // suffix, generic args, `qself`, method ident, or binding). Every
+    // suffix, generic args, `qself`, method ident, or binding). WI-4
+    // slice 2b adds field-type evolution (the same whole-path/prefix law
+    // over the field type) and use-prefix renames (whole-prefix or
+    // single-leading symbol head). Every
     // other shape either ignores the constraint or mis-substitutes
     // (general sequences, macro names, `let`-pattern interiors), so fail
     // fast instead of corrupting (SPEC 2.6).
@@ -700,7 +703,8 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             } | PatternKind::General {
                 shape: GeneralShape::Stmt | GeneralShape::Expr | GeneralShape::Type,
                 ..
-            }
+            } | PatternKind::FieldTypeEvolution { .. }
+                | PatternKind::UseRename { .. }
         )
     {
         let label = match &kind {
@@ -745,18 +749,20 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
         return Err(StructuredError::new(
             ErrorCode::PatternConflict,
             format!(
-                "`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver) and general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape or general symbol hunk, or a concrete path pattern",
+                "`# symbol` is supported in call shapes (call-callee, call-argument, method-receiver), general symbol positions (general-expression, general `let`-statement, general-type — whole-path and single-leading-prefix), field-type evolution (`struct S {{` + `x: Old` — whole-path, nested, or single-leading-prefix type), and use-prefix renames (`use Old…` — whole-prefix or single-leading symbol head, SPEC 19.3) in v0.1 — symbols match by exact full-path text or crate-graph proof (SPEC 19.3); this {label} hunk cannot use `# symbol` — use a call-shape, general, field-type, or use-prefix symbol hunk, or a concrete path pattern",
             ),
         )
         .with_repair(StructuredError::fix_pattern_repair(
             "C14",
-            "use a call-shape or general symbol hunk, or a concrete path pattern",
+            "use a call-shape, general, field-type, or use-prefix symbol hunk, or a concrete path pattern",
         )));
     }
 
-    // WI-4 slice 2a: position check for the admitted General+symbol
-    // hunks. Whole-path plus single-leading-prefix (see
-    // `check_general_symbol_positions`); the parse
+    // WI-4 slice 2b: position checks for the admitted symbol hunks.
+    // General Stmt/Expr/Type: whole-path plus single-leading-prefix (see
+    // `check_general_symbol_positions`); field-type evolution rides the
+    // same law over the field type; use-prefix renames ride the
+    // leading-symbol rule (`check_use_symbol_positions`). The parse
     // and adjacency probes name the offending position.
     if !table.symbols.is_empty() {
         if let PatternKind::General {
@@ -769,6 +775,17 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
             ) {
                 check_general_symbol_positions(minus_sub, &table.symbols)?;
             }
+        }
+        if let PatternKind::FieldTypeEvolution { minus_sub, .. } = &kind {
+            check_general_symbol_positions(minus_sub, &table.symbols)?;
+        }
+        if let PatternKind::UseRename {
+            minus_segs,
+            plus_path,
+            ..
+        } = &kind
+        {
+            check_use_symbol_positions(minus_segs, plus_path, &table.symbols)?;
         }
     }
 
@@ -915,7 +932,10 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
 }
 
 /// WI-4 slice 2a: whole-path plus single-prefix position check for an
-/// admitted General Stmt/Expr/Type hunk carrying `# symbol`.
+/// admitted General Stmt/Expr/Type hunk carrying `# symbol`. WI-4 slice
+/// 2b reuses it for field-type evolution (the field type is a pure
+/// Type, so the Stmt/Expr probes below never trigger — only the text
+/// adjacency probes and the path/qself visitor arms judge it).
 ///
 /// Every declared symbol must occur in the substituted minus pattern as
 /// either the SOLE segment of a path (whole-path use, optionally with
@@ -936,8 +956,9 @@ fn compile_inner(hunk: &RsmplHunk) -> Result<CompiledPattern, StructuredError> {
 /// through plain `::`, reachable around comments). Violations
 /// reject with the position named (C14); the general matcher verifies
 /// whole paths via `match_symbol_placeholder` and prefixes via
-/// `match_symbol_prefix`. `use`-prefix and field-type positions ride
-/// concrete paths until slice 2b.
+/// `match_symbol_prefix`. Field-type evolution rides the same law over
+/// the field type (slice 2b); `use`-prefix renames ride their own
+/// leading-symbol rule (`check_use_symbol_positions`, slice 2b).
 fn check_general_symbol_positions(
     minus_sub: &str,
     symbols: &HashMap<String, String>,
@@ -1009,6 +1030,37 @@ fn check_general_symbol_positions(
     }
     if let Some(err) = visitor.error {
         return Err(err);
+    }
+    Ok(())
+}
+
+/// WI-4 slice 2b: leading-symbol slot rule for a `use`-prefix rename
+/// hunk carrying `# symbol`.
+///
+/// Any segment naming a declared symbol must be segment 0 — the
+/// verified prefix head, mirroring the General single-leading-prefix
+/// law (`use Old` is the whole-prefix form, `use Old::sub` the
+/// prefix form). Every other segment is concrete (non-symbol
+/// metavariables never reach here — `parse_use_prefix` rejects them).
+/// Each side is judged independently: a minus head symbol with a
+/// concrete plus head (rename to a concrete path) and vice versa both
+/// verify. No suffix-equality constraint — a move may re-home the
+/// suffix. A side with no symbol segment is the plain concrete rename
+/// and passes untouched.
+fn check_use_symbol_positions(
+    minus_segs: &[String],
+    plus_path: &str,
+    symbols: &HashMap<String, String>,
+) -> Result<(), StructuredError> {
+    let plus_segs: Vec<String> = plus_path.split("::").map(str::to_string).collect();
+    for segs in [minus_segs, &plus_segs] {
+        for (i, seg) in segs.iter().enumerate() {
+            if symbols.contains_key(seg) && i != 0 {
+                return Err(symbol_pos_err(format!(
+                    "`{seg}` names a non-leading `use` segment — only a leading symbol heads a use prefix (`use {seg}::…`); suffix segments ride concrete paths (write the full path)"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -1216,4 +1268,79 @@ fn repeated_metavars(text: &str, table: &MetavarTable) -> Vec<String> {
         .collect();
     out.sort();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile;
+    use super::PatternKind;
+    use rsmpl_patch::{parse_patch, Hunk};
+
+    fn hunk_of(patch: &str) -> rsmpl_patch::RsmplHunk {
+        let p = parse_patch(patch).unwrap();
+        match p.files[0].hunks[0].clone() {
+            Hunk::Rsmpl(rh) => rh,
+            _ => panic!("expected rsmpl"),
+        }
+    }
+
+    // WI-4 slice 2b: `# symbol` in field-type evolution and use-prefix
+    // renames compiles (whole-path, nested, and leading-prefix types;
+    // whole-prefix and leading use heads); a non-leading `use` segment
+    // rejects with the slot named (C14).
+    #[test]
+    fn wi4_slice2b_field_and_use_symbol_positions_compile() {
+        let head = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n";
+        let syms = "# fallback=syntax\n# symbol Old=crate::old\n# symbol New=crate::new\n";
+        // Field-type whole-path + nested compile to FieldTypeEvolution.
+        for (minus, plus) in [
+            ("x: Old", "x: New"),
+            ("x: Vec<Old>", "x: Vec<New>"),
+            ("x: Old::Assoc", "x: New::Assoc"),
+        ] {
+            let patch = format!(
+                "{head}@@ -1,2 @@ rule=x\n# lang=rust\n{syms}  struct S {{\n- {minus}\n+ {plus}\n"
+            );
+            let kind = compile(&hunk_of(&patch))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "field-type symbol must compile for {minus}:\n{}",
+                        e.render()
+                    )
+                })
+                .kind;
+            assert!(
+                matches!(kind, PatternKind::FieldTypeEvolution { .. }),
+                "{minus} must stay field-type evolution, got: {kind:?}"
+            );
+        }
+        // Use whole-prefix + leading+suffix compile to UseRename.
+        for (minus, plus) in [
+            ("use Old", "use New"),
+            ("use Old::sub", "use New::sub"),
+            ("use crate::old", "use New"),
+            ("use Old", "use crate::new"),
+        ] {
+            let patch =
+                format!("{head}@@ -1,1 @@ rule=x\n# lang=rust\n{syms}- {minus}\n+ {plus}\n");
+            let kind = compile(&hunk_of(&patch))
+                .unwrap_or_else(|e| panic!("use symbol must compile for {minus}:\n{}", e.render()))
+                .kind;
+            assert!(
+                matches!(kind, PatternKind::UseRename { .. }),
+                "{minus} must stay a use rename, got: {kind:?}"
+            );
+        }
+        // A non-leading `use` symbol rejects with the slot named.
+        let patch = format!(
+            "{head}@@ -1,1 @@ rule=x\n# lang=rust\n{syms}- use crate::Old\n+ use crate::New\n"
+        );
+        let err = compile(&hunk_of(&patch)).expect_err("suffix use symbol must reject");
+        assert_eq!(err.code, rsmpl_patch::ErrorCode::PatternConflict);
+        assert!(
+            err.render().contains("non-leading `use` segment"),
+            "want the use slot needle:\n{}",
+            err.render()
+        );
+    }
 }

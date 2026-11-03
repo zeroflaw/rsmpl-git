@@ -14,11 +14,12 @@
 //! Matching is segment-wise on the target's leading path segments (never a
 //! string prefix: minus `old` never matches target segment `old2`). The
 //! pattern side is a bare `use <path>` prefix only; braces, globs, `as`,
-//! `...`, `$Meta`, backticks, and declared metavariables in the pattern are
+//! `...`, `$Meta`, backticks, and non-symbol declared metavariables in the pattern are
 //! `PatternConflict` (write the concrete prefix; the engine preserves the
-//! target's tail verbatim).
+//! target's tail verbatim). A leading segment naming a declared `# symbol`
+//! is the verified prefix head (WI-4 slice 2b, SPEC 19.3).
 
-use rsmpl_patch::{ErrorCode, StructuredError};
+use rsmpl_patch::{ErrorCode, MetavarKind, StructuredError};
 
 use crate::metavar::MetavarTable;
 
@@ -262,11 +263,14 @@ pub fn parse_use_prefix(
                 "invalid `use` path segment `{seg}` (expected an identifier)"
             ));
         }
-        if table.is_meta(seg) {
+        if table.is_meta(seg) && table.kind_of(seg) != Some(MetavarKind::Symbol) {
             return err(format!(
                 "metavariable `{seg}` is not supported in `use`-path patterns in v1 (write the concrete path)"
             ));
         }
+        // WI-4 slice 2b: a segment naming a declared `# symbol` is the
+        // verified prefix head (leading-only; the C14 position gate owns
+        // the slot rule). It passes parsing here like a concrete ident.
         segs.push(seg.to_string());
     }
     if segs.is_empty() {
@@ -751,6 +755,40 @@ mod tests {
             "got: {}",
             err.render()
         );
+    }
+
+    /// WI-4 slice 2b: a segment naming a declared `# symbol` parses as
+    /// the verified prefix head (leading or whole); the C14 position
+    /// gate owns the slot rule, so suffix symbols parse here too.
+    #[test]
+    fn symbol_head_segments_parse() {
+        use rsmpl_patch::Directive;
+        let table = MetavarTable::from_directives(&[
+            Directive::Symbol {
+                name: "Old".to_string(),
+                path: "crate::old".to_string(),
+            },
+            Directive::Symbol {
+                name: "New".to_string(),
+                path: "crate::new".to_string(),
+            },
+        ])
+        .unwrap();
+        let (m, p) = classify_use_rename("use Old", "use New", &table)
+            .unwrap()
+            .unwrap();
+        assert_eq!(m, vec!["Old"]);
+        assert_eq!(p, vec!["New"]);
+        let (m, p) = classify_use_rename("use Old::sub", "use New::sub", &table)
+            .unwrap()
+            .unwrap();
+        assert_eq!(m, vec!["Old", "sub"]);
+        assert_eq!(p, vec!["New", "sub"]);
+        // Suffix symbols parse (C14 rejects them with the slot named).
+        let (m, _) = classify_use_rename("use crate::Old", "use crate::New", &table)
+            .unwrap()
+            .unwrap();
+        assert_eq!(m, vec!["crate", "Old"]);
     }
 
     #[test]

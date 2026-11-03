@@ -219,7 +219,11 @@ fn pattern_err(rule: &str, msg: String) -> StructuredError {
 /// Apply a field-type evolution hunk. Only the field type span is
 /// replaced; the container, visibility, name, and attributes are
 /// preserved. Vis must render equal to the authored prefix (a different
-/// vis skips the site, never rewrites under a lie).
+/// vis skips the site, never rewrites under a lie). WI-4 slice 2b:
+/// the field type may name `# symbol`s (whole-path, nested, or
+/// single-leading-prefix, same law as General types) — verified through
+/// the crate graph (`symbol_graph`) or matched textually under
+/// `# fallback=syntax`, with the plus side emitting the seed text.
 pub fn apply_field_type_hunk(
     parsed: &syn::File,
     original: &str,
@@ -227,6 +231,7 @@ pub fn apply_field_type_hunk(
     hunk: &RsmplHunk,
     compiled: &CompiledPattern,
     edits: &mut Vec<TextEdit>,
+    symbol_graph: Option<(&crate::CrateGraph, &str)>,
 ) -> Result<(usize, Vec<HashMap<String, String>>), StructuredError> {
     let (struct_name, field, vis, minus_sub, plus_raw, placeholders, minus_attrs) = match &compiled
         .kind
@@ -264,6 +269,20 @@ pub fn apply_field_type_hunk(
     let file = "";
     let pat_ty: syn::Type = syn::parse_str(&minus_sub)
         .map_err(|e| pattern_err(&rule, format!("invalid field type pattern: {e}")))?;
+    // WI-4 slice 2b: symbol posture (SPEC 19.3), mirroring the General
+    // driver — seeds pre-bind into every candidate context (the plus
+    // side emits the concrete seed), bare symbols verify their
+    // minus-side seeds here, per-site checks run in `matcher_symbol`
+    // through each candidate `MatchCx`.
+    let symbols = compiled.table.symbols.clone();
+    let fallback_syntax = hunk.fallback_syntax();
+    let seed_canons = crate::matcher_symbol::verify_symbol_seeds(
+        &symbols,
+        &minus_sub,
+        fallback_syntax,
+        symbol_graph,
+        &rule,
+    )?;
     let mut candidates = Vec::new();
     collect_fields(&parsed.items, &struct_name, &field, &mut candidates);
     candidates.sort_by_key(|c| (c.container_start, c.anchor_line));
@@ -297,8 +316,15 @@ pub fn apply_field_type_hunk(
         if norm_vis_of(&c.vis_norm) != norm_vis_of(&vis) {
             continue;
         }
-        let mut cx =
-            crate::matcher_general::MatchCx::with_reverse(original, index, reverse.clone());
+        let mut cx = crate::matcher_symbol::symbol_cx(
+            original,
+            index,
+            reverse.clone(),
+            &symbols,
+            fallback_syntax,
+            symbol_graph,
+            &seed_canons,
+        );
         if !crate::matcher_types::match_type(&pat_ty, c.ty, &mut cx) {
             continue;
         }
@@ -1189,6 +1215,70 @@ mod tests {
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 
+    // WI-4 slice 2b: `# symbol` in field-type evolution (whole-path,
+    // nested, and prefix types verify through the crate graph or match
+    // textually under `# fallback=syntax`; the plus side emits the seed).
+    fn symbol_field_patch(minus: &str, plus: &str, fallback: bool) -> String {
+        symbol_field_patch_seeds(minus, plus, fallback, "crate::old::Old", "crate::New")
+    }
+
+    fn symbol_field_patch_seeds(
+        minus: &str,
+        plus: &str,
+        fallback: bool,
+        old_seed: &str,
+        new_seed: &str,
+    ) -> String {
+        let fb = if fallback { "# fallback=syntax\n" } else { "" };
+        format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 @@ rule=evo\n# scope=file\n{fb}# symbol Old={old_seed}\n# symbol New={new_seed}\n  struct S {{\n- {minus}\n+ {plus}\n"
+        )
+    }
+
+    #[test]
+    fn field_type_symbol_fallback_fires() {
+        let patch = symbol_field_patch_seeds("x: Old", "x: New", true, "crate::Old", "crate::New");
+        let (out, report) = apply_report(&patch, "struct S {\n    x: crate::Old,\n}\n").unwrap();
+        assert!(out.contains("x: crate::New,"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
+    }
+
+    #[test]
+    fn field_type_symbol_resolved_short_spelling_fires() {
+        let patch = symbol_field_patch("x: Old", "x: New", false);
+        let src = "pub mod old {\n    pub struct Old;\n}\npub struct New;\nuse crate::old::Old;\nstruct S {\n    x: Old,\n}\n";
+        let (out, report) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("x: crate::New,"), "got: {out:?}");
+        assert_eq!(report.rules[0].semantics, RuleSemantics::Postcondition);
+    }
+
+    #[test]
+    fn field_type_symbol_nested_vec_fires() {
+        let patch = symbol_field_patch("x: Vec<Old>", "x: Vec<New>", false);
+        let src = "pub mod old {\n    pub struct Old;\n}\npub struct New;\nuse crate::old::Old;\nstruct S {\n    x: Vec<Old>,\n}\n";
+        let (out, _) = apply_report(&patch, src).unwrap();
+        assert!(out.contains("x: Vec<crate::New>,"), "got: {out:?}");
+    }
+
+    #[test]
+    fn field_type_symbol_vendored_twin_skipped() {
+        // Same text, different definition: never a match (D2 honesty).
+        let patch = symbol_field_patch("x: Old", "x: New", false);
+        let src = "pub mod old {\n    pub struct Old;\n}\npub mod vendored {\n    pub struct Old;\n}\npub struct New;\nuse crate::vendored::Old;\nstruct S {\n    x: Old,\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
+    }
+
+    #[test]
+    fn field_type_symbol_unresolvable_seed_fails() {
+        let patch = symbol_field_patch("x: Old", "x: New", false).replace(
+            "# symbol Old=crate::old::Old",
+            "# symbol Old=crate::missing",
+        );
+        let err = apply(&patch, "struct S {\n    x: crate::missing,\n}\n").unwrap_err();
+        assert!(err.contains("RSMPL_SYMBOL_CONFLICT"), "got: {err}");
+    }
+
     #[test]
     fn tuple_payload_concrete_fire_verifies_postcondition() {
         let patch = var_patch("Old(Vec<u8>)", "Old(Box<[u8]>)");
@@ -1575,8 +1665,9 @@ mod wi18_slice12_tests {
             setup(patch, "struct S {\n    old: Vec<u8>,\n}\n");
         let compiled = raw(compiled);
         let mut edits = Vec::<TextEdit>::new();
-        let err = super::apply_field_type_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits)
-            .expect_err("wrong kind must fail");
+        let err =
+            super::apply_field_type_hunk(&parsed, &src, &index, &hunk, &compiled, &mut edits, None)
+                .expect_err("wrong kind must fail");
         assert_eq!(err.message, "expected field-type evolution pattern");
         let (code, w) = repair_of(&err);
         assert_eq!(code, "member-evo-field-type-template");

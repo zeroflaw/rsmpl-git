@@ -124,6 +124,26 @@ pub(crate) fn instantiation_error(rule: &str, file: &str, range_desc: &str) -> S
     }))
 }
 
+/// WI-4 slice 2b: expand a `use`-prefix head segment naming a `# symbol`
+/// to its seed segments (the emitted concrete spelling). Non-symbol
+/// heads pass through byte-identical.
+fn expand_use_head(path: &str, symbols: &HashMap<String, String>) -> String {
+    let segs: Vec<String> = path.split("::").map(str::to_string).collect();
+    let Some(first) = segs.first().cloned() else {
+        return String::new();
+    };
+    if let Some(seed) = symbols.get(&first) {
+        let mut head: Vec<String> = seed
+            .trim_start_matches("::")
+            .split("::")
+            .map(str::to_string)
+            .collect();
+        head.extend(segs.into_iter().skip(1));
+        return head.join("::");
+    }
+    segs.join("::")
+}
+
 /// WI-1b/WI-1.2/WI-1.4: check the instantiated plus verifies in the
 /// post-image *at the reported spans*.
 ///
@@ -385,8 +405,12 @@ pub(crate) fn plus_instantiated_parsed(
         PatternKind::UseRename { plus_path, .. } => {
             // Grouped tails (`crate::{new::Deep}`) never contain the full
             // `crate::new` prefix as a substring; the final segment is the
-            // renamed anchor the post-image must name.
-            let last = plus_path.rsplit("::").next().unwrap_or(plus_path);
+            // renamed anchor the post-image must name. WI-4 slice 2b: a
+            // plus head naming a `# symbol` emits the seed text, so count
+            // the seed's last segment (the composed concrete path), never
+            // the symbol name.
+            let expanded = expand_use_head(plus_path, &compiled.table.symbols);
+            let last = expanded.rsplit("::").next().unwrap_or(&expanded);
             match post_parsed {
                 Some(parsed) => {
                     let defs = collect_def_idents(parsed);
@@ -833,6 +857,7 @@ pub(crate) fn verify_plus_pattern_at_spans(
             &synth,
             &plus_compiled,
             &mut throwaway,
+            None,
         )
         .ok()?,
         PatternKind::VariantPayloadEvolution { .. } => {

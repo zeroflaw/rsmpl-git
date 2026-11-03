@@ -264,21 +264,17 @@ pub fn apply_general_hunk(
     // `matcher_symbol` through each candidate `MatchCx`.
     let symbols = compiled.table.symbols.clone();
     let fallback_syntax = hunk.fallback_syntax();
-    let mut seed_canons: HashMap<String, String> = HashMap::new();
-    if !symbols.is_empty() && !fallback_syntax {
-        let Some((graph, _file)) = symbol_graph else {
-            // Mirror the call-matcher gate (SPEC 19.3): no index, no proof.
-            let sym = symbols.keys().next().cloned().unwrap_or_default();
-            return Err(StructuredError::new(
-                ErrorCode::SymbolConflict,
-                format!("symbol `{sym}` could not be resolved (no semantic environment in v0.1)"),
-            )
-            .with_rule(&rule)
-            .with_suggestion("add `# fallback=syntax` to allow syntactic matching")
-            .with_repair(StructuredError::add_directive_repair("# fallback=syntax")));
-        };
-        seed_canons = crate::matcher_symbol::seed_canons_for(&symbols, &minus_sub, graph, &rule)?;
-    }
+    // WI-4 slice 2b: shared seed-verification law (SPEC 19.3; the plus
+    // side pre-bind below emits the concrete seed, exactly the call-hunk
+    // posture; per-site checks run in `matcher_symbol` through each
+    // candidate `MatchCx`).
+    let seed_canons = crate::matcher_symbol::verify_symbol_seeds(
+        &symbols,
+        &minus_sub,
+        fallback_syntax,
+        symbol_graph,
+        &rule,
+    )?;
     // Sequences never carry symbols in slice 1 (compile-time C14 owns
     // this; the loud arm below is defense-in-depth so the sequence
     // delegate can never bind a symbol placeholder blindly).
