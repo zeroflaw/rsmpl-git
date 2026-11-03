@@ -670,7 +670,11 @@ mod tests {
         // slice: no joint, today's posture (wholly ordinary or
         // partitioned) holds.
         let pre = "struct Old {\n    x: u32,\n}\nfn f(s: Old) {\n}\n";
-        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -2,0 +3 @@\n+    B,\n@@ -4,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
+        // WI-1b: the variant line rides as a comment — a bare `B,`
+        // would not parse the struct post, and the floor only proves
+        // parseable posts. Comments never joint-fire, so the
+        // cross-kind decline (variant beside struct rename) is unchanged.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-struct Old {\n+struct New {\n@@ -2,0 +3 @@\n+    // B,\n@@ -4,1 +4,1 @@\n-fn f(s: Old) {\n+fn f(s: New) {\n";
         let out = infer(section, pre);
         if let Some(o) = out {
             assert_eq!(
@@ -718,7 +722,12 @@ mod tests {
         // `fn` rename + insertion belongs to WI-4: the item joint
         // declines, today's posture holds.
         let pre = "fn foo(x: u32) -> u32 {\n    x\n}\nfn m() {\n    foo(1);\n}\n";
-        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: u32) -> u32 {\n+fn bar(x: u32) -> u32 {\n@@ -2,0 +3 @@\n+    y: u32,\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1);\n";
+        // WI-1b: the insertion rides as a comment — a foreign `y: u32,`
+        // statement would not parse the post (`x` tail followed by a
+        // field line), and the reprobe floor only proves parseable
+        // posts. Comments never joint-fire, so the decline posture
+        // (fn defs never item-add-joint) is unchanged.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-fn foo(x: u32) -> u32 {\n+fn bar(x: u32) -> u32 {\n@@ -2,0 +3 @@\n+    // y: u32,\n@@ -5,1 +5,1 @@\n-    foo(1);\n+    bar(1);\n";
         let out = infer(section, pre);
         if let Some(o) = out {
             assert_eq!(
@@ -872,7 +881,11 @@ mod tests {
         // Cross-kind member: enum rename + field line never joints (both
         // finders decline — the rename may still partition alone).
         let pre = "enum Old {\n    A,\n}\nfn f(v: Old) {\n}\n";
-        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -2,0 +3 @@\n+    y: u32,\n@@ -4,1 +4,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
+        // WI-1b: the field line rides as a comment — `y: u32,` would
+        // not parse the enum post, and the floor only proves parseable
+        // posts. Comments never joint-fire, so the cross-kind decline
+        // (field beside enum rename) is unchanged.
+        let section = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n-enum Old {\n+enum New {\n@@ -2,0 +3 @@\n+    // y: u32,\n@@ -4,1 +4,1 @@\n-fn f(v: Old) {\n+fn f(v: New) {\n";
         let out = infer(section, pre);
         if let Some(o) = out {
             assert_eq!(

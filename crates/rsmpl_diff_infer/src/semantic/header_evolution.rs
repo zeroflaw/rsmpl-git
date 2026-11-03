@@ -331,7 +331,12 @@ mod tests {
     fn generics_bound_add_fires_and_round_trips() {
         let raw = section(
             "f.rs",
-            "@@ -1,1 +1,1 @@\n-fn foo<T>(x: T) {\n+fn foo<T : Clone>(x: T) {\n@@ -4,1 +4,1 @@\n-fn bar<T>(x: T) {\n+fn bar<T : Clone>(x: T) {\n",
+            // WI-1b: the plus side uses the engine-normalized `<T: Clone>`
+            // spacing — the floor proves git-post == engine-post
+            // byte-identically, and the engine compacts slot spacing at
+            // compare time (so the unformatted `<T : Clone>` input the
+            // detector also accepts is not floor-provable).
+            "@@ -1,1 +1,1 @@\n-fn foo<T>(x: T) {\n+fn foo<T: Clone>(x: T) {\n@@ -4,1 +4,1 @@\n-fn bar<T>(x: T) {\n+fn bar<T: Clone>(x: T) {\n",
         );
         let pre = pre_map(&[(
             "f.rs",

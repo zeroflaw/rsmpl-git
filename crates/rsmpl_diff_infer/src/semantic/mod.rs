@@ -216,6 +216,10 @@ pub fn infer_semantic_with_provenance(
     // split; this file was at 1993/2000).
     let (pre_passed, joint_suppressed) =
         pre_pass::run_pre_passes(sections, pre, &mut used_rules, prov, &mut compressed_any);
+    // WI-1b: the reprobe floor degrades to the TRUE native input, never
+    // to pre-pass output (a move/intent rewrite is semantic, not an
+    // ordinary fallback) — captured before the shadowing below.
+    let native_input: &[String] = sections;
     let sections: &[String] = &pre_passed;
     for section in sections {
         let mut declined = Vec::new();
@@ -263,6 +267,11 @@ pub fn infer_semantic_with_provenance(
         // (definition-first, per-group T375 re-basis with `rN` fallback).
         group::assign_groups(prov, &out);
         group::apply_shared_rules(prov, &mut out);
+        // WI-1b reprobe floor (D18): prove the final grouped emission
+        // against the pre-image map; failing files degrade to their
+        // native ordinary sections with `veto:reprobe-failed` before
+        // leaving the lib.
+        crate::reprobe::reprobe_sections(native_input, &mut out, pre, prov);
         Some(out)
     } else {
         None
@@ -1490,7 +1499,10 @@ mod tests {
         // masked head skips the engine-count backstop by construction.
         let a = section(
             "a.rs",
-            "@@ -1,5 +1,5 @@\n fn m() {\n-    Old(alpha);\n     Other(alpha);\n-    Old(alpha);\n+    Old(beta);\n+    Old(beta);\n }\n",
+            // WI-1b: plus lines ride their minus (real `git diff` order —
+            // grouped trailing plus blocks are not git-faithful and the
+            // reprobe floor proves git-post == engine-post).
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    Old(alpha);\n+    Old(beta);\n     Other(alpha);\n-    Old(alpha);\n+    Old(beta);\n }\n",
         );
         let pre = pre_map(&[(
             "a.rs",
@@ -1519,7 +1531,9 @@ mod tests {
         // matches exactly the 2 `a` sites (concrete receiver).
         let a = section(
             "a.rs",
-            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.Old(alpha);\n     c.Old(alpha);\n-    a.Old(alpha);\n+    a.Old(beta);\n+    a.Old(beta);\n }\n",
+            // WI-1b: plus lines ride their minus (real `git diff` order —
+            // see the callee twin above).
+            "@@ -1,5 +1,5 @@\n fn m() {\n-    a.Old(alpha);\n+    a.Old(beta);\n     c.Old(alpha);\n-    a.Old(alpha);\n+    a.Old(beta);\n }\n",
         );
         let pre = pre_map(&[(
             "a.rs",

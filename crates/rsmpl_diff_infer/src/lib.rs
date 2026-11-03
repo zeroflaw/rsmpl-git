@@ -27,6 +27,7 @@
 //! never an unparseable patch.
 
 pub(crate) mod diff_text;
+pub(crate) mod reprobe;
 pub mod semantic;
 pub(crate) mod totality;
 

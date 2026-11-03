@@ -7812,7 +7812,20 @@ in-process scan of untracked pending-scope files) — a mentioning
 file joins the D13 probe domain, so an intent whose site set exceeds
 the native diff declines to ordinary at raise time instead of relying
 on the engine's apply-time backstop. Mention-free workspaces raise
-byte-identical to the changed-files-only domain.
+byte-identical to the changed-files-only domain. Beneath `--check`
+sits the per-hunk reprobe floor (D18, WI-1b): `infer` scratch-applies
+every emitted semantic section against the pre-image map it already
+holds — section-local engine-apply plus post-compare per file, and a
+joint whole-patch T361 over the multi-section move intents (cut in A,
+paste in B) the local checks cannot prove alone — and degrades any
+failing section to its ordinary native text before the patch leaves
+the library, with `veto:reprobe-failed` provenance. Sections without
+a pre-image prove nothing and keep section-visible behavior, except
+that move cuts (`# bind=` / `# use=` / bare `- I`) never emit from
+section-visible evidence. A raise that passes the floor can still
+fail `--check` (workspace-wide follows, build validation), but no
+raise fails engine apply on its own pre-image while an ordinary
+fallback exists.
 Each `hunks` entry carries per-hunk
 provenance for one emitted semantic hunk, plus one entry per
 wholly-ordinary section (WI-15c — the list is never bare `"hunks":
@@ -7890,7 +7903,12 @@ from the diff pair count `want`; unwired detectors still decline
 shape-or-count as `no-match`), `veto:<name>` (named veto: off-diff
 use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the same
 call family when a macro/string twin covers a changed line —,
-ambiguous anti-unification), `precondition:<name>` (named
+ambiguous anti-unification, `reprobe-failed` — WI-1b: the infer
+reprobe floor (D18) degraded a semantic section whose scratch-apply
+or post-compare against the pre-image failed; emitted only by the
+floor as `declined: [{detector: reprobe, reason:
+veto:reprobe-failed}]` on the replacement ordinary entry, never by
+detectors), `precondition:<name>` (named
 failed shape premise, incl. the LF-only section premise); the pre-WI-17 bare `byte-guard` /
 `precision-guard` spellings stay parseable but are no longer emitted
 anywhere (WI-17 slice 2 unified every guard veto path), and the bare
