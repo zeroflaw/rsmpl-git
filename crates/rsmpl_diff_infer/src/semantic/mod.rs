@@ -96,6 +96,7 @@ mod item_joint_emit;
 mod item_joint_field_add;
 mod item_joint_field_evo;
 mod item_joint_impl;
+mod item_joint_impl_xfile;
 mod item_joint_visqual;
 mod item_rename_vis;
 mod item_span;
