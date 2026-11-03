@@ -9555,7 +9555,17 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     attr-added without rename never double-claims and method-bearing
     traits veto inside the matcher and stay engine-owned): the paste
     carries the trait evolution template with the added block as the
-    ordinary prefix. Tiny `mod` and tiny-trait rename+attr stay ordinary under the
+    ordinary prefix. WI-14 slice 10 closes the axis: the struct
+    composition arm admits a vis delta riding with rename+attr
+    (`struct Old` → `#[derive(Clone)] pub struct New` fires as cut +
+    evolved paste + ordinary prefix — the stripped-inner evolved
+    match needs only a vis-or-name delta, so the "container-delta
+    beyond vis" residue for the added axis is landed, not deferred);
+    the rename-only method-bearing trait twin
+    (`trait Old { fn m_old }` → `trait New { fn m_new }`) is pinned
+    ordinary, closing the veto triangle with the byte-identical and
+    rename+attr twins (structural veto at any size — the scalar cut
+    plus the empty-items gate, never the byte guard). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Removed / replaced attrs, two added attrs, `//!` / `/* */`

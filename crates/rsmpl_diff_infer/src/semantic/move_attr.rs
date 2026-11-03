@@ -26,7 +26,11 @@
 //! the inner rename pairs through the abstract evolved matcher in
 //! `move_evolve.rs` / `move_evolve_tail.rs` via `added_attr_block_len`
 //! below (method-bearing traits veto inside the trait matcher and stay
-//! engine-owned). Later WI-14 slices own the remaining axes.
+//! engine-owned). Slice 10 closes the added axis: the struct arm admits
+//! a vis delta riding with rename+attr, and the rename-only
+//! method-bearing trait twin is pinned ordinary. The remaining axes
+//! (removed/replaced ± rename, method-bearing trait moves) are
+//! engine-owned (whole-span cut law) and stay ordinary by construction.
 
 use syn::spanned::Spanned;
 
@@ -1519,5 +1523,73 @@ mod tests {
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
             "method-bearing trait rename+attr must stay ordinary (engine-owned)"
         );
+    }
+
+    #[test]
+    fn rename_method_bearing_trait_move_stays_ordinary() {
+        // WI-14 slice 10: the rename-only twin of the pin above —
+        // method-bearing `trait Old { fn m_old }` moves a.rs -> b.rs as
+        // `trait New { fn m_new }` (no attr delta at all). Padding
+        // clears the T375 guard on every landed axis, so staying
+        // ordinary here proves the structural veto, not bytes: the
+        // scalar `- I` cut cannot isolate a trait with methods
+        // (`move_cut_eligible` excludes it) and the evolved trait
+        // cascade vetoes non-empty items inside `trait_evolved_match`.
+        let mut docs = String::new();
+        for i in 0..40 {
+            docs.push_str(&format!("/// doc line {i}\n"));
+        }
+        let minus_item = format!("{docs}trait Old {{\n    fn m_old(&self);\n}}\n");
+        let plus_item = format!("{docs}trait New {{\n    fn m_new(&self);\n}}\n");
+        let a_old = format!("fn keep() {{}}\n{minus_item}");
+        let a_minus: String = minus_item.lines().map(|l| format!("-{l}\n")).collect();
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        assert!(
+            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
+            "method-bearing trait move+rename must stay ordinary (engine-owned)"
+        );
+    }
+
+    #[test]
+    fn rename_vis_attr_struct_move_fires_with_ordinary_prefix() {
+        // WI-14 slice 10: the slice-8 struct composition arm admits a
+        // vis delta riding with the rename+attr (`struct Old` ->
+        // `#[derive(Clone)] pub struct New`): the stripped inner still
+        // evolves through `struct_evolved_match` (vis-or-name delta
+        // suffices) while the attr rides the ordinary T432b prefix.
+        // Closes the "container-delta beyond vis" deferred line for the
+        // added axis — only removed/replaced stays engine-owned.
+        let mut strukt = String::from("struct Old {\n");
+        for i in 0..40 {
+            strukt.push_str(&format!("    f{i}: u32,\n"));
+        }
+        strukt.push_str("}\n");
+        let renamed = strukt.replacen("struct Old", "pub struct New", 1);
+        let a_old = format!("fn keep() {{}}\n{strukt}");
+        let a_minus: String = strukt.lines().map(|l| format!("-{l}\n")).collect();
+        let plus_item = format!("#[derive(Clone)]\n{renamed}");
+        let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
+        let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("struct rename+vis+attr move must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
+        assert!(
+            text.contains("pub struct New"),
+            "paste must carry the evolved vis+name template, got:\n{text}"
+        );
+        assert!(
+            text.contains("+#[derive(Clone)]\n"),
+            "attr rides ordinary, got:\n{text}"
+        );
+        assert!(
+            !text.contains("+pub struct New {"),
+            "plus struct lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 }
