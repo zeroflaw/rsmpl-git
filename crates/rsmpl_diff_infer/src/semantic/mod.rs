@@ -1874,4 +1874,25 @@ mod tests {
         assert!(out.contains("- fn foo\n"), "got:\n{out}");
         assert!(out.contains("+ fn bar\n"), "got:\n{out}");
     }
+
+    #[test]
+    fn wi3_rename_attr_strip_stays_ordinary() {
+        // WI-3 slice 5: rename + full attr/doc strip is a two-slot
+        // joint (name + attrs), not a single -- no D17 arm admits
+        // `Attrs`-carrying hunks by design, so the N=1 pair stays
+        // ordinary at section level. The composed emission belongs
+        // to WI-8's joint probe.
+        let raw = section(
+            "src/lib.rs",
+            "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1 @@\n-/// Adds one.\n-#[inline]\n-fn foo(x: i32) -> i32 {\n+fn bar(x: i32) -> i32 {\n",
+        );
+        let pre = pre_map(&[(
+            "src/lib.rs",
+            "/// Adds one.\n#[inline]\nfn foo(x: i32) -> i32 {\n    x + 1\n}\n",
+        )]);
+        assert!(
+            infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).is_none(),
+            "rename+strip pair must stay ordinary (WI-8 joint territory)"
+        );
+    }
 }

@@ -392,7 +392,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "22-attrs-strip",
-        "t375: single attributed fn re-infers ordinary",
+        "two-slot joint (WI-3 slice 5): rename + full attr/doc strip needs the WI-8 composed probe -- no D17 arm admits `Attrs`-carrying hunks by design, so the N=1 pair stays ordinary (the -20B detector half is joint-owned)",
     ),
     (
         "30-trait-sweep",
@@ -414,7 +414,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
 
     (
         "75-macro-verbatim-single",
-        "t375: single-site macro-verbatim rewrite re-infers ordinary",
+        "engine wall (WI-3 slice 5): whole-line let-with-macro literal matches nothing (T440 `verbatim_let_shape`/`init_ok` wall) so D17 re-prove cannot keep -- the appliable nested-macro-text emission diverges from the authored whole-line leg; needs engine literal-statement matching with macro inits",
     ),
 ];
 

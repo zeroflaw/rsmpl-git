@@ -1007,6 +1007,21 @@ mod tests {
     }
 
     #[test]
+    fn wi3_macro_verbatim_let_single_stays_ordinary() {
+        // WI-3 slice 5: a same-callee literal change inside a whole-line
+        // `let` with a macro init is an interior edit, not a rename --
+        // and the whole-line shape matches nothing in the engine
+        // (T440 `verbatim_let_shape`/`init_ok` wall), so no detector
+        // fires. Needs engine literal-statement matching with macro
+        // inits; until then the single stays ordinary.
+        let raw = section(
+            "f.rs",
+            "@@ -2,1 +2,1 @@\n fn f() {\n-    let b = format!(\"x{}\", 1);\n+    let b = format!(\"y{}\", 1);\n     let _ = b;\n }\n",
+        );
+        assert!(infer_semantic(std::slice::from_ref(&raw)).is_none());
+    }
+
+    #[test]
     fn macro_rename_single_fires_bare_verbatim() {
         // WI-3 slice 3 (fixture 09 shape): one bare rename with a
         // token-equal body raises as the allow-one verbatim single.

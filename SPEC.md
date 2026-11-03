@@ -9842,13 +9842,18 @@ cycle must still be tree-lossless).
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser
 deliberately leaves ordinary (`13`,
-`22` — definition-shape singles among them fire under
+`22` (rename + full attr/doc strip is a two-slot joint — WI-8
+composed-probe territory; no D17 arm admits `Attrs`-carrying hunks
+by design) — other definition-shape singles among them fire under
 the WI-19 precision guard wherever the single-pair gates admit them;
 macro-rename singles fire as allow-one verbatim `old!(...)` /
 `new!(...)` hunks under `# macro=token_tree` (one invocation,
 token-equal bodies, `macro_holds` at n=1 plus the scratch
 byte-compare; holed authored legs unify via the verbatim literal
-arm); same-name macro-interior edits stay with the interior family;
+arm); same-name macro-interior edits stay with the interior family
+(`75`: the whole-line let-with-macro literal matches nothing in the
+engine — T440 wall — so D17 re-prove cannot keep; needs engine
+literal-statement matching with macro inits);
 return-carrying/vis-carrying fn singles still need their slice-2
 detectors); `04` divergent mixed sections (one hunk re-infers
 semantic while the ordinary remainder never normalizes): hunk-2
