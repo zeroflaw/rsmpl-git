@@ -66,6 +66,7 @@ pub(crate) mod partition;
 mod pat_template;
 mod paths;
 mod peel;
+mod per_hunk;
 
 pub(crate) mod perm_single;
 pub(crate) mod prefix;
@@ -154,6 +155,7 @@ pub(crate) use impl_single::try_impl_header_single;
 pub(crate) use item_rename_vis::try_item_vis_sweep;
 pub(crate) use literal_frame::try_literal_frame_sweep;
 pub(crate) use peel::try_call_peel_sweep;
+pub(crate) use per_hunk::compress_balanced_pair_body;
 pub(crate) use perm_single::{
     try_call_perm_single, try_method_perm_single, try_subline_method_perm_single,
     try_subline_perm_single,
@@ -164,7 +166,7 @@ pub(crate) use single_block::try_single_block_sweep;
 pub(crate) use type_single::try_type_single;
 pub(crate) use verbatim::try_verbatim_single;
 
-pub(crate) use guard::{guard_for, Guard};
+pub(crate) use guard::{guard_for, normalized_hunk_len, Guard};
 pub(crate) use precision_single::try_precision_definition_single;
 
 /// Try to compress binary-stripped `sections` (one full

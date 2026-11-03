@@ -972,12 +972,28 @@ mod tests {
         ]);
         let out = super::super::infer_semantic_with_pre_images(&sections, &pre);
         if let Some(o) = out {
+            // WI-2b: the `+ Y,` insertion is a proved lone single
+            // (container recovery + scratch probe), so the normalized
+            // span admits it exactly at the boundary (40 <= 24+16) —
+            // no shared rule with the rename, hence no cross-file
+            // joint, just two distinct singles.
             assert_eq!(
-                o.matches("rule=r1").count(),
-                1,
-                "cross-file member never joints (enum half), got:\n{o}"
+                o.matches("rule=").count(),
+                2,
+                "rename plus lone insertion single, got:\n{o}"
             );
-            assert!(!o.contains("+ Y,"), "got:\n{o}");
+            assert!(
+                o.contains("rule=r1"),
+                "rename keeps its own rule, got:\n{o}"
+            );
+            assert!(
+                o.contains("rule=r2"),
+                "insertion raises under its own rule, got:\n{o}"
+            );
+            assert!(
+                o.contains("  enum Other {\n+ Y,\n"),
+                "lone insertion single shape, got:\n{o}"
+            );
         }
     }
 }

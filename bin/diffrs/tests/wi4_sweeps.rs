@@ -316,15 +316,39 @@ fn wi4c_sig_evolution_fires() {
 #[test]
 fn wi4c_sig_evolution_extra_site_stays_ordinary() {
     // Fixture 74: a third untouched `fn alpha` in the pre-image
-    // breaks engine-count totality (3 != 2) — the sweep would silently
-    // rewrite it, so the section stays ordinary.
+    // breaks the N=2 sweep's engine-count totality (3 != 2) — the sweep
+    // would silently rewrite it, so no sweep fires. The provable N=1
+    // pair still raises per hunk: pair 1's concrete `-> i32` return
+    // anchors exactly one site (WI-2b normalized span), while pair 2's
+    // `-> String` return would infer a type hole (`[A-Z]...` infers,
+    // SPEC 15.8) matching all three sites, so it honestly stays
+    // ordinary. The untouched third `fn alpha` is never claimed.
     let (_native_input, semantic) = convert_fixture("74-sig-evolution-stays-ordinary");
-    assert!(
-        !semantic.contains("rule="),
-        "extra fn site must veto, got: {semantic}"
+    assert_eq!(
+        semantic.matches("rule=").count(),
+        1,
+        "only the provable pair raises, got: {semantic}"
     );
     assert!(
-        semantic.contains("-fn alpha(x: i32) -> i32 {"),
-        "native minus must survive, got: {semantic}"
+        !semantic.contains("allow=many"),
+        "no sweep may fire past the extra site, got: {semantic}"
+    );
+    assert!(
+        semantic.contains(
+            "- fn alpha(...) -> i32 {
+"
+        ),
+        "firing minus header missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains(
+            "+ fn beta(...) -> u32 {
+"
+        ),
+        "firing plus header missing, got: {semantic}"
+    );
+    assert!(
+        semantic.contains("-fn alpha(y: String) -> String {"),
+        "unprovable pair stays ordinary, got: {semantic}"
     );
 }

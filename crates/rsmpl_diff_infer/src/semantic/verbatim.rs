@@ -491,7 +491,7 @@ pub(crate) fn try_verbatim_sweep(
             path,
             file_old,
             &hunk_changed[i],
-            hunk.len(),
+            super::normalized_hunk_len(hunk),
             used_rules,
             &mut Vec::new(),
         ) {

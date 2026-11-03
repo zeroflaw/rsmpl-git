@@ -9600,6 +9600,9 @@ slot/sig/header evolution singles, definition evolution/addition,
 plus the WI-1 postcondition re-verifies at its spans) fire under the
 precision guard: semantic ≤ ordinary + 16 bytes (per hunk; partial
 partition scales the allowance by claimed pairs, `+ 16 × claimed`).
+The ordinary side is the rendering-normalized hunk span: git's elided
+`,1` prices like the explicit `,1` form, so the verdict never depends
+on header rendering.
 The 16-byte constant is the price of the `diff --git` + `@@ … rule=`
 + pattern lines the ordinary form does not carry — a pinned SPEC
 constant, never a tunable discovered in code. A losing shape falls

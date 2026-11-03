@@ -44,6 +44,61 @@ pub(crate) fn guard_for(detector: &str) -> Guard {
     }
 }
 
+/// WI-2b: rendering-normalized native hunk length for guard budgets.
+///
+/// Real `git diff -U0` elides `,1` (`@@ -1 +1 @@`) while unit
+/// convention and the synthetic builders write it explicitly
+/// (`@@ -1,1 +1,1 @@`) — 4 bytes that flipped a per-hunk precision
+/// verdict by 1 (vis+ret single: body 89 vs elided 72+16=88 veto vs
+/// explicit 76+16=92 fire). Guards must price the hunk *span*, not
+/// its rendering, so every guard measures the canonical
+/// explicit-length header plus the verbatim body/title bytes.
+/// Unparseable headers (or a header-only string) fall back to
+/// `hunk.len()` — normalization never vetoes. Canonical is the
+/// explicit form, so budgets only grow to the unit-test convention
+/// and no firing emission can newly veto.
+pub(crate) fn normalized_hunk_len(hunk: &str) -> usize {
+    let Some((header, rest)) = hunk.split_once('\n') else {
+        return hunk.len();
+    };
+    if !header.starts_with("@@") {
+        return hunk.len();
+    }
+    let Some((old_start, old_len, new_start, new_len, title)) = parse_hunk_header(header) else {
+        return hunk.len();
+    };
+    let canonical = format!("@@ -{old_start},{old_len} +{new_start},{new_len} @@{title}\n");
+    canonical.len() + rest.len()
+}
+
+/// `@@ -o[,ol] +n[,nl] @@{title}` shapes the differ emits; elided
+/// lengths default to 1 (git's `,1` elision). `None` on anything else
+/// (the caller falls back to the raw length).
+fn parse_hunk_header(header: &str) -> Option<(usize, usize, usize, usize, &str)> {
+    let inner = header.strip_prefix("@@")?.split("@@").next()?;
+    let mut parts = inner.split_whitespace();
+    let old = parts.next()?.strip_prefix('-')?;
+    let new = parts.next()?.strip_prefix('+')?;
+    let (old_start, old_len) = parse_range(old)?;
+    let (new_start, new_len) = parse_range(new)?;
+    let title = header.split("@@").nth(2).unwrap_or("");
+    Some((old_start, old_len, new_start, new_len, title))
+}
+
+/// `start[,len]` with git's elided-`,1` default.
+fn parse_range(range: &str) -> Option<(usize, usize)> {
+    let mut it = range.split(',');
+    let start: usize = it.next()?.parse().ok()?;
+    let len: usize = match it.next() {
+        Some(l) => l.parse().ok()?,
+        None => 1,
+    };
+    if it.next().is_some() {
+        return None;
+    }
+    Some((start, len))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +165,42 @@ mod tests {
         }
         // Unknown detectors (future work, `prov.rs` lag) default strict.
         assert_eq!(guard_for("not_a_detector"), Guard::Strict);
+    }
+
+    #[test]
+    fn normalized_hunk_len_elided_equals_explicit() {
+        // WI-2b live case: the 113-shape native hunk prices 72 elided,
+        // 76 explicit — the precision verdict must not depend on it.
+        let body = "-fn helper(x: i32) -> i32 {\n+pub fn helper(x: i32) -> i64 {\n";
+        let elided = format!("@@ -1 +1 @@\n{body}");
+        let explicit = format!("@@ -1,1 +1,1 @@\n{body}");
+        assert_eq!(normalized_hunk_len(&elided), explicit.len());
+        assert_eq!(normalized_hunk_len(&explicit), explicit.len());
+    }
+
+    #[test]
+    fn normalized_hunk_len_keeps_title_bytes() {
+        // Titles (function context) ride verbatim on both sides of the
+        // comparison — only the range rendering canonicalizes.
+        let body = "-    fn alpha(x: i32) {\n+    pub fn alpha(x: i32) {\n";
+        let elided = format!("@@ -2 +2 @@ impl Svc {{\n{body}");
+        let explicit = format!("@@ -2,1 +2,1 @@ impl Svc {{\n{body}");
+        assert_eq!(normalized_hunk_len(&elided), normalized_hunk_len(&explicit));
+        assert_eq!(normalized_hunk_len(&elided), explicit.len());
+        assert!(
+            normalized_hunk_len(&elided) > normalized_hunk_len(&format!("@@ -2 +2 @@\n{body}"))
+        );
+    }
+
+    #[test]
+    fn normalized_hunk_len_zero_sides_and_fallback() {
+        // Pure-insertion `,0` sides parse (already explicit, identity);
+        // garbage and header-only input fall back to the raw length.
+        let ins = "@@ -1,0 +1,2 @@\n+a\n+b\n";
+        assert_eq!(normalized_hunk_len(ins), ins.len());
+        let garbage = "not a hunk at all\n-x\n";
+        assert_eq!(normalized_hunk_len(garbage), garbage.len());
+        let header_only = "@@ -1 +1 @@";
+        assert_eq!(normalized_hunk_len(header_only), header_only.len());
     }
 }

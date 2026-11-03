@@ -1491,7 +1491,9 @@ fn compress_section_per_hunk(
                 super::try_definition_addition(&minuses, &pluses, path, file_old, hunk, used_rules),
             ) {
                 let body = add.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-                if body.len() <= hunk.len() + super::PRECISION_GUARD {
+                // WI-2b: the span prices rendering-normalized (git elides
+                // `,1`, unit convention writes it), never the raw header.
+                if body.len() <= super::normalized_hunk_len(hunk) + super::PRECISION_GUARD {
                     push_section_prov(
                         prov,
                         body,
@@ -1555,7 +1557,7 @@ fn compress_section_per_hunk(
             path,
             file_old,
             &changed,
-            hunk.len(),
+            super::normalized_hunk_len(hunk),
             used_rules,
             declined,
         ) {

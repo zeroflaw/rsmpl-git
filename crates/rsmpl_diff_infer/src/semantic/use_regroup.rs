@@ -97,7 +97,7 @@ pub(crate) fn try_use_regroup_hunk(
     body.push_str(&format!("+ {}\n", pluses[0]));
     // Precision guard on the hunk body (same posture as the single-pair
     // precision shapes: `body <= hunk + 16`).
-    if body.len() > hunk.len() + PRECISION_GUARD {
+    if body.len() > super::normalized_hunk_len(hunk) + PRECISION_GUARD {
         used_rules.truncate(checkpoint);
         return None;
     }

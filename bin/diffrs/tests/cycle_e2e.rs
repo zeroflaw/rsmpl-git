@@ -382,7 +382,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "13-sig-evolution",
-        "WI-19b: N=1 sig singles own vis/qual-only evolutions; ret/generics/where evolutions stay ordinary (type-sweep domain, strict N>=2)",
+        "mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)",
     ),
     (
         "14-item-rename",

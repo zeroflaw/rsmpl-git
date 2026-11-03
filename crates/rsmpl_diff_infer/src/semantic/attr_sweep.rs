@@ -622,7 +622,7 @@ pub(crate) fn try_attr_sweep_section(
         // (partial compression over all-or-nothing).
         let hunk_len: usize = members
             .iter()
-            .map(|&idx| hunks[sites[idx].hunk].len())
+            .map(|&idx| super::normalized_hunk_len(&hunks[sites[idx].hunk]))
             .sum();
         if singleton {
             if lines.len() > hunk_len + super::PRECISION_GUARD {

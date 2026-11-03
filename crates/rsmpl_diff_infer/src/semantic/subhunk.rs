@@ -30,7 +30,7 @@
 //! split already runs on the caller's vec and owns per-family evidence.
 
 use super::prov::push_section_prov;
-use super::{HunkProvenance, PRECISION_GUARD};
+use super::{normalized_hunk_len, HunkProvenance, PRECISION_GUARD};
 
 /// One emitted semantic hunk: body, detector name, and the rule-checkpoint
 /// before its reservation (for per-group provenance).
@@ -110,6 +110,9 @@ pub(crate) fn try_subhunk_partition(
     // the native hunk title the real per-hunk path sees (`compress_balanced
     // `_pair_body` prices `hunk_len` title-included). Titles stay stripped
     // from emitted text (T343) — only budgets grow, never output.
+    // WI-2b: every budget below measures the rendering-normalized span
+    // (`normalized_hunk_len`), so elided real-git headers price like the
+    // explicit synthetics.
     let title: &str = header.split("@@").nth(2).unwrap_or("");
     let title_len = title.len();
     // Classify each pair without reserving rules (scratch counter): the
@@ -131,7 +134,7 @@ pub(crate) fn try_subhunk_partition(
             path,
             Some(pre),
             &sites[i..i + 1],
-            pair_native.len(),
+            normalized_hunk_len(&pair_native),
             &mut scratch,
             &mut Vec::new(),
         )
@@ -190,7 +193,7 @@ pub(crate) fn try_subhunk_partition(
             path,
             Some(pre),
             run_changed,
-            run_native.len() + title_len,
+            normalized_hunk_len(&run_native) + title_len,
             used_rules,
             &mut Vec::new(),
         ) {
@@ -238,7 +241,7 @@ pub(crate) fn try_subhunk_partition(
                 path,
                 Some(pre),
                 &sites[i..i + 1],
-                pair_native.len(),
+                normalized_hunk_len(&pair_native),
                 used_rules,
                 &mut Vec::new(),
             ) {
@@ -372,7 +375,7 @@ pub(crate) fn try_subhunk_partition(
         })
         .count();
     if fragment.len()
-        > hunk.len()
+        > normalized_hunk_len(hunk)
             + PRECISION_GUARD * n_claimed_pairs.max(1)
             + 3 * PRECISION_GUARD * n_method_runs
             + super::block_headers::filter_header_excess(&fragment)
@@ -438,7 +441,7 @@ fn try_split_none_run(
             path,
             Some(pre),
             &sites[start..mid],
-            left_native.len() + split_title_len,
+            normalized_hunk_len(&left_native) + split_title_len,
             used_rules,
             &mut Vec::new(),
         );
@@ -453,7 +456,7 @@ fn try_split_none_run(
             path,
             Some(pre),
             &sites[mid..end],
-            right_native.len() + split_title_len,
+            normalized_hunk_len(&right_native) + split_title_len,
             used_rules,
             &mut Vec::new(),
         );
