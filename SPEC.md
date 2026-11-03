@@ -7884,8 +7884,10 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   exactly one `trait` definition rename pair plus exactly one self-type
   definition rename pair (`struct`/`enum`/`union`/`type` alias with equal
   RHS) plus exactly one composed `impl` header pair (`impl OldTr for
-  OldTy<sfx>` → `impl NewTr for NewTy<same sfx>`, single unqualified
-  idents, no `impl<…>` generics) in one file, plus zero or more
+  OldTy<sfx>` → `impl NewTr for NewTy<same sfx>`, each side either a
+  single unqualified ident or a qualified path with a byte-equal prefix
+  and a renamed tail; a generic `impl<…>` prefix composes when byte-equal
+  across the pair, WI-12 slice 4) in one file, plus zero or more
   follow-use lines (each renaming at least one full half
   ident-boundary, no dedicated call-callee/macro-head position, no
   def-shaped third delta — the `extra_claimable` gate), compresses to

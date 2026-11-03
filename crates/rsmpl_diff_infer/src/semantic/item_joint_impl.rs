@@ -367,29 +367,28 @@ fn contains_ident(haystack: &str, needle: &str) -> bool {
 }
 
 /// Parse the composed double-delta header
-/// `impl OldTr for OldTy<sfx>` → `impl NewTr for NewTy<sfx>`, or `None`
-/// for anything else (single-delta legs belong to `impl_single`; qualified
-/// trait paths, `impl<…>` generics, and `dyn`/`!` heads decline).
+/// `impl[<params>] OldTr for OldTy<sfx>` → `impl[<params>] NewTr for
+/// NewTy<same sfx>`, or `None` for anything else (single-delta legs belong
+/// to `impl_single`; `dyn`/`!` heads decline). A generic prefix (when
+/// present) must compare byte-equal across the pair (proven, never
+/// invented); the trait side may be bare or qualified with a byte-equal
+/// prefix and a renamed tail.
 pub(crate) fn parse_impl_double_delta(
     minus: &str,
     plus: &str,
 ) -> Option<(String, String, String, String)> {
     let old = minus.trim();
     let new = plus.trim();
-    let old_rest = old
-        .strip_prefix("impl ")
-        .or_else(|| old.strip_prefix("impl\t"))?;
-    let new_rest = new
-        .strip_prefix("impl ")
-        .or_else(|| new.strip_prefix("impl\t"))?;
-    if old_rest.starts_with('<') || new_rest.starts_with('<') {
+    let old_rest = strip_impl_head(old)?;
+    let new_rest = strip_impl_head(new)?;
+    let (old_gen, old_rest) = strip_impl_generics(old_rest)?;
+    let (new_gen, new_rest) = strip_impl_generics(new_rest)?;
+    if old_gen != new_gen {
         return None;
     }
     let (old_tr, old_ty) = split_for(old_rest)?;
     let (new_tr, new_ty) = split_for(new_rest)?;
-    if !is_bare_ident(old_tr) || !is_bare_ident(new_tr) {
-        return None;
-    }
+    let (old_tr, new_tr) = split_qualified_tail(old_tr, new_tr)?;
     if old_tr == new_tr {
         return None;
     }
@@ -404,6 +403,20 @@ pub(crate) fn parse_impl_double_delta(
         oy.to_string(),
         ny.to_string(),
     ))
+}
+/// Strip the `impl` head word, leaving the generic prefix (if any) or the
+/// trait side. `impl Foo` (any single space/tab run) and `impl<T> Foo`
+/// admit; anything else (`implements`, bare `impl`) declines.
+fn strip_impl_head(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix("impl")?;
+    if rest.starts_with('<') {
+        return Some(rest);
+    }
+    let trimmed = rest.trim_start_matches([' ', '\t']);
+    if trimmed.len() == rest.len() {
+        return None;
+    }
+    Some(trimmed)
 }
 
 /// Split an `impl`-rest at the single `for` word: `Tr for Ty …` →
@@ -441,6 +454,75 @@ fn is_bare_ident(s: &str) -> bool {
     !s.is_empty()
         && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
         && super::ident_len(s) == Some(s.len())
+}
+
+/// Strip an optional `impl<…>` generic prefix (balanced brackets) from an
+/// `impl`-rest, returning (prefix, remainder). No generics → (`""`, rest).
+/// A `<` that never closes to depth 0 followed by whitespace declines
+/// (`None`) rather than guessing.
+fn strip_impl_generics(rest: &str) -> Option<(&str, &str)> {
+    if !rest.starts_with('<') {
+        return Some(("", rest));
+    }
+    let bytes = rest.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    let prefix = &rest[..=i];
+                    let after = &rest[i + 1..];
+                    if after.is_empty() || !(after.starts_with(' ') || after.starts_with('\t')) {
+                        return None;
+                    }
+                    return Some((prefix, after.trim_start()));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split a trait-side pair into (old_tail, new_tail) when both sides are
+/// bare idents or qualified paths with byte-equal leading segments.
+/// Returns the renamed tails, or `None` when the shapes differ.
+fn split_qualified_tail(old_tr: &str, new_tr: &str) -> Option<(String, String)> {
+    let (old_pre, old_last) = qualified_prefix_tail(old_tr)?;
+    let (new_pre, new_last) = qualified_prefix_tail(new_tr)?;
+    if old_pre != new_pre {
+        return None;
+    }
+    if !is_bare_ident(old_last) || !is_bare_ident(new_last) {
+        return None;
+    }
+    Some((old_last.to_string(), new_last.to_string()))
+}
+
+/// Split `path` into (prefix, tail) at the last `::`. Bare idents yield
+/// (`""`, ident). Empty tails, empty segments, and generic tails decline.
+fn qualified_prefix_tail(path: &str) -> Option<(&str, &str)> {
+    match path.rfind("::") {
+        None => Some(("", path)),
+        Some(at) => {
+            let (pre, tail) = (&path[..at], &path[at + 2..]);
+            if pre.is_empty() || tail.is_empty() || pre.ends_with(':') {
+                return None;
+            }
+            let segs = pre.strip_prefix("::").unwrap_or(pre);
+            if segs.is_empty()
+                || segs.split("::").any(|s| !is_bare_ident(s))
+                || !is_bare_ident(tail)
+            {
+                return None;
+            }
+            Some((&path[..at], tail))
+        }
+    }
 }
 
 /// Split a self-ty side into (leading ident, byte suffix). The suffix
@@ -625,7 +707,7 @@ mod tests {
             "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl Labeled for Other {\n",
         );
         assert!(fire(&[mismatch], &pre).is_none());
-        // Qualified trait path declines.
+        // Qualified trait path composes (prefix proven, tail renamed).
         let qpre = pre_map(&[(
             "f.rs",
             "trait Printable {}\nstruct Old;\nimpl crate::Printable for Old {\n}\n",
@@ -634,8 +716,20 @@ mod tests {
             "f.rs",
             "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl crate::Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl crate::Labeled for New {\n",
         );
-        assert!(fire(&[qualified], &qpre).is_none());
-        // Generic impl header declines.
+        let out = fire(&[qualified], &qpre).expect("qualified triple must fire");
+        assert_eq!(out.matches("rule=r1\n").count(), 2, "got: {out}");
+        assert!(
+            !out.contains("impl crate::Printable"),
+            "headers rewritten, never stated, got: {out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = qpre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "trait Labeled {}\nstruct New;\nimpl crate::Labeled for New {\n}\n"
+        );
+        // Generic `impl<…>` prefix composes (prefix proven byte-equal).
         let gpre = pre_map(&[(
             "f.rs",
             "trait Printable {}\nstruct Old;\nimpl<T> Printable for Old {\n}\n",
@@ -644,7 +738,16 @@ mod tests {
             "f.rs",
             "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl<T> Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl<T> Labeled for New {\n",
         );
-        assert!(fire(&[generic], &gpre).is_none());
+        let out = fire(&[generic], &gpre).expect("generic triple must fire");
+        assert_eq!(out.matches("rule=r1\n").count(), 2, "got: {out}");
+        assert!(out.contains("- trait Printable\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = gpre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "trait Labeled {}\nstruct New;\nimpl<T> Labeled for New {\n}\n"
+        );
         // Single-delta legs are not triples.
         let two = section(
             "f.rs",
@@ -657,6 +760,37 @@ mod tests {
             "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl Printable for Old {\n+trait Printable {}\n+struct Old;\n+impl Printable for Old {\n",
         );
         assert!(fire(&[same], &pre).is_none());
+    }
+
+    #[test]
+    fn joint_impl_header_prefix_mismatch_declines() {
+        let pre = pre_map(&[("f.rs", PRE)]);
+        // Generic prefix must compare byte-equal: `<T>` vs `<U>` declines.
+        let gpre = pre_map(&[(
+            "f.rs",
+            "trait Printable {}\nstruct Old;\nimpl<T> Printable for Old {\n}\n",
+        )]);
+        let generic_mismatch = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl<T> Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl<U> Labeled for New {\n",
+        );
+        assert!(fire(&[generic_mismatch], &gpre).is_none());
+        // Qualified prefix must compare byte-equal: `crate::` vs `other::` declines.
+        let qpre = pre_map(&[(
+            "f.rs",
+            "trait Printable {}\nstruct Old;\nimpl crate::Printable for Old {\n}\n",
+        )]);
+        let qualified_mismatch = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl crate::Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl other::Labeled for New {\n",
+        );
+        assert!(fire(&[qualified_mismatch], &qpre).is_none());
+        // Bare-vs-qualified shape mismatch declines.
+        let shape_mismatch = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl crate::Labeled for New {\n",
+        );
+        assert!(fire(&[shape_mismatch], &pre).is_none());
     }
 
     #[test]
@@ -716,6 +850,21 @@ mod tests {
         // `Format` never splits a `for` word.
         assert!(parse_impl_double_delta("impl Format for B {", "impl Label for D {").is_some());
         assert!(parse_impl_double_delta("impl A for Before {", "impl C for D {").is_some());
+        // Generic prefix: byte-equal composes, mismatch declines.
+        assert!(parse_impl_double_delta("impl<T> A for B {", "impl<T> C for D {").is_some());
+        assert!(parse_impl_double_delta("impl<T> A for B {", "impl<U> C for D {").is_none());
+        assert!(
+            parse_impl_double_delta("impl<T: Clone> A for B {", "impl<T: Clone> C for D {")
+                .is_some()
+        );
+        // Qualified trait path: byte-equal prefix composes, mismatch declines.
+        assert!(
+            parse_impl_double_delta("impl crate::A for B {", "impl crate::C for D {").is_some()
+        );
+        assert!(
+            parse_impl_double_delta("impl crate::A for B {", "impl other::C for D {").is_none()
+        );
+        assert!(parse_impl_double_delta("impl A for B {", "impl crate::C for D {").is_none());
     }
 
     #[test]

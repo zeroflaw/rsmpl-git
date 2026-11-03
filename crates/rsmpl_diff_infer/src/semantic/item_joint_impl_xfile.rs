@@ -634,6 +634,38 @@ mod tests {
     }
 
     #[test]
+    fn joint_impl_cross_file_generic_header_fires() {
+        // Generic `impl<…>` prefix composes across files under the same
+        // workspace probe (prefix proven byte-equal, never invented).
+        let sections = vec![
+            section(
+                "a.rs",
+                "@@ -1,1 +1,1 @@\n-trait Printable {}\n+trait Labeled {}\n",
+            ),
+            section(
+                "b.rs",
+                "@@ -1,2 +1,2 @@\n-struct Old;\n-impl<T> Printable for Old {\n+struct New;\n+impl<T> Labeled for New {\n",
+            ),
+        ];
+        let pre = pre_map(&[
+            ("a.rs", CROSS_A_PRE),
+            ("b.rs", "struct Old;\nimpl<T> Printable for Old {\n}\n"),
+        ]);
+        let out = fire_cross(&sections, &pre).expect("cross-file generic triple must fire");
+        let joint = out.join("");
+        assert_eq!(joint.matches("rule=r1").count(), 2, "got: {joint}");
+        let parsed = rsmpl_patch::parse_patch(&joint).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["a.rs"], "trait Labeled {}\n");
+        assert_eq!(
+            files["b.rs"], "struct New;\nimpl<T> Labeled for New {\n}\n",
+            "got: {}",
+            files["b.rs"]
+        );
+    }
+
+    #[test]
     fn joint_impl_cross_file_veto_matrix() {
         let pre = cross_pre();
         // Mismatched composition (impl names a third ident) declines.
