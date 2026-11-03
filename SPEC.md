@@ -35,6 +35,13 @@ Five invariants; everything below is their spelling:
    (`S″ == S′` canonical fixed point, tree-lossless natives); every
    remaining divergence is named, owned, and pinned — never silent.
 
+*Note (WI-23d, docs slice): the contract above stays hand-owned until
+WI-24's table generators (error table, guard table, directive
+inventory) land; it is then assembled from those generated blocks.
+The per-section `Read this if` lines below are this slice's
+contribution: one navigation line per body section, no normative
+change.*
+
 ---
 
 ## Table of Contents
@@ -77,6 +84,8 @@ Five invariants; everything below is their spelling:
 ---
 
 ## 1. Overview
+
+*Read this if you are new to RSmPL and want the two-minute mental model.*
 
 RSmPL-Git is a patch format that combines:
 
@@ -122,6 +131,8 @@ An RSmPL-aware engine applies both kinds of hunks and can emit a final ordinary 
 ---
 
 ## 2. Design Goals
+
+*Read this if you are deciding whether a new spelling is worth its bytes.*
 
 ### 2.1 Token efficiency
 
@@ -228,6 +239,8 @@ If a rule cannot be applied exactly as specified, the engine should fail with a 
 
 ## 3. Relationship to Git Patches
 
+*Read this if you only know Git diffs and want the mapping to semantic hunks.*
+
 RSmPL-Git is intentionally close to Git unified-diff syntax, but an RSmPL hunk is not necessarily accepted by vanilla `git apply`.
 
 ### 3.1 Ordinary hunks
@@ -279,6 +292,8 @@ Git-like syntax gives the LLM and human reviewer:
 
 ## 4. Relationship to Coccinelle SmPL
 
+*Read this if you know SmPL and want exactly what RSmPL keeps and drops.*
+
 RSmPL is inspired by Coccinelle SmPL but is not a byte-for-byte clone.
 
 The retained ideas are:
@@ -301,6 +316,8 @@ The Rust-specific differences are:
 ---
 
 ## 5. Core Concepts
+
+*Read this if you need the vocabulary: patch, file section, hunk, directive block, range.*
 
 ### 5.1 RSmPL-Git patch
 
@@ -369,6 +386,8 @@ The `-`, `+`, and context lines in an RSmPL hunk, parsed as Rust semantic patter
 ---
 
 ## 6. Patch File Structure
+
+*Read this if you are authoring the `diff --git` scaffolding around hunks.*
 
 A patch file consists of zero or more file sections.
 
@@ -478,6 +497,8 @@ old side verbatim (`@@ -10,7 +10,7 @@`) stays compatible.
 ---
 
 ## 7. RSmPL Hunk Detection
+
+*Read this if your hunk applied as ordinary (or vice versa) and you want the detection rule.*
 
 ### 7.1 Detection rule
 
@@ -622,6 +643,8 @@ Therefore directives are unambiguous.
 ---
 
 ## 8. RSmPL Hunk Header Syntax
+
+*Read this if you are writing the `@@ -old,len @@` plus `rule=` header line.*
 
 An RSmPL hunk uses a standard-looking unified-diff hunk header, with
 the new-side range optionally elided:
@@ -777,6 +800,8 @@ The canonical fences live in Section 25.2.
 ---
 
 ## 9. RSmPL Directive Lines
+
+*Read this if you need a `#` directive and its exact spelling and defaults.*
 
 RSmPL directive lines are compact metadata lines placed immediately after the hunk header.
 
@@ -1090,6 +1115,8 @@ with no value` (text carries the `suggestion:` line, JSON carries the string).
 
 ## 10. Line Range Semantics
 
+*Read this if your ranges are stale, or you are citing spans from a file read.*
+
 ### 10.1 Source of file and range
 
 RSmPL-Git does not use separate `file:` and `lines:` fields.
@@ -1280,6 +1307,8 @@ postconditions still gate.
 
 ## 11. Ordinary Git Hunks
 
+*Read this if your change is plain text and should stay an ordinary Git hunk.*
+
 A hunk without a directive block is ordinary.
 
 Example:
@@ -1316,6 +1345,8 @@ ordinary-only target that does not parse stays unsearched and its
 ---
 
 ## 12. RSmPL Hunk Body Syntax
+
+*Read this if you are writing `-` / `+` / context lines inside a semantic hunk.*
 
 An RSmPL hunk body uses diff prefixes:
 
@@ -1399,6 +1430,8 @@ This may remove a 50-line function using one pattern line.
 ---
 
 ## 13. Rust Pattern Language
+
+*Read this if your pattern does not parse, or parses but never matches.*
 
 RSmPL patterns are written in Rust-like syntax with metavariables and ellipses.
 
@@ -1547,6 +1580,8 @@ block.
 ---
 
 ## 14. Function Item Matching
+
+*Read this if you are renaming a function or changing its header slots.*
 
 Function matching is intentionally strict about modifiers.
 
@@ -3126,6 +3161,8 @@ bare `impl Old` / `impl New` pair (Section 14.8) rewrites them.
 
 ## 15. Metavariables
 
+*Read this if you need a hole (`E T P V Q G W I N`) or its declaration form.*
+
 Metavariables bind Rust syntax or semantic objects.
 
 RSmPL deliberately allows compact metavariable use such as `E`, `T`, and `I`, because that is token-efficient for LLM-generated patches. This creates a possible ambiguity when the source code itself contains an identifier with the same spelling as a declared metavariable. This section defines the resolution rule and the escape syntax.
@@ -3571,6 +3608,8 @@ directive-free rename uses the terse form plus `rule=`.
 
 ## 16. Ellipsis Semantics
 
+*Read this if you need `...` and want to know exactly what it preserves.*
+
 `...` is an explicit wildcard for syntax in defined positions.
 
 It never implicitly matches missing visibility, missing qualifiers, missing generics, or a missing where clause. Attributes and doc comments are governed separately by the `# attrs=...` policy described in Section 14.6.
@@ -3798,6 +3837,8 @@ Unlike the Section 16.3 argument-`...` fence (which replays absorbed call args),
 ---
 
 ## 17. Matching Semantics
+
+*Read this if a match missed (or over-matched) and you want the reason.*
 
 ### 17.1 Matching pipeline
 
@@ -4095,6 +4136,8 @@ never the exact trip line.
 
 ## 18. Rewrite Semantics
 
+*Read this if your rewrite applied but the output text surprises you.*
+
 ### 18.1 Replacement
 
 A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
@@ -4280,6 +4323,8 @@ WI-5a (now a firing shape, pinned end to end) and no longer fails; C19 is the WI
 
 ## 19. Semantic Symbol Matching
 
+*Read this if your path has re-exported spellings and needs `# symbol`.*
+
 RSmPL supports semantic symbols for precise renames.
 
 ### 19.1 Symbol directive
@@ -4384,6 +4429,8 @@ prefix is literally preserved, else the member is skipped.
 ---
 
 ## 20. Moving Code
+
+*Read this if you are moving code between files (`# bind` / `# use`, `as`).*
 
 Moving code is one of the main motivations for RSmPL-Git.
 
@@ -4761,6 +4808,8 @@ diff --git src/new.rs
 
 ## 21. Macros
 
+*Read this if your change touches a macro definition or a macro invocation.*
+
 Rust macros complicate AST matching.
 
 ### 21.1 Macro modes
@@ -4926,6 +4975,8 @@ reason: `# macro=expanded` requires build integration (macro expansion span mapp
 
 ## 22. Formatting and Trivia Preservation
 
+*Read this if whitespace, comments, or attributes changed unexpectedly.*
+
 ### 22.1 Recommended default
 
 > **v0.1 implementation note:** only `# format=preserve` is implemented. Non-`preserve` values are rejected fail-fast with a diagnostic pointing at `cargo fmt` instead of being silently ignored. Post-apply `cargo fmt` is the permanent answer for formatting (same composition as Section 21.3 for macro bodies): an in-tool formatting pass is rejected, not deferred, so no new flags or directives are needed.
@@ -4983,6 +5034,8 @@ formatting dialect, and human-reviewed patches want `cargo fmt` output.
 ---
 
 ## 23. Application Model and Ordering
+
+*Read this if several hunks interact, or application order matters.*
 
 RSmPL-Git uses a **planning model** rather than a naive immediate sequential application model for semantic hunks.
 
@@ -5104,6 +5157,8 @@ Overlapping pure deletions union-merge instead (T464): two edits that both only 
 ---
 
 ## 24. Validation Rules
+
+*Read this if `--check` failed and you want the validation rule behind it.*
 
 An implementation must reject an RSmPL hunk if any required validation fails.
 
@@ -5312,6 +5367,8 @@ if:
 ---
 
 ## 25. Conflict and Error Model
+
+*Read this if you got an `RSMPL_*_CONFLICT` code and need the fix.*
 
 The engine should report structured errors.
 
@@ -6081,6 +6138,8 @@ fix.
 
 ## 26. Lowering to a Concrete Git Diff
 
+*Read this if you want to know how a semantic patch becomes an ordinary Git diff.*
+
 An RSmPL-Git engine should support lowering.
 
 ### 26.1 Lowering pipeline
@@ -6137,6 +6196,8 @@ Given the same input tree, patch, formatter settings, and semantic environment, 
 ---
 
 ## 27. Security and Safety Considerations
+
+*Read this if you handle untrusted patches, odd paths, or large inputs.*
 
 ### 27.1 No hidden global search
 
@@ -6209,6 +6270,8 @@ conflict (Sections 6, 25.2).
 ---
 
 ## 28. Recommended LLM Emission Style
+
+*Read this if you want the cheapest trustworthy authoring habits.*
 
 Fences tagged `diff rsmpl` below are executable: `spec_examples`
 extracts and checks every one (Section 29 intro).
@@ -6340,6 +6403,8 @@ and later:
 ---
 
 ## 29. Examples
+
+*Read this if you learn fastest from complete worked patches.*
 
 All examples use the diet-minimal recipe from Section 6 (single-path
 header, elided new side, inferred metavariables with no `# expr`
@@ -6545,6 +6610,8 @@ The `rename_second_function` hunk is still targeted at original line 20, exactly
 
 ## 30. Formal Grammar Sketch
 
+*Read this if you are implementing a patch parser.*
+
 This grammar is illustrative, not a complete parser specification.
 
 ```ebnf
@@ -6632,6 +6699,8 @@ A `literal_token_quote` quotes the entire `rust_lexical_token`. For raw identifi
 ---
 
 ## 31. Implementation Notes
+
+*Read this if you are implementing the matching or application engine.*
 
 ### 31.1 Parser strategy
 
@@ -6760,6 +6829,8 @@ instantly-exiting `git`; `wait` fails only on OS-level errors):
 
 ## 32. Non-Goals
 
+*Read this if you are proposing a feature that may be out of scope.*
+
 RSmPL-Git v0.1 does not aim to:
 
 1. replace normal Git patches;
@@ -6774,6 +6845,8 @@ RSmPL-Git v0.1 does not aim to:
 ---
 
 ## 33. Versioning
+
+*Read this if you need the report `version` number and the compatibility story.*
 
 The recommended versioning scheme is:
 
@@ -6817,6 +6890,8 @@ Possible future extensions:
 
 ## 34. Glossary
 
+*Read this if a term in the contract is unclear.*
+
 ### AST
 
 Abstract Syntax Tree. A structured representation of parsed Rust code.
@@ -6857,6 +6932,8 @@ The process of applying RSmPL semantic transformations and emitting a concrete o
 
 ## Appendix A: Canonical Minimal Syntax
 
+*Read this if you want the diet cheat-sheet for authoring patches.*
+
 The canonical RSmPL hunk shape is the diet minimal from Section 6:
 
 <!-- rsmpl:invalid RSMPL_PARSE_CONFLICT -->
@@ -6896,6 +6973,8 @@ The canonical ordinary hunk shape remains:
 
 ## Appendix B: Required Behavior Summary
 
+*Read this if you are checking engine conformance against the contract.*
+
 A compliant RSmPL-Git v0.1 implementation must:
 
 1. parse Git-style file sections (a single `diff --git <path>` is allowed);
@@ -6919,6 +6998,8 @@ A compliant RSmPL-Git v0.1 implementation must:
 ---
 
 ## Appendix C: Key Semantic Rule for `fn foo(...)`
+
+*Read this if you want the flagship `fn foo(...)` rule explained end to end.*
 
 This is the most important Rust matching rule in this draft.
 
@@ -6969,6 +7050,8 @@ Modifiers and structural signature features must be explicitly written or explic
 ---
 
 ## Appendix D: Agent CLI Surface (stdin, JSON report, ranges)
+
+*Read this if you are invoking `applyrs` / `diffrs` / `gitrs` flags, JSON reports, or ranges.*
 
 The patch format above is engine-agnostic, but the reference `applyrs`
 binary (reached via the `gitrs apply` dispatcher) exposes agent-oriented conveniences. They do not change patch
