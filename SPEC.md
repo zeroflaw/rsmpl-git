@@ -7801,7 +7801,12 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   emits the terse `- [vis] fn Old` / `+ [vis] fn New` diet form with
   `# sweep` + `# follow=uses` (never a `V` hole — the intent proved
   one concrete vis; `# sweep` already carries file scope at any
-  spread). One-line definitions (`fn foo(x: i32) -> i32 { x }`) join
+  spread). WI-5 name-only widening: the vis/qualifier run may carry
+  token-equal `const`/`async`/`unsafe`/`extern ["ABI"]` qualifiers
+  (name-only delta over the full slot vector — vis, qualifier-list,
+  generics, params, return, `where` all token-equal); the emission
+  carries the qualifiers concretely (`- async fn foo` /
+  `+ async fn bar`, never a `Q` hole). One-line definitions (`fn foo(x: i32) -> i32 { x }`) join
   the same way when the bodies are token-identical (the suffix covers
    the body). `pub(…)` paths naming the old ident itself, signature
    evolutions, method calls, fields, bare value paths, macro heads,

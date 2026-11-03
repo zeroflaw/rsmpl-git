@@ -218,6 +218,11 @@ pub(crate) fn try_item_intent_sweep(
     // most one def of either kind per patch).
     let mut def_is_fn_joint = false;
     let mut joint_new_prefix = String::new();
+    // WI-5: `fn` pure rename with stable qualifiers (name-only arm
+    // over the full slot vector — the classifier lives in the
+    // visqual sibling per the D5 seam rule; pure rides the joint
+    // flag with equal prefixes since counting/gate/emission are
+    // identical).
     let mut def_is_bare_joint = false;
     let mut joint_bare_new_prefix = String::new();
     for (i, pair) in pairs.iter().enumerate() {
@@ -245,6 +250,21 @@ pub(crate) fn try_item_intent_sweep(
             new_ident = j.new;
             def_prefix = j.old_prefix.clone();
             joint_new_prefix = j.new_prefix;
+            def_is_fn_joint = true;
+        } else if let Some(j) =
+            super::item_joint_visqual::classify_fn_pure_rename(&pair.minus, &pair.plus)
+        {
+            // A second def of either kind vetoes (never a partial pair).
+            if def_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return None;
+            }
+            def_idx = Some(i);
+            def_kind = "fn".to_string();
+            old_ident = j.old;
+            new_ident = j.new;
+            def_prefix = j.prefix.clone();
+            joint_new_prefix = j.prefix;
             def_is_fn_joint = true;
         } else if let Some(j) =
             super::item_joint_visqual::classify_bare_vis_joint(&pair.minus, &pair.plus)
@@ -584,7 +604,7 @@ pub(crate) fn try_item_intent_sweep(
     // spellings were proved by the joint classifier (which admits
     // qualifier-bearing old prefixes the closed vis set rejects).
     if is_fn_intent && !def_is_fn_joint {
-        if !is_fn_vis_prefix(&def_prefix) {
+        if !super::item_joint_visqual::is_fn_vis_prefix(&def_prefix) {
             return None;
         }
         // Self-referential vis (`pub(in foo)` renaming `foo`) is an
@@ -805,39 +825,6 @@ fn split_delta(minus: &str, plus: &str) -> Option<(String, String, String, Strin
         return None;
     }
     Some((old_prefix, old_kind, old_ident, new_ident))
-}
-
-/// WI-1: closed vis set the terse `fn` rename accepts (SPEC 14.1
-/// diet form — vis rides literally, never a `V` hole). `pub(in
-/// <path>)` paths are `::`-separated ident runs with an optional
-/// leading `crate`/`self`/`super`/`$crate` head.
-fn is_fn_vis_prefix(prefix: &str) -> bool {
-    if prefix.is_empty() || prefix == "pub " {
-        return true;
-    }
-    if prefix == "pub(crate) " || prefix == "pub(super) " {
-        return true;
-    }
-    let Some(inner) = prefix
-        .strip_prefix("pub(in ")
-        .and_then(|r| r.strip_suffix(") "))
-    else {
-        return false;
-    };
-    let mut segs = inner.split("::").peekable();
-    let mut first = true;
-    while let Some(seg) = segs.next() {
-        if seg.is_empty() {
-            return false;
-        }
-        let head_ok =
-            first && matches!(seg, "crate" | "self" | "super" | "$crate") && segs.peek().is_some();
-        if !head_ok && super::ident_len(seg) != Some(seg.len()) {
-            return false;
-        }
-        first = false;
-    }
-    !first
 }
 
 /// Count `split_item` definitions of (`kind`, `ident`) across the
@@ -1624,8 +1611,12 @@ mod tests {
         assert!(try_item_intent_sweep(&sections, &pre, &mut used).is_none());
         assert!(used.is_empty());
         // The gate itself fires on the parsed prefix shape.
-        assert!(!is_fn_vis_prefix("pub(in foo-bar) "));
-        assert!(is_fn_vis_prefix("pub(in crate::foo) "));
+        assert!(!super::super::item_joint_visqual::is_fn_vis_prefix(
+            "pub(in foo-bar) "
+        ));
+        assert!(super::super::item_joint_visqual::is_fn_vis_prefix(
+            "pub(in crate::foo) "
+        ));
         assert!(super::super::fn_joint::contains_ident(
             "pub(in crate::foo) ",
             "foo"

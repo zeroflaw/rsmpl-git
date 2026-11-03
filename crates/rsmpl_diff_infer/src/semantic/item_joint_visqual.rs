@@ -105,6 +105,144 @@ pub(crate) fn classify_fn_visqual_joint(minus: &str, plus: &str) -> Option<FnVis
     finish_fn_visqual_joint(old_prefix, new_prefix, m.name, p.name)
 }
 
+/// A validated `fn` pure rename with stable qualifiers: the name-only
+/// arm over the full slot vector (WI-5). Both lines name differing
+/// column-0 `fn`s with token-equal vis/qualifier runs and token-equal
+/// remaining slots; the emission is the concrete terse pair through
+/// the shared follow hunk (never a `V`/`Q` hole). Bare-vis/plain
+/// headers stay with `split_delta` (both parse via `split_item` →
+/// `None` here — neither arm claims the other's input); one-slot
+/// evolutions stay with the joint above (disjoint by construction:
+/// that one requires exactly one prefix slot to differ, this one
+/// requires zero). `;` decls, indented (method) headers, reflowed
+/// headers (brace parity mixed), unknown qualifier tokens, and
+/// self-referential vis all decline (never a partial claim).
+pub(crate) struct FnPureRename {
+    pub(crate) prefix: String,
+    pub(crate) old: String,
+    pub(crate) new: String,
+}
+
+/// Classify a native pair as a `fn` pure rename with stable qualifiers
+/// (`async fn foo` → `async fn bar`, `unsafe`/`const`/`extern "ABI"`
+/// likewise, `pub` + qualifiers included) — `Some` with the shared
+/// raw prefix plus the old/new names, else `None`. Single-line
+/// `{`-headers compare full signature slots; multi-line headers
+/// classify on their braceless first line under the same name-only
+/// law (tails token-equal; the D13 joint probe owns the remainder
+/// lines, same as the joint's R3 posture).
+pub(crate) fn classify_fn_pure_rename(minus: &str, plus: &str) -> Option<FnPureRename> {
+    if minus.trim_end() == plus.trim_end() {
+        return None;
+    }
+    // Column-0 `fn`s only: indented lines are methods (slot-sweep /
+    // method-intent domain, never this arm).
+    if minus.starts_with([' ', '\t']) || plus.starts_with([' ', '\t']) {
+        return None;
+    }
+    // Bare-vis/plain headers stay with `split_delta`: when both sides
+    // parse as the same-kind/same-prefix/same-suffix item pair with
+    // differing idents, the other arm owns them (`pub fn foo` →
+    // `pub fn bar`). Anything else (qualifier-bearing headers, which
+    // `split_item` cannot parse — note `const fn` lines parse as
+    // `const` items with ident `fn`, never as a rename pair) proceeds
+    // here. This keeps the two arms disjoint: neither claims the
+    // other's input.
+    if let (
+        Some((old_prefix, old_kind, old_ident, old_suffix)),
+        Some((new_prefix, new_kind, new_ident, new_suffix)),
+    ) = (
+        super::split_item(minus.trim_end()),
+        super::split_item(plus.trim_end()),
+    ) {
+        if old_kind == new_kind
+            && old_prefix == new_prefix
+            && old_suffix == new_suffix
+            && !old_ident.is_empty()
+            && !new_ident.is_empty()
+            && old_ident != new_ident
+        {
+            return None;
+        }
+    }
+    let m_brace = minus.contains('{');
+    let p_brace = plus.contains('{');
+    if m_brace != p_brace {
+        // Reflowed header (one side wrapped, the other not), never pure.
+        return None;
+    }
+    if !m_brace {
+        // Braceless first lines (`fn old(` …). `;` decls are never a
+        // def first line.
+        if minus.contains(';') || plus.contains(';') {
+            return None;
+        }
+        let (old_prefix, old, old_tail) = split_fn_needle(minus.trim_end())?;
+        let (new_prefix, new, new_tail) = split_fn_needle(plus.trim_end())?;
+        if old.is_empty() || new.is_empty() || old == new {
+            return None;
+        }
+        // Name-only: raw prefixes exactly equal, tails token-equal.
+        if old_prefix != new_prefix {
+            return None;
+        }
+        if norm(&old_tail) != norm(&new_tail) {
+            return None;
+        }
+        return finish_fn_pure_rename(old_prefix, old, new);
+    }
+    let m = header_slots(minus)?;
+    let p = header_slots(plus)?;
+    if m.name.is_empty() || p.name.is_empty() || m.name == p.name {
+        return None;
+    }
+    // Name-only: every slot but the name token-equal.
+    if norm(&m.vis) != norm(&p.vis) {
+        return None;
+    }
+    if norm(&m.qual) != norm(&p.qual) {
+        return None;
+    }
+    if norm(&m.generics) != norm(&p.generics) {
+        return None;
+    }
+    if norm(&m.params) != norm(&p.params) {
+        return None;
+    }
+    if norm(&m.ret) != norm(&p.ret) {
+        return None;
+    }
+    if norm(&m.where_) != norm(&p.where_) {
+        return None;
+    }
+    let old_prefix = raw_fn_prefix(minus.trim_end(), &m.name)?;
+    let new_prefix = raw_fn_prefix(plus.trim_end(), &p.name)?;
+    // Raw prefixes exactly equal (whitespace-only prefix changes stay
+    // ordinary — conservative, mirrors `split_delta`'s exact-prefix law).
+    if old_prefix != new_prefix {
+        return None;
+    }
+    finish_fn_pure_rename(old_prefix, m.name, p.name)
+}
+
+/// Shared name-only law over a raw header prefix: the vis spelling
+/// stays in the WI-1 closed set, qualifier tokens stay inside
+/// `const`/`async`/`unsafe`/`extern ["ABI"]`, and self-referential vis
+/// (`pub(in old)`) vetoes (WI-4 domain).
+fn finish_fn_pure_rename(prefix: String, old: String, new: String) -> Option<FnPureRename> {
+    let (vis, qual) = split_vis_qual_prefix(&prefix)?;
+    if !is_fn_vis_prefix(&vis) {
+        return None;
+    }
+    if !qual_tokens_ok(&qual) {
+        return None;
+    }
+    if contains_ident(&prefix, &old) || contains_ident(&prefix, &new) {
+        return None;
+    }
+    Some(FnPureRename { prefix, old, new })
+}
+
 /// Shared one-slot law over raw header prefixes: exactly one of {vis,
 /// qualifier-list} evolves (zero is the pure-rename path, never claimed
 /// here; two vetoes to the signature domain / ordinary); both vis
@@ -270,8 +408,8 @@ fn qual_tokens_ok(qual: &str) -> bool {
 
 /// WI-1 closed vis set the terse `fn` rename accepts (SPEC 14.1 diet
 /// form — vis rides literally, never a `V` hole). Mirrors the
-/// item-intent gate (local copy per the per-module convention).
-fn is_fn_vis_prefix(prefix: &str) -> bool {
+/// item-intent gate (shared via this sibling per the D5 seam rule).
+pub(crate) fn is_fn_vis_prefix(prefix: &str) -> bool {
     if prefix.is_empty() || prefix == "pub " {
         return true;
     }
@@ -920,5 +1058,118 @@ mod tests {
             files["a.rs"]
         );
         assert!(!files["a.rs"].contains("Old"), "got: {}", files["a.rs"]);
+    }
+
+    fn pure(minus: &str, plus: &str) -> Option<FnPureRename> {
+        classify_fn_pure_rename(minus, plus)
+    }
+
+    #[test]
+    fn pure_rename_fires_matrix() {
+        // WI-5 F3: stable qualifiers are name-only, never a fragment.
+        for (minus, plus, prefix) in [
+            (
+                "async fn foo(x: i32) -> i32 {",
+                "async fn bar(x: i32) -> i32 {",
+                "async ",
+            ),
+            (
+                "unsafe fn foo(x: i32) -> i32 {",
+                "unsafe fn bar(x: i32) -> i32 {",
+                "unsafe ",
+            ),
+            (
+                "const fn foo(x: i32) -> i32 {",
+                "const fn bar(x: i32) -> i32 {",
+                "const ",
+            ),
+            (
+                "extern \"C\" fn foo(x: i32) -> i32 {",
+                "extern \"C\" fn bar(x: i32) -> i32 {",
+                "extern \"C\" ",
+            ),
+            (
+                "pub async fn foo(x: i32) -> i32 {",
+                "pub async fn bar(x: i32) -> i32 {",
+                "pub async ",
+            ),
+            (
+                "pub(crate) const unsafe fn foo() {",
+                "pub(crate) const unsafe fn bar() {",
+                "pub(crate) const unsafe ",
+            ),
+        ] {
+            let j = pure(minus, plus)
+                .unwrap_or_else(|| panic!("stable-qual pure must classify for {minus:?}"));
+            assert_eq!(j.prefix, prefix, "for {minus:?}");
+            assert_eq!((j.old.as_str(), j.new.as_str()), ("foo", "bar"));
+        }
+    }
+
+    #[test]
+    fn pure_rename_declines() {
+        // Bare-vis/plain headers stay with `split_delta`.
+        assert!(pure("fn foo() {", "fn bar() {").is_none());
+        assert!(pure("pub fn foo() {", "pub fn bar() {").is_none());
+        // One-slot evolutions stay with the joint.
+        assert!(pure("fn foo() {", "async fn bar() {").is_none());
+        assert!(pure("pub fn foo() {", "pub(crate) fn bar() {").is_none());
+        assert!(pure("async fn foo() {", "async fn bar() -> i32 {").is_none());
+        assert!(pure("async fn foo(x: i32) {", "async fn bar(x: u32) {").is_none());
+        // Same-name, decl, method, reflow, unknown-qual, self-ref.
+        assert!(pure("async fn foo() {", "async fn foo() {").is_none());
+        assert!(pure("async fn foo();", "async fn bar();").is_none());
+        assert!(pure("    async fn foo() {", "    async fn bar() {").is_none());
+        assert!(pure("async fn foo() {", "async fn bar(").is_none());
+        assert!(pure("gen fn foo() {", "gen fn bar() {").is_none());
+        assert!(pure(
+            "pub(in foo) async fn foo() {",
+            "pub(in foo) async fn bar() {"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn pure_multiline_first_line_fires() {
+        let j =
+            pure("pub async fn foo(", "pub async fn bar(").expect("multi-line pure must classify");
+        assert_eq!(j.prefix, "pub async ");
+        assert_eq!((j.old.as_str(), j.new.as_str()), ("foo", "bar"));
+        // First-line tail deltas are a second slot.
+        assert!(pure("pub async fn foo(", "pub async fn bar<T>(").is_none());
+        // Pure bare-vis first lines stay with `split_delta`.
+        assert!(pure("pub fn foo(", "pub fn bar(").is_none());
+    }
+
+    #[test]
+    fn pure_emission_raises_one_follow_hunk() {
+        use super::super::infer_semantic_with_pre_images;
+        // End to end: the async F3 probe raises one `item_intent`
+        // follow hunk (no ordinary def, no slot/call split) and the
+        // emission applies byte-identical (`verified` posture: def +
+        // call rewritten, nothing else touched).
+        let pre: HashMap<String, String> = [(
+            "a.rs".to_string(),
+            "async fn foo(x: i32) -> i32 {\n    x\n}\nfn m() {\n    let a = foo(1);\n}\n"
+                .to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let raw = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-async fn foo(x: i32) -> i32 {\n+async fn bar(x: i32) -> i32 {\n@@ -5,1 +5,1 @@\n-    let a = foo(1);\n+    let a = bar(1);\n"
+            .to_string();
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+            .expect("async pure rename must raise");
+        assert!(out.contains("- async fn foo\n"), "got:\n{out}");
+        assert!(out.contains("+ async fn bar\n"), "got:\n{out}");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("emission must apply");
+        assert_eq!(
+            files["a.rs"],
+            "async fn bar(x: i32) -> i32 {\n    x\n}\nfn m() {\n    let a = bar(1);\n}\n",
+            "got:\n{}",
+            files["a.rs"]
+        );
     }
 }
