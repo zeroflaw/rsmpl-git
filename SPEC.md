@@ -7896,8 +7896,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   emission on a `pre` clone must reproduce the plus lines at every
   claimed site with every other line of every file byte-identical —
   off-diff same-name uses fail the unchanged leg) plus twin-definition
-  vetoes and the T375 byte-win guard. Cross-file trait/type/impl groups
-  stay ordinary (WI-12).
+  vetoes and the T375 byte-win guard. Cross-file groups (WI-12 slice
+  1) raise the same way with one section per def file sharing the
+  rule (both hunks carry the follow — the composed header needs both
+  halves rewritten); single-section-pure shapes stay with the
+  single-file arm byte-identically.
 - Rename+single-expr-body joint (WI-20, detector `fn_joint`): a rename-only header plus exactly one body line pair (both sides one `syn::Expr`, differing text) plus callee-only calls raises to the single follow hunk carrying the header `...` pair plus the raw body pair lines (`- x + 1` / `+ x + 2`); the engine applies the body pair span-scoped inside the renamed body (`body`-labelled edit, hard `RSMPL_MATCH_CONFLICT` on zero/multiple/out-of-body hits, never a sweep). Slot-evolving headers, attr deltas, `let`/multi-line bodies, and twin in-body hits suppress as today; totality is the same scratch-apply probe plus the byte-win guard.
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`; two-slot
   widened WI-8 slice 1): exactly
