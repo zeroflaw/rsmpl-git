@@ -2273,8 +2273,9 @@ call-template hunk (`- foo(E0)` / `+ bar(E0, 0)`) — with `# sweep` and
 no follow (a follow would claim the call hunk's sites and the lowering
 would refuse the overlap). The authored spelling is the same pair an
 agent would write by hand (explicit slots, `{ ... }` body). Anything
-else in the joint shape (body delta, hetero call shapes, vis/qual/
-generics/where delta, twin defs, N=1 joints) suppresses the old callee
+else in the joint shape (body delta, hetero call shapes, qual/
+generics/where delta, vis-only or triple-slot (vis+params+return)
+delta, twin defs, N=1 joints) suppresses the old callee
 name for the file, so the section stays wholly ordinary — the
 fragmented fallback (ordinary definition plus a rename-claiming call
 sweep) is unrepresentable by construction. Multi-file joints stay
@@ -7881,9 +7882,11 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   vetoes and the T375 byte-win guard. Cross-file trait/type/impl groups
   stay ordinary (WI-12).
 - Rename+single-expr-body joint (WI-20, detector `fn_joint`): a rename-only header plus exactly one body line pair (both sides one `syn::Expr`, differing text) plus callee-only calls raises to the single follow hunk carrying the header `...` pair plus the raw body pair lines (`- x + 1` / `+ x + 2`); the engine applies the body pair span-scoped inside the renamed body (`body`-labelled edit, hard `RSMPL_MATCH_CONFLICT` on zero/multiple/out-of-body hits, never a sweep). Slot-evolving headers, attr deltas, `let`/multi-line bodies, and twin in-body hits suppress as today; totality is the same scratch-apply probe plus the byte-win guard.
-- Joint rename+evolution raising (WI-4a, detector `fn_joint`): exactly
+- Joint rename+evolution raising (WI-4a, detector `fn_joint`; two-slot
+  widened WI-8 slice 1): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
-  return slot delta (a pure rename is `item_intent`'s, never joint)
+  return slot delta (a pure rename is `item_intent`'s, never joint;
+  a vis-only rename stays the terse intent's too)
    joined with N-1 call-callee use lines of the old name (bare,
    qualified, turbofish, `let`-wrapped) in the same file — or across
    files (WI-4c: the def in one file with callee-only calls across
@@ -7892,16 +7895,20 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
   the single header-pair hunk with `# sweep` + `# follow=uses`, the
   pair carrying both deltas (`- fn foo(x: i32) { ... }` /
   `+ fn bar(x: u32) { ... }`, native spacing preserved). The vis stays
-  in the WI-1 closed set and preserved; qual/generics/where are
-  preserved; only the call-callee-only class fires (arguments
+  in the WI-1 closed set and may now evolve alongside the
+  params/return delta (two slots: vis+params, vis+return; the check
+  normalizes `syn` pretty spacing, so `pub ( crate )` admits like
+  `pub(crate)`); qual/generics/where are
+  preserved and a third evolving slot (vis+params+return) vetoes;
+  only the call-callee-only class fires (arguments
   token-identical — the follow pass never adds arguments, so a hunk
   claiming otherwise would fail its own probe). Totality is the same
   scratch-apply probe plus the unique-definition guard and the
   byte-win guard. Claim-then-veto suppresses instead of fragmenting:
   a joint shape that fails any fire gate (non-single-expr body delta,
   attr delta, arg-delta
-  calls, generics/where delta, vis/qual deltas the `item_intent`
-  vis/qual joint declines, twin defs, probe or byte-win fail)
+  calls, generics/where/qual delta, vis-only or triple-slot delta,
+  twin defs, probe or byte-win fail)
   suppresses its old callee name for each involved file, so the call
   hunks stay wholly ordinary instead of emitting a rename-claiming
   sweep over a definition delta they cannot see.

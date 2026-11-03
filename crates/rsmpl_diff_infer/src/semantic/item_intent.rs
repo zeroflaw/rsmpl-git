@@ -305,8 +305,8 @@ pub(crate) fn try_item_intent_sweep(
         if pair.minus.trim() == pair.plus.trim() {
             return false;
         }
-        if !super::fn_joint::contains_ident(&pair.minus, &old_ident)
-            || !super::fn_joint::contains_ident(&pair.plus, &new_ident)
+        if !super::fn_joint_sig::contains_ident(&pair.minus, &old_ident)
+            || !super::fn_joint_sig::contains_ident(&pair.plus, &new_ident)
         {
             return false;
         }
@@ -609,7 +609,7 @@ pub(crate) fn try_item_intent_sweep(
         }
         // Self-referential vis (`pub(in foo)` renaming `foo`) is an
         // evolution, never a pure rename (WI-4's domain).
-        if super::fn_joint::contains_ident(&def_prefix, &old_ident) {
+        if super::fn_joint_sig::contains_ident(&def_prefix, &old_ident) {
             return None;
         }
     } else if !is_fn_intent {
@@ -1617,7 +1617,7 @@ mod tests {
         assert!(super::super::item_joint_visqual::is_fn_vis_prefix(
             "pub(in crate::foo) "
         ));
-        assert!(super::super::fn_joint::contains_ident(
+        assert!(super::super::fn_joint_sig::contains_ident(
             "pub(in crate::foo) ",
             "foo"
         ));

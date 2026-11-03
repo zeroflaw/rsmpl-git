@@ -32,8 +32,11 @@
 use std::collections::{HashMap, HashSet};
 
 use super::fn_joint_b2::{attr_def_shape, attr_joint_fire, probe_attr_joint};
+use super::fn_joint_sig::{
+    arg_add_template, header_argadd_gates, header_fire_gates, header_name_delta,
+    slots_equal_except_name,
+};
 use super::fn_joint_ws::{joint_workspace_candidate, Workspace};
-use super::generalized::parse_sig_slots;
 use super::item_intent::{count_kind_defs, probe_reproduces, Pair};
 use super::unique_rule;
 
@@ -792,213 +795,6 @@ fn finish_hunk(raw: Vec<String>, minuses: Vec<String>, pluses: Vec<String>) -> H
     }
 }
 
-/// The `(old, new)` fn names when both lines parse as column-0 `fn`
-/// headers with differing names, else `None`. Column-0 only: indented
-/// headers are methods (WI-13 residue), and `split_item` def lines
-/// (`struct`/`type`/…) never parse as `fn` headers.
-pub(crate) fn header_name_delta(minus: &str, plus: &str) -> Option<(String, String)> {
-    if minus.is_empty()
-        || plus.is_empty()
-        || minus.starts_with([' ', '\t'])
-        || plus.starts_with([' ', '\t'])
-    {
-        return None;
-    }
-    let m = parse_sig_slots(minus)?;
-    let p = parse_sig_slots(plus)?;
-    if m.name == p.name || m.name.is_empty() || p.name.is_empty() {
-        return None;
-    }
-    Some((m.name, p.name))
-}
-
-/// True when both lines parse as `fn` headers whose every slot matches
-/// (a pure rename — item_intent's domain, never joint).
-pub(crate) fn slots_equal_except_name(minus: &str, plus: &str) -> bool {
-    let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
-        return false;
-    };
-    m.vis == p.vis
-        && m.qual == p.qual
-        && m.generics == p.generics
-        && m.params == p.params
-        && m.ret == p.ret
-        && m.where_ == p.where_
-}
-
-/// Fire gates on the def header pair: vis in the WI-1 closed set and
-/// preserved; qual/generics/where preserved; evolving ⊆ {params,
-/// return} and nonempty.
-pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
-    let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
-        return false;
-    };
-    if !is_fn_vis_prefix(&m.vis) || m.vis != p.vis {
-        return false;
-    }
-    // Self-referential vis (`pub(in foo)` renaming `foo`) is an
-    // evolution, never a pure-slot joint (WI-1 posture, kept).
-    if contains_ident(&m.vis, &m.name) {
-        return false;
-    }
-    if m.qual != p.qual || m.generics != p.generics || m.where_ != p.where_ {
-        return false;
-    }
-    m.params != p.params || m.ret != p.ret
-}
-
-/// WI-4b Joint-B1 header gates: vis in the WI-1 closed set and
-/// preserved; qual/generics/where preserved; params evolve, return
-/// preserved (a return delta plus an arg-add is two evolutions the
-/// shared-rule pair cannot restate — suppressed, pinned).
-pub(crate) fn header_argadd_gates(minus: &str, plus: &str) -> bool {
-    let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
-        return false;
-    };
-    if !is_fn_vis_prefix(&m.vis) || m.vis != p.vis {
-        return false;
-    }
-    if contains_ident(&m.vis, &m.name) {
-        return false;
-    }
-    if m.qual != p.qual || m.generics != p.generics || m.where_ != p.where_ {
-        return false;
-    }
-    if m.ret != p.ret {
-        return false;
-    }
-    m.params != p.params
-}
-
-/// Qualifier prefix for a call-template path: `""`, `"::"`, or
-/// `"{q}::"`.
-pub(crate) fn prefix_qual(qual: &str, callee: &str) -> String {
-    if qual.is_empty() {
-        callee.to_string()
-    } else if qual.ends_with("::") {
-        format!("{qual}{callee}")
-    } else {
-        format!("{qual}::{callee}")
-    }
-}
-
-/// WI-4b: uniform arg-add template over the non-def pairs (indices
-/// `!= def_idx`): every call renames old→new with an equal qualifier,
-/// and every plus side extends the token-identical minus prefix by the
-/// same non-empty concrete suffix. Returns the `(call_minus,
-/// call_plus)` pattern pair, or `None` on any hetero shape (prefix
-/// rewrite, hetero suffix/arity/qual/turbo — suppressed, pinned).
-/// WI-4f reuses it for the workspace B1 gate over cross-file claims.
-pub(crate) fn arg_add_template(
-    flat: &[FlatPair],
-    def_idx: usize,
-    old: &str,
-    new: &str,
-) -> Option<(String, String)> {
-    let mut qual: Option<String> = None;
-    let mut turbo: Option<String> = None;
-    let mut arity: Option<usize> = None;
-    let mut suffix: Option<Vec<String>> = None;
-    for (i, fp) in flat.iter().enumerate() {
-        if i == def_idx {
-            continue;
-        }
-        let (qm, cm, tm, am) = call_parts(&fp.minus)?;
-        let (qp, cp, tp, ap) = call_parts(&fp.plus)?;
-        if cm != old || cp != new || qm != qp {
-            return None;
-        }
-        if ap.len() <= am.len() {
-            return None;
-        }
-        if !am.iter().zip(ap.iter()).all(|(a, b)| a == b) {
-            return None;
-        }
-        if tm != tp {
-            return None;
-        }
-        let grown: Vec<String> = ap[am.len()..].to_vec();
-        if grown.is_empty() {
-            return None;
-        }
-        if qual.as_ref().is_some_and(|q| *q != qm)
-            || turbo.as_ref().is_some_and(|t| *t != tm)
-            || arity.is_some_and(|k| k != am.len())
-            || suffix.as_ref().is_some_and(|s| *s != grown)
-        {
-            return None;
-        }
-        qual = Some(qm);
-        turbo = Some(tm);
-        arity = Some(am.len());
-        suffix = Some(grown);
-    }
-    let (q, t, k, s) = (qual?, turbo?, arity?, suffix?);
-    let holes: Vec<String> = (0..k).map(|i| format!("E{i}")).collect();
-    let minus_args = holes.join(", ");
-    let plus_args = if holes.is_empty() {
-        s.join(", ")
-    } else {
-        format!("{}, {}", holes.join(", "), s.join(", "))
-    };
-    let old_path = super::shape::literal_path_last(&prefix_qual(&q, old));
-    let new_path = super::shape::literal_path_last(&prefix_qual(&q, new));
-    Some((
-        format!("{old_path}{t}({minus_args})"),
-        format!("{new_path}{t}({plus_args})"),
-    ))
-}
-
-/// WI-1 closed vis set the terse `fn` rename admits (SPEC 14.1 diet
-/// form — vis rides literally, never a `V` hole).
-pub(crate) fn is_fn_vis_prefix(vis: &str) -> bool {
-    if vis.is_empty() {
-        return true;
-    }
-    if vis == "pub" || vis == "pub(crate)" || vis == "pub(super)" {
-        return true;
-    }
-    let Some(inner) = vis
-        .strip_prefix("pub(in ")
-        .and_then(|r| r.strip_suffix(')'))
-    else {
-        return false;
-    };
-    let mut segs = inner.split("::").peekable();
-    let mut first = true;
-    while let Some(seg) = segs.next() {
-        if seg.is_empty() {
-            return false;
-        }
-        let head_ok =
-            first && matches!(seg, "crate" | "self" | "super" | "$crate") && segs.peek().is_some();
-        if !head_ok && super::ident_len(seg) != Some(seg.len()) {
-            return false;
-        }
-        first = false;
-    }
-    !first
-}
-
-/// Ident-boundary containment (never substring).
-pub(crate) fn contains_ident(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
-    let mut token = String::new();
-    for c in haystack.chars().chain(std::iter::once(' ')) {
-        if c == '_' || c.is_ascii_alphanumeric() {
-            token.push(c);
-        } else {
-            if token == needle {
-                return true;
-            }
-            token.clear();
-        }
-    }
-    false
-}
-
 /// One call-callee site of `old`→`new`: both sides are the same call
 /// shape (bare, qualified, turbofish, `let`-wrapped) whose callee head
 /// swaps `old`→`new` with an equal qualifier. Argument deltas are
@@ -1584,26 +1380,126 @@ mod tests {
     }
 
     #[test]
-    fn vis_and_qual_deltas_suppress() {
-        // `pub fn` → `pub(crate) fn` + same-name rename is WI-14's vis
-        // evolution, not a slot joint; `async` gain likewise.
-        for (minus, plus) in [
-            ("pub fn foo(x: i32) {", "pub(crate) fn bar(x: u32) {"),
-            ("fn foo(x: i32) {", "async fn bar(x: u32) {"),
-        ] {
-            let sections = vec![section(
-                "src.rs",
-                &format!(
-                    "@@ -1,1 +1,1 @@\n-{minus}\n+{plus}\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n"
-                ),
-            )];
-            let pre = pre_map(&[("src.rs", PRE)]);
-            let full = infer_semantic_with_pre_images(&sections, &pre);
-            assert!(
-                full.as_ref().is_none_or(|s| !s.contains("rule=")),
-                "vis/qual veto must stay wholly ordinary for {minus} → {plus}, got: {full:?}"
-            );
-        }
+    fn qual_delta_suppresses() {
+        // `async` gain is not a slot joint (WI-8 slice 1 admits vis
+        // alongside params/return only; qualifiers still veto).
+        let (minus, plus) = ("fn foo(x: i32) {", "async fn bar(x: u32) {");
+        let sections = vec![section(
+            "src.rs",
+            &format!(
+                "@@ -1,1 +1,1 @@\n-{minus}\n+{plus}\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n"
+            ),
+        )];
+        let pre = pre_map(&[("src.rs", PRE)]);
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "qual veto must stay wholly ordinary for {minus} → {plus}, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn joint_a_vis_params_two_slot_fires() {
+        // WI-8 slice 1: name + vis + params (two slots) raises to one
+        // follow hunk — the `pub → pub(crate)` half of the old
+        // `vis_and_qual_deltas_suppress` pin now fires.
+        let pre = "pub fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-pub fn foo(x: i32) {\n+pub(crate) fn bar(x: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("vis+params joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(
+            out.contains("+ pub(crate) fn bar(x: u32) { ... }"),
+            "got:\n{out}"
+        );
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "pub(crate) fn bar(x: u32) {\n    x\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "joint must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn joint_a_vis_return_two_slot_fires_at_n1() {
+        // WI-8 slice 1 head probe: name + vis + return at a single call
+        // site raises to one follow hunk.
+        let pre = "fn foo() -> i32 {\n    1\n}\nfn m() {\n    let v = foo();\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-fn foo() -> i32 {\n+pub fn bar() -> i64 {\n@@ -5,1 +5,1 @@\n-    let v = foo();\n+    let v = bar();\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("vis+return joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("+ pub fn bar() -> i64 { ... }"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"], "pub fn bar() -> i64 {\n    1\n}\nfn m() {\n    let v = bar();\n}\n",
+            "joint must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn joint_a_vis_params_return_triple_suppresses() {
+        // Three evolving slots (vis + params + return) stay wholly
+        // ordinary — no joint states them.
+        let pre = "fn foo(x: i32) -> i32 {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) -> i32 {\n+pub fn bar(x: u32) -> u64 {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "triple-slot joint must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn vis_only_rename_declines_joint() {
+        // Vis-only rename is the terse intent's domain, never Joint-A:
+        // the joint pre-pass declines and the terse emission is intact.
+        let pre = "fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-fn foo(x: i32) {\n+pub fn bar(x: i32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("terse vis intent must fire");
+        assert!(
+            out.contains("- fn foo\n+ pub fn bar\n"),
+            "terse intent kept, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn self_referential_vis_suppresses() {
+        // `pub(in foo)` renaming `foo` is an evolution, never a joint.
+        let pre = "pub(in foo) fn foo(x: i32) {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,1 +1,1 @@\n-pub(in foo) fn foo(x: i32) {\n+pub(in foo) fn bar(x: u32) {\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let pre = pre_map(&[("src.rs", pre)]);
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "self-referential vis must stay wholly ordinary, got: {full:?}"
+        );
     }
 
     #[test]
@@ -1701,10 +1597,12 @@ mod tests {
     }
 
     #[test]
-    fn joint_cross_file_veto_suppresses_fragment() {
-        // WI-4c: vis-changing def with callee-only cross-file calls
-        // suppresses instead of fragmenting into ordinary def +
-        // rename-claiming call sweep.
+    fn joint_cross_file_vis_params_two_slot_fires() {
+        // WI-8 slice 1: the shared `header_fire_gates` widening rides the
+        // workspace Joint-A path too — vis+params across files fires as a
+        // probe-verified follow hunk at the def file, never a fragment.
+        // (The WI-4c suppress-only posture for vis-changing defs is
+        // superseded for the two-slot shapes the gate now admits.)
         let a_pre = "fn foo(x: i32) {\n    x\n}\n";
         let b_pre = "fn m() {\n    foo(1);\n    foo(2);\n}\n";
         let sections = vec![
@@ -1719,18 +1617,17 @@ mod tests {
         ];
         let pre = pre_map(&[("a.rs", a_pre), ("b.rs", b_pre)]);
         let mut used = Vec::new();
-        let out = try_fn_joint_intent(&sections, &pre, &mut used);
-        let Some((rewritten, rule, _, suppressed)) = out else {
-            panic!("cross-file veto must suppress, not decline silently");
+        let Some((out, def_path, rule, _)) = try_fn_joint_intent(&sections, &pre, &mut used) else {
+            panic!("cross-file vis+params joint must fire");
         };
-        assert!(rule.is_empty(), "suppress-only carries no rule");
-        assert_eq!(rewritten, sections, "suppress-only leaves bytes identical");
-        assert!(suppressed.contains(&("a.rs".to_string(), "foo".to_string())));
-        assert!(suppressed.contains(&("b.rs".to_string(), "foo".to_string())));
-        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert_eq!(def_path, "a.rs");
+        assert!(!rule.is_empty());
+        validated_live(&out.join(""), &pre);
+        let full = infer_semantic_with_pre_images(&sections, &pre).expect("joint must raise");
+        assert!(full.contains("# follow=uses"), "got:\n{full}");
         assert!(
-            full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "veto must stay wholly ordinary, got: {full:?}"
+            full.contains("+ pub(crate) fn bar(x: u32) { ... }"),
+            "got:\n{full}"
         );
     }
 

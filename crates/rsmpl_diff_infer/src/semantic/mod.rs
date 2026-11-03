@@ -27,6 +27,7 @@ mod fn_joint;
 mod fn_joint_b2;
 mod fn_joint_body;
 mod fn_joint_emit;
+mod fn_joint_sig;
 mod fn_joint_types;
 mod fn_joint_ws;
 pub(crate) mod frame;

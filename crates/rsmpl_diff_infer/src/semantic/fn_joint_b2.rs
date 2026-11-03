@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
-use super::fn_joint::prefix_qual;
-use super::fn_joint::{call_parts, contains_ident, header_name_delta, is_fn_vis_prefix};
+use super::fn_joint::call_parts;
+use super::fn_joint_sig::{contains_ident, header_name_delta, is_fn_vis_prefix, prefix_qual};
 use super::fn_joint_types::{Fire, FlatPair, Joint};
 use super::generalized::parse_sig_slots;
 

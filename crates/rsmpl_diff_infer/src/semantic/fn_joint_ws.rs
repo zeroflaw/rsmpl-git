@@ -14,12 +14,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::fn_joint::{
-    arg_add_template, header_argadd_gates, header_fire_gates, header_name_delta, is_call_site_of,
-    is_callee_only, slots_equal_except_name,
-};
+use super::fn_joint::{is_call_site_of, is_callee_only};
 use super::fn_joint_b2::{attr_def_shape, attr_joint_fire, probe_attr_joint_ws};
 use super::fn_joint_emit::{call_hunk_text, def_hunk_text};
+use super::fn_joint_sig::{
+    arg_add_template, header_argadd_gates, header_fire_gates, header_name_delta,
+    slots_equal_except_name,
+};
 use super::fn_joint_types::{Fire, FlatPair, HunkPairs, Joint};
 use super::item_intent::{count_kind_defs, probe_reproduces, Pair};
 

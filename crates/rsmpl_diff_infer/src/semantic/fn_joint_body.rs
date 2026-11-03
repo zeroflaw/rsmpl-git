@@ -15,7 +15,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::fn_joint::{is_call_site_of, is_callee_only, slots_equal_except_name};
+use super::fn_joint::{is_call_site_of, is_callee_only};
+use super::fn_joint_sig::slots_equal_except_name;
 use super::fn_joint_types::{Fire, FlatPair, Joint};
 
 /// Try the body-joint shape for one single-file group. `def_idx` is the
