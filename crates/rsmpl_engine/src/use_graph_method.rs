@@ -19,7 +19,7 @@ use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::LineIndex;
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
-use crate::use_graph_method_calls::{collect_method_calls, file_attr_opaque};
+use crate::use_graph_method_calls::file_attr_opaque;
 
 /// Last `::` segment, cut at generics/whitespace (`"S < T >"` → `"S"`).
 pub(crate) fn last_ident(normed: &str) -> String {
@@ -568,8 +568,21 @@ pub(crate) fn resolve_method_workspace(
         }
     }
     // Anchored calls per file (never veto: unproven sites skip below).
+    // WI-10 slice 3: workspace Deref targets + workspace trait-`Self`
+    // union, computed once so cross-file impls/traits anchor call sites.
+    let ws_parsed: Vec<&syn::File> = files.iter().map(|(_, p, _, _)| *p).collect();
+    let ws_deref = crate::use_graph_anchor::collect_workspace_deref_targets(&ws_parsed);
+    let ws_traits = crate::use_graph_method_chain::collect_workspace_trait_self(&ws_parsed);
     for (path, parsed, original, index) in files {
-        let calls = collect_method_calls(parsed, walker_trait, &domain_self, old, has_shadow);
+        let calls = crate::use_graph_method_calls::collect_method_calls_with_workspace(
+            parsed,
+            walker_trait,
+            &domain_self,
+            old,
+            has_shadow,
+            &ws_deref,
+            &ws_traits,
+        );
         for (line, ctx) in &calls.opaque {
             skipped.push(FollowSkip::new(
                 format!("{path}:{line}: use of `{old}` inside {ctx} left untouched (opaque)"),
@@ -802,8 +815,19 @@ pub(crate) fn method_orphans(
             MethodDomain::Trait(t) => method_has_shadow(&refs, t, old),
             MethodDomain::Inherent(s) => inherent_has_shadow(&refs, s, old),
         };
+        let ws_parsed_o: Vec<&syn::File> = refs.iter().map(|(_, p, _, _)| *p).collect();
+        let ws_deref_o = crate::use_graph_anchor::collect_workspace_deref_targets(&ws_parsed_o);
+        let ws_traits_o = crate::use_graph_method_chain::collect_workspace_trait_self(&ws_parsed_o);
         for (f, parsed, _, _) in &refs {
-            let calls = collect_method_calls(parsed, walker_trait, &domain_self, old, has_shadow);
+            let calls = crate::use_graph_method_calls::collect_method_calls_with_workspace(
+                parsed,
+                walker_trait,
+                &domain_self,
+                old,
+                has_shadow,
+                &ws_deref_o,
+                &ws_traits_o,
+            );
             let mut lines: Vec<(u32, &'static str)> = Vec::new();
             for span in &calls.claims {
                 lines.push((span.start().line as u32, "off-target"));

@@ -39,13 +39,27 @@ struct ImplScope {
 
 impl AnchorIndex {
     /// Build the index for one parsed file.
+    #[allow(dead_code)]
     pub(crate) fn for_file(parsed: &syn::File) -> Self {
+        Self::for_file_with_workspace(parsed, &std::collections::HashMap::new())
+    }
+
+    /// Build the index with workspace Deref targets in scope.
+    /// Per-file targets win; a `C` absent from the per-file map falls
+    /// back to the workspace map (one step, no chaining).
+    pub(crate) fn for_file_with_workspace(
+        parsed: &syn::File,
+        workspace_deref: &HashMap<String, String>,
+    ) -> Self {
         // WI-10: shadow set is build-time only (never stored — the
         // scopes already carry the deref'd containers).
         let no_unwrap = collect_no_unwrap(parsed);
         // WI-10 slice 2: same-file Deref targets, likewise build-time
         // only (scopes carry the deref'd containers).
-        let deref_targets = collect_deref_targets(parsed);
+        let mut deref_targets = collect_deref_targets(parsed);
+        for (c, t) in workspace_deref {
+            deref_targets.entry(c.clone()).or_insert_with(|| t.clone());
+        }
         let mut idx = Self::default();
         let mut builder = Builder {
             idx: &mut idx,
@@ -359,17 +373,30 @@ fn path_allows_unwrap(path: &syn::Path, name: &str, no_unwrap: &HashSet<String>)
 
 /// WI-10 slice 2: same-file `impl Deref for C` targets (`C -> T`
 /// outer tail of `type Target = T;`). `Target = Self` is a no-op and
-/// is never stored. Only the trait's last ident must read `Deref`;
-/// a user type merely *named* `Deref` in another module is a named
-/// gap (workspace resolution in slice 3 disambiguates by path).
-fn collect_deref_targets(parsed: &syn::File) -> HashMap<String, String> {
+/// is never stored. Slice 3 tightens the trait path: single-segment
+/// `impl Deref` counts; multi-segment counts only with a `std`/`core`/
+/// `alloc`/`crate`/`self`/`super` first segment (`impl std::ops::Deref`
+/// counts, `impl foo::Deref` does not — workspace resolution in
+/// slice 3 disambiguates by path).
+pub(crate) fn collect_deref_targets(parsed: &syn::File) -> HashMap<String, String> {
     struct V {
         out: HashMap<String, String>,
     }
     impl<'ast> Visit<'ast> for V {
         fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
             let names_deref = match &node.trait_ {
-                Some((_, p, _)) => p.segments.last().is_some_and(|s| s.ident == "Deref"),
+                Some((_, p, _)) => {
+                    if !p.segments.last().is_some_and(|s| s.ident == "Deref") {
+                        false
+                    } else if p.segments.len() == 1 {
+                        true
+                    } else {
+                        matches!(
+                            p.segments.first().map(|s| s.ident.to_string()).as_deref(),
+                            Some("std" | "core" | "alloc" | "crate" | "self" | "super")
+                        )
+                    }
+                }
                 None => false,
             };
             if names_deref {
@@ -395,6 +422,28 @@ fn collect_deref_targets(parsed: &syn::File) -> HashMap<String, String> {
     };
     v.visit_file(parsed);
     v.out
+}
+
+/// WI-10 slice 3: workspace `impl Deref for C` targets. Union of the
+/// per-file targets; a `C` with two or more distinct `T` workspace-wide
+/// is ambiguous and dropped (never guessed). Per-file maps win over
+/// this map at anchor build time (`for_file_with_workspace`).
+pub(crate) fn collect_workspace_deref_targets(files: &[&syn::File]) -> HashMap<String, String> {
+    let mut seen: HashMap<String, HashSet<String>> = HashMap::new();
+    for parsed in files {
+        for (c, t) in collect_deref_targets(parsed) {
+            seen.entry(c).or_default().insert(t);
+        }
+    }
+    let mut out = HashMap::new();
+    for (c, mut ts) in seen {
+        if ts.len() == 1 {
+            if let Some(t) = ts.drain().next() {
+                out.insert(c, t);
+            }
+        }
+    }
+    out
 }
 
 /// WI-10: names in the closed wrapper set that this file shadows, so
@@ -612,5 +661,56 @@ mod tests {
         let src =
             "struct C;\nimpl Deref for C {\n    type Target = Self;\n}\nfn f(c: C) {\n    c;\n}\n";
         assert_eq!(anchor(src, "c", 6).as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn std_path_deref_impl_anchors() {
+        let src = "struct C;\nstruct S;\nimpl std::ops::Deref for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 7).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn foreign_path_deref_impl_is_ignored() {
+        // `impl foo::Deref` does not name the std vocabulary: no anchor.
+        let src = "struct C;\nstruct S;\nimpl foo::Deref for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 7).as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn workspace_deref_target_anchors_cross_file() {
+        let a: syn::File =
+            syn::parse_str("struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\n")
+                .expect("a parses");
+        let b: syn::File = syn::parse_str("fn f(c: C) {\n    c;\n}\n").expect("b parses");
+        let ws = collect_workspace_deref_targets(&[&a, &b]);
+        assert_eq!(ws.get("C").map(String::as_str), Some("S"));
+        let idx = AnchorIndex::for_file_with_workspace(&b, &ws);
+        assert_eq!(idx.anchor_of("c", 2).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn workspace_deref_conflict_drops_target() {
+        let a: syn::File =
+            syn::parse_str("struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\n")
+                .expect("a parses");
+        let b: syn::File =
+            syn::parse_str("struct C;\nstruct T;\nimpl Deref for C {\n    type Target = T;\n}\n")
+                .expect("b parses");
+        let ws = collect_workspace_deref_targets(&[&a, &b]);
+        assert!(!ws.contains_key("C"));
+    }
+
+    #[test]
+    fn per_file_deref_target_wins_over_workspace() {
+        let a: syn::File =
+            syn::parse_str("struct C;\nstruct W;\nimpl Deref for C {\n    type Target = W;\n}\n")
+                .expect("a parses");
+        let b: syn::File = syn::parse_str(
+            "struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n",
+        )
+        .expect("b parses");
+        let ws = collect_workspace_deref_targets(&[&a]);
+        let idx = AnchorIndex::for_file_with_workspace(&b, &ws);
+        assert_eq!(idx.anchor_of("c", 7).as_deref(), Some("S"));
     }
 }

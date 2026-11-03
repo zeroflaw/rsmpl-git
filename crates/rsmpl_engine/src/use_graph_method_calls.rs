@@ -355,6 +355,10 @@ fn qself_ty_last(qself: &Option<syn::QSelf>) -> Option<String> {
 /// Collect anchored call claims + evidence for one file.
 /// `trait_name` is `""` for inherent domains (WI-6): the trait-half
 /// checks never fire and qself claims prove through the self type.
+/// WI-10 slice 3: workspace-aware entry point is
+/// [`collect_method_calls_with_workspace`]; this wrapper passes empty
+/// workspace maps (same-file behavior, unchanged).
+#[allow(dead_code)]
 pub(crate) fn collect_method_calls(
     parsed: &syn::File,
     trait_name: &str,
@@ -362,13 +366,40 @@ pub(crate) fn collect_method_calls(
     old: &str,
     has_shadow: bool,
 ) -> MethodCallOutcome {
+    collect_method_calls_with_workspace(
+        parsed,
+        trait_name,
+        domain_self,
+        old,
+        has_shadow,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    )
+}
+
+/// WI-10 slice 3: workspace-aware anchored call claims. `workspace_deref`
+/// is the unambiguous cross-file `C -> T` map (per-file targets win);
+/// `workspace_traits` is the union `method -> {traits}` map (holder
+/// counts go workspace-wide).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_method_calls_with_workspace(
+    parsed: &syn::File,
+    trait_name: &str,
+    domain_self: &[String],
+    old: &str,
+    has_shadow: bool,
+    workspace_deref: &std::collections::HashMap<String, String>,
+    workspace_traits: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+) -> MethodCallOutcome {
+    let mut chain = crate::use_graph_method_chain::ChainMaps::for_file(parsed);
+    chain.extend_with_workspace_trait_self(workspace_traits);
     let mut w = MethodCallWalker {
         trait_name,
         domain_self,
         old,
         has_shadow,
-        anchors: AnchorIndex::for_file(parsed),
-        chain: crate::use_graph_method_chain::ChainMaps::for_file(parsed),
+        anchors: AnchorIndex::for_file_with_workspace(parsed, workspace_deref),
+        chain,
         impl_stack: Vec::new(),
         trait_stack: Vec::new(),
         claims: Vec::new(),

@@ -30,7 +30,7 @@ use crate::follow_reasons::{reason as skip_reason, FollowSkip};
 use crate::lines::{FileState, LineIndex};
 use crate::matcher_item::span_bytes;
 use crate::use_graph::FollowVeto;
-use crate::use_graph_anchor::{field_root, AnchorIndex};
+use crate::use_graph_anchor::field_root;
 
 /// Which member shape is being followed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +114,8 @@ pub(crate) fn resolve_member_workspace(
     let has_shadow = !shadow.is_empty();
 
     // Map + verify use spans per file (WI-14 anchored).
+    let ws_parsed: Vec<&syn::File> = files.iter().map(|(_, p, _, _)| *p).collect();
+    let ws_deref = crate::use_graph_anchor::collect_workspace_deref_targets(&ws_parsed);
     let mut per_file: Vec<(String, Vec<MemberEdit>)> = Vec::new();
     let mut opaque: Vec<(String, u32, String)> = Vec::new();
     let mut skipped: Vec<FollowSkip> = Vec::new();
@@ -123,7 +125,8 @@ pub(crate) fn resolve_member_workspace(
         for (line, ctx) in &collector.opaque {
             opaque.push((path.clone(), *line, ctx.clone()));
         }
-        let anchors = AnchorIndex::for_file(parsed);
+        let anchors =
+            crate::use_graph_anchor::AnchorIndex::for_file_with_workspace(parsed, &ws_deref);
         // Bare-`Old` variant mentions need a `use …::E::*` glob anchor
         // (WI-14): proven with the anchor, `second-hop` evidence without.
         if kind == MemberKind::Variant {
@@ -335,10 +338,13 @@ pub(crate) fn collect_member_orphans(
         census.visit_file(parsed);
         census.defs.iter().any(|(_, c)| c != container)
     });
+    let ws_parsed_o: Vec<&syn::File> = files.iter().map(|(_, p, _, _)| *p).collect();
+    let ws_deref_o = crate::use_graph_anchor::collect_workspace_deref_targets(&ws_parsed_o);
     for (path, parsed, original, index) in files {
         let mut collector = MemberCollector::new(kind, container, old);
         collector.visit_file(parsed);
-        let anchors = AnchorIndex::for_file(parsed);
+        let anchors =
+            crate::use_graph_anchor::AnchorIndex::for_file_with_workspace(parsed, &ws_deref_o);
         // WI-14 anchored orphans: proven accesses are `off-target`;
         // unproven are `shadowed` (sibling defines the name) or
         // `off-target`; bare-without-glob is `second-hop`.

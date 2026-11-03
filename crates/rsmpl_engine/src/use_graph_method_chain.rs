@@ -57,6 +57,37 @@ impl ChainMaps {
         }
         None
     }
+
+    /// WI-10 slice 3: extend with workspace trait-`Self` entries
+    /// (`(trait, method)` pairs defined in other files). Counts stay
+    /// per-method distinct-trait, now workspace-wide.
+    pub(crate) fn extend_with_workspace_trait_self(
+        &mut self,
+        workspace: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    ) {
+        for (method, traits) in workspace {
+            for t in traits {
+                self.trait_self.insert((t.clone(), method.clone()));
+            }
+        }
+    }
+}
+
+/// WI-10 slice 3: workspace trait-`Self` map (`method -> {traits}`)
+/// as the union of per-file `trait_self` sets. A method with two or
+/// more distinct traits stays `Unproven` at resolve time.
+pub(crate) fn collect_workspace_trait_self(
+    files: &[&syn::File],
+) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+    let mut out: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for parsed in files {
+        let maps = ChainMaps::for_file(parsed);
+        for (t, m) in &maps.trait_self {
+            out.entry(m.clone()).or_default().insert(t.clone());
+        }
+    }
+    out
 }
 
 struct MapBuilder<'a> {
@@ -575,6 +606,62 @@ mod tests {
         assert_eq!(
             resolve_recv(src, "c.clone()", 3),
             ChainVerdict::Proven("C".to_string())
+        );
+    }
+
+    #[test]
+    fn workspace_trait_self_proves_cross_file() {
+        let a = parse("struct C;\ntrait Tr {\n    fn get(&self) -> Self;\n}\n");
+        let b = parse("fn f(c: C) {\n    c.get().run();\n}\n");
+        let ws = collect_workspace_trait_self(&[&a, &b]);
+        assert!(ws
+            .get("get")
+            .is_some_and(|ts| ts.len() == 1 && ts.contains("Tr")));
+        let anchors = AnchorIndex::for_file(&b);
+        let mut maps = ChainMaps::for_file(&b);
+        maps.extend_with_workspace_trait_self(&ws);
+        let recv: syn::Expr = syn::parse_str("c.get()").expect("recv parses");
+        assert_eq!(
+            resolve_chain_type(&recv, 2, &anchors, &maps, "Other", None, None, true),
+            ChainVerdict::Proven("C".to_string())
+        );
+    }
+
+    #[test]
+    fn workspace_trait_self_twins_stay_unproven() {
+        let a = parse("trait A {\n    fn get(&self) -> Self;\n}\n");
+        let b = parse("trait B {\n    fn get(&self) -> Self;\n}\nstruct C;\nfn f(c: C) {\n    c.get().run();\n}\n");
+        let ws = collect_workspace_trait_self(&[&a, &b]);
+        assert!(ws.get("get").is_some_and(|ts| ts.len() == 2));
+        let call_file = parse("struct C;\nfn f(c: C) {\n    c.get().run();\n}\n");
+        let anchors = AnchorIndex::for_file(&call_file);
+        let mut maps = ChainMaps::for_file(&call_file);
+        maps.extend_with_workspace_trait_self(&ws);
+        let recv: syn::Expr = syn::parse_str("c.get()").expect("recv parses");
+        assert_eq!(
+            resolve_chain_type(&recv, 3, &anchors, &maps, "Other", None, None, true),
+            ChainVerdict::Unproven
+        );
+    }
+
+    #[test]
+    fn workspace_deref_composes_with_chain() {
+        // Workspace `C -> S` plus same-file `Tr::get()->Self`: `c.get()`
+        // in the call file proves `C` through the workspace anchor.
+        let a = parse("struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\n");
+        let b = parse(
+            "struct C;\ntrait Tr {\n    fn get(&self) -> Self;\n}\nfn f(c: C) {\n    c.get().run();\n}\n",
+        );
+        let ws_deref = crate::use_graph_anchor::collect_workspace_deref_targets(&[&a, &b]);
+        let ws_traits = collect_workspace_trait_self(&[&a, &b]);
+        let anchors = AnchorIndex::for_file_with_workspace(&b, &ws_deref);
+        let mut maps = ChainMaps::for_file(&b);
+        maps.extend_with_workspace_trait_self(&ws_traits);
+        assert_eq!(anchors.anchor_of("c", 6).as_deref(), Some("S"));
+        let recv: syn::Expr = syn::parse_str("c.get()").expect("recv parses");
+        assert_eq!(
+            resolve_chain_type(&recv, 6, &anchors, &maps, "Other", None, None, true),
+            ChainVerdict::Proven("S".to_string())
         );
     }
 }
