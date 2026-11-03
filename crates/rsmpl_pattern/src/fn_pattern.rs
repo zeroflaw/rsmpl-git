@@ -742,23 +742,27 @@ pub fn parse_fn_pattern(
     })
 }
 
-/// WI-20 slice 1 + WI-13 slices 1–2: rename+body-pair joint shape
+/// WI-20 slice 1 + WI-13 slices 1–4: rename+body-pair joint shape
 /// (SPEC 14.7).
 ///
 /// A one-hunk joint carries the fn header pair in the proven single-line
-/// `{ ... }` form plus one (WI-20 / WI-13 slice 1) or two (WI-13 slice
-/// 2) extra `-`/`+` body line pairs (each a whole-line general
-/// expression, e.g. `- x + 1` / `+ x + 2`, or a plain same-binder `let`
-/// statement with an init). Each body pair applies only inside the
-/// renamed definition's body (engine span-scoped `body` edits); a second
-/// in-body hit or any out-of-body hit is a hard match conflict, never a
-/// sweep.
+/// `{ ... }` form plus one (WI-20 / WI-13 slice 1), two (WI-13 slice 2),
+/// or three (WI-13 slice 3) extra `-`/`+` body line pairs (each a
+/// whole-line general expression, e.g. `- x + 1` / `+ x + 2`, or a plain
+/// same-binder `let` statement with an init). The header is rename-only
+/// (slices 1–3) or carries a Joint-A-shaped slot evolution (WI-13 slice
+/// 4: evolving ⊆ {vis, qual, params, ret} with params or ret evolving,
+/// at most two evolve, generics/where preserved). Each body pair applies
+/// only inside the renamed definition's body (engine span-scoped `body`
+/// edits); a second in-body hit or any out-of-body hit is a hard match
+/// conflict, never a sweep.
 ///
 /// `minus_raw`/`plus_raw` are the removal-only / addition-only texts (no
 /// context lines in the canonical shape). Returns `None` for every other
-/// shape (including attr-carrying headers and slot-evolving headers —
-/// those stay on the existing error/suppress paths), so callers fall back
-/// to the single-shape parse and its established errors.
+/// shape (including attr-carrying headers and non-Joint-A-shaped
+/// slot-evolving headers — those stay on the existing error/suppress
+/// paths), so callers fall back to the single-shape parse and its
+/// established errors.
 pub struct FnBodyJoint {
     pub minus: FnPattern,
     pub plus: FnPattern,
@@ -820,6 +824,82 @@ fn joint_slots_equal_except_name(minus: &FnPattern, plus: &FnPattern) -> bool {
         && wh_eq
 }
 
+/// WI-13 slice 4: the Joint-A-shaped header evolution a triple may
+/// carry (SPEC 14.7) — the pattern-side mirror of the raiser's
+/// `header_fire_gates`: generics/where preserved, evolving ⊆ {vis,
+/// qual, params, ret} with params or ret evolving, at most two evolve.
+/// Only Concrete-vs-Concrete differences count as evolution; mixed
+/// slot kinds (Concrete/Meta/Any) decline — the raiser only ever
+/// emits concrete headers, and exotic hole-evolving triples stay on
+/// the loud single-shape error path.
+fn joint_header_evolution_ok(minus: &FnPattern, plus: &FnPattern) -> bool {
+    let gen_eq = match (&minus.generics, &plus.generics) {
+        (GenericPat::Absent, GenericPat::Absent) => true,
+        (GenericPat::Concrete(a), GenericPat::Concrete(b)) => joint_slot_eq(a, b),
+        (GenericPat::Meta(a), GenericPat::Meta(b)) => a == b,
+        (GenericPat::Any, GenericPat::Any) => true,
+        _ => return false,
+    };
+    let wh_eq = match (&minus.where_clause, &plus.where_clause) {
+        (WherePat::Absent, WherePat::Absent) => true,
+        (WherePat::Concrete(a), WherePat::Concrete(b)) => joint_slot_eq(a, b),
+        (WherePat::Meta(a), WherePat::Meta(b)) => a == b,
+        (WherePat::Any, WherePat::Any) => true,
+        _ => return false,
+    };
+    if !gen_eq || !wh_eq {
+        return false;
+    }
+    // Per-slot: Some(true) = evolution, Some(false) = equal,
+    // None = mixed kinds, decline.
+    let vis_evo = match (&minus.visibility, &plus.visibility) {
+        (VisPat::Absent, VisPat::Absent) => Some(false),
+        (VisPat::Concrete(a), VisPat::Concrete(b)) => Some(!joint_slot_eq(a, b)),
+        (VisPat::Meta(a), VisPat::Meta(b)) => {
+            if a == b {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let qual_evo =
+        if minus.qualifiers == plus.qualifiers && minus.qualifier_meta == plus.qualifier_meta {
+            Some(false)
+        } else if minus.qualifier_meta.is_none() && plus.qualifier_meta.is_none() {
+            Some(true)
+        } else {
+            None
+        };
+    let params_evo = if minus.params_ellipsis != plus.params_ellipsis {
+        None
+    } else {
+        match (&minus.params_text, &plus.params_text) {
+            (None, None) => Some(false),
+            (Some(a), Some(b)) => Some(!joint_slot_eq(a, b)),
+            _ => None,
+        }
+    };
+    let ret_evo = match (&minus.ret, &plus.ret) {
+        (RetPat::Any, RetPat::Any) | (RetPat::Absent, RetPat::Absent) => Some(false),
+        (RetPat::Concrete(a), RetPat::Concrete(b)) => Some(!joint_slot_eq(a, b)),
+        (RetPat::Meta(a), RetPat::Meta(b)) => {
+            if a == b {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let (Some(v), Some(q), Some(p), Some(r)) = (vis_evo, qual_evo, params_evo, ret_evo) else {
+        return false;
+    };
+    let n_evolve = [v, q, p, r].iter().filter(|&&e| e).count();
+    (p || r) && n_evolve <= 2
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn try_parse_fn_body_joint(
     minus_raw: &str,
@@ -854,15 +934,17 @@ pub fn try_parse_fn_body_joint(
     }
     let minus = parse_fn_pattern(hm, vis, qual, gen, wh, ty, ident, returns_none).ok()?;
     let plus = parse_fn_pattern(hp, vis, qual, gen, wh, ty, ident, false).ok()?;
-    // Rename-only headers: `{ ... }` bodies, no written attributes, every
-    // other slot equal.
+    // Rename-only headers (slices 1–3) or a Joint-A-shaped slot
+    // evolution (slice 4 triple): `{ ... }` bodies, no written
+    // attributes, every other slot equal-or-evolving under the joint
+    // law.
     if !minus.body_ellipsis || !plus.body_ellipsis {
         return None;
     }
     if !minus.attrs_written.is_empty() || !plus.attrs_written.is_empty() {
         return None;
     }
-    if !joint_slots_equal_except_name(&minus, &plus) {
+    if !joint_slots_equal_except_name(&minus, &plus) && !joint_header_evolution_ok(&minus, &plus) {
         return None;
     }
     let names_differ = match (&minus.name, &plus.name) {
@@ -1475,6 +1557,41 @@ mod tests {
     }
 
     #[test]
+    fn wi13_body_joint_fires_on_slot_evolution_triple() {
+        // WI-13 slice 4: rename + one Joint-A-shaped slot evolution
+        // (params retype here) + one body pair parses as a triple.
+        let joint = try_parse_fn_body_joint(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: u32) -> i32 { ... }\nx + 2",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .expect("slot-evolution triple must parse");
+        assert_eq!(
+            joint.bodies,
+            vec![("x + 1".to_string(), "x + 2".to_string())]
+        );
+        // Ret-only evolution rides the triple too.
+        try_parse_fn_body_joint(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: i32) -> u32 { ... }\nx + 2",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .expect("ret-evolution triple must parse");
+    }
+
+    #[test]
     fn wi20_body_joint_declines() {
         let no = |m: &str, p: &str| {
             try_parse_fn_body_joint(m, p, &[], &[], &[], &[], &[], &[], false).is_none()
@@ -1484,10 +1601,22 @@ mod tests {
             "fn foo(x: i32) -> i32 { ... }",
             "fn bar(x: i32) -> i32 { ... }"
         ));
-        // Slot evolution is not the rename-only slice.
+        // Slot evolution beyond the Joint-A law declines: generics
+        // evolution is never a triple.
+        assert!(no(
+            "fn foo<T>(x: T) -> T { ... }\nx + 1",
+            "fn bar<U>(x: U) -> U { ... }\nx + 2"
+        ));
+        // Three slot evolutions exceed the budget.
         assert!(no(
             "fn foo(x: i32) -> i32 { ... }\nx + 1",
-            "fn bar(x: u32) -> i32 { ... }\nx + 2"
+            "pub fn bar(x: u32) -> u64 { ... }\nx + 2"
+        ));
+        // Vis-only evolution is the terse intent's domain — the joint
+        // never claims it.
+        assert!(no(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "pub fn bar(x: i32) -> i32 { ... }\nx + 2"
         ));
         // Four body pairs stay on the existing paths (WI-13 slice 3
         // admits exactly three).

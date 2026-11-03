@@ -204,4 +204,18 @@ mod tests {
         assert!(err.contains("not found in the file"), "got: {err}");
         assert!(err.contains("fn-joint-body-absent-template"), "got: {err}");
     }
+
+    #[test]
+    fn wi13_joint_body_slot_evolution_triple_applies_scoped() {
+        // WI-13 slice 4: rename + params evolution + one body pair
+        // applies the header evolution, the body line, and the follow
+        // calls through the shared `plan_sig_edits` splice.
+        let pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: u32) -> i32 { ... }\n- x + 1\n+ x + 2\n";
+        let out = apply(patch, pre).expect("slot-evolution triple must apply");
+        assert_eq!(
+            out, "fn bar(x: u32) -> i32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "triple must evolve the header slot, rewrite the body line, and follow calls"
+        );
+    }
 }

@@ -1988,12 +1988,12 @@ mod tests {
     }
 
     #[test]
-    fn wi20_joint_body_slot_evolution_stays_on_trailing_gate() {
-        // Rename+slot-evolution+body is two evolutions: the helper
-        // declines (headers not rename-only) and the single-shape parse
-        // fails loud — never a silent partial rename.
-        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: u32) -> i32 { ... }\n- x + 1\n+ x + 2\n";
-        let err = apply(patch, JOINT_PRE).expect_err("slot+body must fail");
+    fn wi13_joint_body_generics_triple_stays_on_trailing_gate() {
+        // Generics evolution is outside the slice-4 triple law: the
+        // helper declines and the single-shape parse fails loud —
+        // never a silent partial rename.
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n- fn foo<T>(x: T) -> T { ... }\n+ fn bar<U>(x: U) -> U { ... }\n- x + 1\n+ x + 2\n";
+        let err = apply(patch, JOINT_PRE).expect_err("generics triple must fail");
         assert!(err.contains("trailing tokens"), "got: {err}");
     }
 }

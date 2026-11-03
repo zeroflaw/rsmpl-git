@@ -1,24 +1,29 @@
-//! WI-20 slice 1 + WI-13 slices 1–3: rename+body-pair joint detector
+//! WI-20 slice 1 + WI-13 slices 1–4: rename+body-pair joint detector
 //! (D5 — `fn_joint.rs` sits at the 2000-line gate; tests stay inline
 //! here per WI-22).
 //!
-//! Fires when one balanced def hunk holds exactly a rename-only `fn`
-//! header pair plus one (WI-20 / WI-13 slice 1), two (WI-13 slice 2),
-//! or three (WI-13 slice 3)
+//! Fires when one balanced def hunk holds exactly a rename-only (WI-20 /
+//! WI-13 slices 1–3) or Joint-A-shaped evolving (WI-13 slice 4: the
+//! raiser's `header_fire_gates` — evolving ⊆ {vis, qual, params, ret}
+//! with params or ret evolving, at most two evolve, generics/where
+//! preserved) `fn` header pair plus one (WI-20 / WI-13 slice 1), two
+//! (WI-13 slice 2), or three (WI-13 slice 3)
 //! non-call body line pairs (each a `syn::Expr` or a plain same-binder
 //! `let` with an init, differing text), and every other balanced pair
 //! in the group is a callee-only call of old→new with at least one
 //! call. Emission is the single `# sweep` + `# follow=uses` hunk
-//! (header `...` pair + raw body pair lines); the engine applies each
-//! body pair span-scoped inside the renamed body with a hard conflict
-//! otherwise. Anything else in the group (slot evolution, attr delta,
-//! a fourth body line, non-call shapes, unbalanced hunks) returns `None`
+//! (header `...` pair + raw body pair lines); the engine applies the
+//! header via `plan_sig_edits` (so a triple's slot evolution rides the
+//! same splice as a Joint-A header) and each body pair span-scoped
+//! inside the renamed body with a hard conflict otherwise. Anything
+//! else in the group (non-Joint-A slot evolution, attr delta, a fourth
+//! body line, non-call shapes, unbalanced hunks) returns `None`
 //! so the existing suppression path keeps the section wholly ordinary.
 
 use std::collections::{HashMap, HashSet};
 
 use super::fn_joint::{is_call_site_of, is_callee_only};
-use super::fn_joint_sig::slots_equal_except_name;
+use super::fn_joint_sig::{header_fire_gates, slots_equal_except_name};
 use super::fn_joint_types::{Fire, FlatPair, Joint};
 
 /// WI-13 slices 1–3: per-pair half of the joint gate (mirrors the
@@ -83,8 +88,13 @@ pub(crate) fn try_body_joint(
         return None;
     }
     let body_idxs: Vec<usize> = members.iter().copied().filter(|&i| i != def_idx).collect();
-    // Rename-only header (any slot evolution stays on the suppress path).
-    if !slots_equal_except_name(&flat[def_idx].minus, &flat[def_idx].plus) {
+    // Rename-only header (slices 1–3) or a Joint-A-shaped slot
+    // evolution (slice 4 triple — the raiser's `header_fire_gates`;
+    // B1-shaped headers decline here and keep today's B1-with-leftover
+    // path via the Joint-A/B arm below).
+    if !slots_equal_except_name(&flat[def_idx].minus, &flat[def_idx].plus)
+        && !header_fire_gates(&flat[def_idx].minus, &flat[def_idx].plus)
+    {
         return None;
     }
     // Whole-line body pairs, each differing text, none itself a call
@@ -295,8 +305,10 @@ mod tests {
     }
 
     #[test]
-    fn body_joint_slot_evolution_suppresses() {
-        // Rename+slot-evolution+body is two evolutions — stays ordinary.
+    fn body_joint_slot_evolution_triple_fires_verified_byte_identical() {
+        // WI-13 slice 4: rename + one Joint-A-shaped slot evolution
+        // (params retype here) + one body pair fires as one follow
+        // hunk carrying the evolved header and the body pair.
         let pre = pre_map(&[(
             "src.rs",
             "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
@@ -305,10 +317,136 @@ mod tests {
             "src.rs",
             "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+fn bar(x: u32) -> i32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("triple must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("# sweep"), "got:\n{out}");
+        assert!(
+            out.contains("- fn foo(x: i32) -> i32 { ... }"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("+ fn bar(x: u32) -> i32 { ... }"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("- x + 1"), "got:\n{out}");
+        assert!(out.contains("+ x + 2"), "got:\n{out}");
+        assert_eq!(out.matches("rule=").count(), 1, "one rule, got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: u32) -> i32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "triple must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn body_joint_ret_evolution_triple_fires() {
+        // WI-13 slice 4: a return-only evolution rides the triple too
+        // (Joint-A-shaped: params preserved, return evolving).
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+fn bar(x: i32) -> u32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let out = infer_semantic_with_pre_images(&sections, &pre).expect("ret triple must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(
+            out.contains("+ fn bar(x: i32) -> u32 { ... }"),
+            "got:\n{out}"
+        );
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> u32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "ret triple must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn body_joint_generics_evolution_triple_suppresses() {
+        // Generics evolution is outside the Joint-A law — the triple
+        // declines and the section stays wholly ordinary.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo<T>(x: T) -> T {\n    x\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo<T>(x: T) -> T {\n-    x\n+fn bar<U>(x: U) -> U {\n+    x + x\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
         let full = infer_semantic_with_pre_images(&sections, &pre);
         assert!(
             full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "slot+body double evolution must stay wholly ordinary, got: {full:?}"
+            "generics-evolving triple must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn body_joint_vis_only_triple_suppresses() {
+        // A vis-only evolution is the terse intent's domain (Joint-A
+        // reserves it) — with body pairs it declines, never fragments.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+pub fn bar(x: i32) -> i32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "vis-only triple must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn body_joint_three_slot_triple_suppresses() {
+        // Three slot evolutions exceed the Joint-A budget — the triple
+        // declines and the section stays wholly ordinary.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+pub fn bar(x: u32) -> u64 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "three-slot triple must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn body_joint_arg_add_header_fused_body_suppresses() {
+        // A B1-shaped header (params evolve + uniform arg-add calls)
+        // with a body pair fused in the def hunk keeps today's
+        // boundary: the body pair is neither a call-template arg nor
+        // a follow-owned line, so the section stays wholly ordinary —
+        // never a triple, never a partial B1.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+fn bar(x: i32, y: i32) -> i32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1, 0);\n+    bar(2, 0);\n",
+        )];
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "fused B1+body shape must stay wholly ordinary, got: {full:?}"
         );
     }
 

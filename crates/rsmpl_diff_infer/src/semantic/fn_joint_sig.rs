@@ -47,7 +47,9 @@ pub(crate) fn slots_equal_except_name(minus: &str, plus: &str) -> bool {
 /// generics/where preserved; evolving ⊆ {vis, qual, params, return}
 /// with params or return evolving (vis-only/qual-only renames stay
 /// their terse intents' domain — item_intent claims them first), at
-/// most two evolve (triples still suppress).
+/// most two evolve (three slot evolutions still suppress; a rename +
+/// up to two slot evolutions also rides the WI-13 slice-4 body joint
+/// when body pairs join).
 pub(crate) fn header_fire_gates(minus: &str, plus: &str) -> bool {
     let (Some(m), Some(p)) = (parse_sig_slots(minus), parse_sig_slots(plus)) else {
         return false;
