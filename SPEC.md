@@ -10104,6 +10104,12 @@ Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
 
+Property harness (WI-19 slice 1, `crates/rsmpl_diff_infer/tests/property_cycle.rs`):
+seeded native-side mutations (fn rename, call swap, control-header decoy, N=1 single)
+raised via `infer_rsmpl_with_pre_images` must parse, apply to the native post tree
+byte-identical, and re-infer byte-identical; hetero `&`/field-arg sweeps are excluded
+until emission spacing fidelity lands (DISCOVERED TASKS.md item).
+
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser
 deliberately leaves ordinary (`13`,
