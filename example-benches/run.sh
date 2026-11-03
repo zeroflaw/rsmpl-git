@@ -57,6 +57,14 @@ for d in example-benches/diffrs/*/; do
     rm -rf "$tmp"
 done
 
+# WI-20 history gate (local, not CI — this repo forbids CI wiring; run by
+# hand beside this script): `python3 tools/history_sweep.py --gate` sweeps
+# the pinned range in tools/history_gate.json (rev_range + floor). Fail on
+# conversion/check errors; fail when compressing commits drop below the
+# floor; warn when within 2 above it (do not lower the floor — raising it
+# is encouraged). `python3 tools/history_sweep.py --self-test` checks the
+# gate predicates on a synthetic two-commit repo.
+
 # WI-20 scale gates (review artifacts, not CI assertions — wall-clock
 # varies by machine, so overruns warn but never fail). Budgets recorded
 # from the landing machine (debug build): 43-scale-follow-wide ≤ 2s

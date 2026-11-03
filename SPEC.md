@@ -10116,6 +10116,16 @@ posture (`rule=` present or not), both cross-checked from the applied tree rathe
 the report's own fields.
 Property harness (WI-19 slice 2, `crates/rsmpl_diff_infer/tests/property_cycle_authored.rs`):
 seeded authored-side mutations (fn rename, call sweep, `# optional` zero-match, `# repeat` fold, stale-range, overlap veto) applied via `apply_patch_to_tree` must never panic, Ok must deterministically reach the independently recomputed post, Err must carry a known SPEC 25 code.
+History gate (WI-20, `python3 tools/history_sweep.py --gate`): the local floor gate over the
+pinned range in `tools/history_gate.json` (`rev_range` + `floor` + `pinned_at`; sliding
+`HEAD~20..HEAD` window at landing, advancing either field is a deliberate commit). The gate
+reuses the sweep implementation unchanged (T346 convert + T361 `applyrs --check` + real-apply
+byte-compare): conversion/check failures fail (exit 2 naming commits), compressing commits
+below the floor fail (exit 2 naming the shortfall), within 2 above the floor warn on stderr.
+Non-compressing commits list their WI-17 declined top guard-veto reason (`no-guard-veto`
+where nothing nearly fired) as the ranked detector backlog. No CI wiring exists or is
+wanted (forbidden in this repo); run the gate by hand beside `example-benches/run.sh`. The
+floor measures regression over recent history, never universal raising quality.
 
 Exclusions (canonical divergence the `cycle_e2e` harness pins, not
 bugs in the cycle itself): single-site shapes the raiser

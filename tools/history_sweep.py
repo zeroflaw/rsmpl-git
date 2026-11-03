@@ -23,6 +23,15 @@ full-tree materialize).
 
 Usage:
     python3 tools/history_sweep.py [rev-range] [--limit N] [--jobs N]
+    python3 tools/history_sweep.py --gate [--jobs N]
+    python3 tools/history_sweep.py --self-test
+
+  `--gate` runs the pinned WI-20 floor gate from tools/history_gate.json
+  (range + floor + pinned commit): conversion failures fail, compressing
+  below the floor fails, within 2 above the floor warns. No CI wiring
+  (forbidden in this repo) — run it by hand beside example-benches/run.sh.
+  `--self-test` builds a synthetic two-commit repo and checks the gate
+  predicates (compressing + ordinary arms) with no network.
 
 Sem-hunk counts use the anchored diet predicate
 `@@ … rule=r` (all RSmPL hunks carry diet `r1…` ids); substring counts inflate
@@ -33,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import os
 import shutil
 import stat
@@ -264,6 +274,259 @@ def sweep_chunk(
             run(["git", "-C", str(top), "worktree", "remove", "--force", str(pre)])
 
 
+def list_commits(top: Path, rev_range: str, limit: int | None) -> tuple[list[str], dict[str, str | None]] | None:
+    """rev-list the range in topo-reverse order with first parents."""
+    out = run(["git", "-C", str(top), "rev-list", "--topo-order", "--reverse", "--parents", rev_range])
+    if out.returncode != 0:
+        print(f"error: rev-list {rev_range} failed", file=sys.stderr)
+        return None
+    commits: list[str] = []
+    parents_of: dict[str, str | None] = {}
+    for line in out.stdout.decode().splitlines():
+        toks = line.split()
+        if not toks:
+            continue
+        commits.append(toks[0])
+        parents_of[toks[0]] = toks[1] if len(toks) > 1 else None
+    if limit is not None:
+        commits = commits[:limit]
+    return commits, parents_of
+
+
+def run_sweep(
+    top: Path,
+    commits: list[str],
+    parents_of: dict[str, str | None],
+    diffrs: Path,
+    applyrs: Path,
+    jobs: int,
+) -> list[tuple[str, int, list[str]]]:
+    """Fan the commits out over worktree pairs; returns per-commit results."""
+    tmp = Path(tempfile.mkdtemp(prefix="sweep-"))
+    try:
+        jobs = max(1, min(jobs, len(commits)))
+        base, extra = divmod(len(commits), jobs)
+        chunks: list[tuple[int, list[str]]] = []
+        s = 0
+        for i in range(jobs):
+            e = s + base + (1 if i < extra else 0)
+            chunks.append((i, commits[s:e]))
+            s = e
+        progress: list = [threading.Lock(), 0]
+        total = len(commits)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+            futs = [
+                ex.submit(sweep_chunk, top, tmp, i, chunk, parents_of, diffrs, applyrs, progress, total)
+                for i, chunk in chunks
+            ]
+            ordered = [f.result() for f in futs]
+        flat: list[tuple[str, int, list[str]]] = []
+        for results in ordered:
+            flat.extend(results)
+        return flat
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def top_declined_reason(diffrs: Path, wt: Path, rev: str) -> str:
+    """Most frequent non-trivial declined reason for one ordinary commit.
+
+    Gate-only backlog signal (WI-20): `diffrs --format json` over the same
+    rev, tallying `hunks[].declined[]` detector:reason pairs. `no-match`
+    only tallies when nothing weightier declined; `not-tried` never wins
+    alone (`all-not-tried`); unparseable output is `unknown`, never fatal.
+    """
+    out = run([str(diffrs), "--repo", str(wt), rev, "--format", "json"])
+    if out.returncode != 0:
+        return "unknown"
+    try:
+        doc = json.loads(out.stdout.decode(errors="replace"))
+    except json.JSONDecodeError:
+        return "unknown"
+    counts: dict[str, int] = {}
+    fallback: dict[str, int] = {}
+    try:
+        hunks = doc.get("hunks", [])
+    except AttributeError:
+        return "unknown"
+    for h in hunks:
+        declined = h.get("declined", []) if isinstance(h, dict) else []
+        for d in declined:
+            if not isinstance(d, dict):
+                continue
+            det = str(d.get("detector", "?"))
+            reason = str(d.get("reason", "?"))
+            key = f"{det}:{reason}"
+            if reason in ("no-match", "not-tried"):
+                fallback[key] = fallback.get(key, 0) + 1
+            else:
+                counts[key] = counts.get(key, 0) + 1
+    if counts:
+        return max(sorted(counts), key=lambda k: counts[k])
+    # Only `no-match`/`not-tried` declined: nothing nearly fired, so name
+    # that honestly instead of crowning a bystander detector.
+    if fallback:
+        if any(not k.endswith(":not-tried") for k in fallback):
+            return "no-guard-veto"
+        return "all-not-tried"
+    return "no-hunks" if not hunks else "unknown"
+
+
+def gate_pin_path() -> Path:
+    return Path(__file__).resolve().parent / "history_gate.json"
+
+
+def run_gate(top: Path, jobs: int, bins: dict[str, Path]) -> int:
+    """WI-20 floor gate over the pinned range. Returns process exit code."""
+    pin_file = gate_pin_path()
+    try:
+        pin = json.loads(pin_file.read_text())
+        rev_range = str(pin["rev_range"])
+        floor = int(pin["floor"])
+    except (OSError, KeyError, ValueError, json.JSONDecodeError) as e:
+        print(f"error: unreadable gate pin {pin_file}: {e}", file=sys.stderr)
+        return 2
+    listed = list_commits(top, rev_range, None)
+    if listed is None:
+        return 2
+    commits, parents_of = listed
+    if not commits:
+        print("no commits in range", file=sys.stderr)
+        return 2
+    diffrs, applyrs = bins["diffrs"], bins["applyrs"]
+    head_out = run(["git", "-C", str(top), "rev-parse", "HEAD"])
+    head_full = head_out.stdout.decode().strip() if head_out.returncode == 0 else "unknown"
+    flat = run_sweep(top, commits, parents_of, diffrs, applyrs, jobs)
+    total_failures: list[str] = []
+    failed: set[str] = set()
+    compressing: list[tuple[str, int]] = []
+    ordinary: list[str] = []
+    for short, sem, failures in flat:
+        if failures:
+            failed.add(short)
+        total_failures.extend(failures)
+        if sem:
+            compressing.append((short, sem))
+        else:
+            ordinary.append(short)
+    print(f"gate range {rev_range} commits {len(commits)} tip {commits[-1][:7]} root {commits[0][:7]} (head {head_full[:7]})")
+    print(f"convert {len(commits) - len(failed)}/{len(commits)} floor {floor} compressing {len(compressing)}")
+    if total_failures:
+        print("failures:")
+        for f in total_failures:
+            print(f"  {f}")
+    if compressing:
+        print("compressing:")
+        for short, sem in sorted(compressing):
+            print(f"  {short} sem={sem}")
+    else:
+        print("compressing: none")
+    # Backlog signal: top declined reason per ordinary commit (one extra
+    # json raise each; gate-only cost, failures fall back to `unknown`).
+    if ordinary and not failed:
+        wt = Path(tempfile.mkdtemp(prefix="gate-ord-"))
+        try:
+            if git_ok(top, ["worktree", "add", "--detach", str(wt), commits[-1]]):
+                print("ordinary (top declined reason):")
+                full_of = {c[:7]: c for c in commits}
+                for short in sorted(ordinary):
+                    full = full_of.get(short, short)
+                    parent = parents_of.get(full)
+                    rev = f"{full}~1" if parent is not None else EMPTY_TREE
+                    if parent is None:
+                        reason = "root-commit"
+                    else:
+                        reason = top_declined_reason(diffrs, wt, rev)
+                    print(f"  {short} {reason}")
+            else:
+                print("ordinary: (worktree unavailable, reasons skipped)")
+                for short in sorted(ordinary):
+                    print(f"  {short} unknown")
+        finally:
+            with _wt_lock:
+                run(["git", "-C", str(top), "worktree", "remove", "--force", str(wt)])
+    if total_failures:
+        print(f"GATE FAIL: {len(total_failures)} conversion/check failure(s)", file=sys.stderr)
+        return 2
+    if len(compressing) < floor:
+        print(
+            f"GATE FAIL: compressing {len(compressing)} below floor {floor} "
+            f"(pinned at {pin.get('pinned_at', '?')})",
+            file=sys.stderr,
+        )
+        return 2
+    if len(compressing) - floor <= 2:
+        print(
+            f"warning: compressing {len(compressing)} within 2 of floor {floor} — do not lower the floor",
+            file=sys.stderr,
+        )
+    print(f"GATE PASS: convert {len(commits)}/{len(commits)} compressing {len(compressing)} >= floor {floor}")
+    return 0
+
+
+def run_self_test(top: Path, bins: dict[str, Path]) -> int:
+    """Synthetic two-commit gate check: one compressing rename, one ordinary."""
+    diffrs, applyrs = bins["diffrs"], bins["applyrs"]
+    tmp = Path(tempfile.mkdtemp(prefix="gate-selftest-"))
+    try:
+        repo = tmp / "repo"
+        repo.mkdir()
+        run(["git", "-C", str(repo), "init", "-q"])
+        run(["git", "-C", str(repo), "config", "user.email", "t@t"])
+        run(["git", "-C", str(repo), "config", "user.name", "t"])
+        (repo / "a.rs").write_text("fn foo() -> i32 {\n    1\n}\n\nfn main() {\n    let x = foo();\n}\n")
+        run(["git", "-C", str(repo), "add", "-A"])
+        run(["git", "-C", str(repo), "commit", "-qm", "base"])
+        (repo / "a.rs").write_text("fn bar() -> i32 {\n    1\n}\n\nfn main() {\n    let x = bar();\n}\n")
+        run(["git", "-C", str(repo), "add", "-A"])
+        run(["git", "-C", str(repo), "commit", "-qm", "rename"])
+        (repo / "a.rs").write_text("fn bar() -> i32 {\n    1\n}\n\n// trailing comment\nfn main() {\n    let x = bar();\n}\n")
+        run(["git", "-C", str(repo), "add", "-A"])
+        run(["git", "-C", str(repo), "commit", "-qm", "comment"])
+        out = run(["git", "-C", str(repo), "rev-list", "--topo-order", "--reverse", "--parents", "HEAD"])
+        commits: list[str] = []
+        parents_of: dict[str, str | None] = {}
+        for line in out.stdout.decode().splitlines():
+            toks = line.split()
+            if toks:
+                commits.append(toks[0])
+                parents_of[toks[0]] = toks[1] if len(toks) > 1 else None
+        # commits[0] is the root (empty pre-image); sweep the two children.
+        results = run_sweep(repo, commits[1:], parents_of, diffrs, applyrs, 1)
+        sems = [sem for _, sem, _ in results]
+        fails = [f for _, _, fl in results for f in fl]
+        if fails:
+            print(f"SELF-TEST FAIL: sweep failures: {fails}", file=sys.stderr)
+            return 2
+        if len(sems) != 2 or not (sems[0] >= 1 and sems[1] == 0):
+            print(f"SELF-TEST FAIL: expected [compressing, ordinary], got sems={sems}", file=sys.stderr)
+            return 2
+        # Ordinary arm lists a declined reason.
+        wt = tmp / "wt"
+        if not git_ok(repo, ["worktree", "add", "--detach", str(wt), commits[-1]]):
+            print("SELF-TEST FAIL: worktree add failed", file=sys.stderr)
+            return 2
+        try:
+            reason = top_declined_reason(diffrs, wt, f"{commits[-1]}~1")
+        finally:
+            with _wt_lock:
+                run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)])
+        if not reason or reason == "unknown":
+            print(f"SELF-TEST FAIL: ordinary arm reason={reason!r}", file=sys.stderr)
+            return 2
+        # Floor predicates: floor 1 passes, floor 3 fails.
+        if len([s for s in sems if s]) < 1:
+            print("SELF-TEST FAIL: floor-1 predicate", file=sys.stderr)
+            return 2
+        if not (len([s for s in sems if s]) < 3):
+            print("SELF-TEST FAIL: floor-3 predicate vacuous", file=sys.stderr)
+            return 2
+        print(f"SELF-TEST PASS: sems={sems} ordinary_reason={reason}")
+        return 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("rev_range", nargs="?", default="HEAD", help="rev-list range (default: HEAD)")
@@ -271,6 +534,14 @@ def main() -> int:
     ap.add_argument(
         "-j", "--jobs", type=int, default=os.cpu_count() or 4, metavar="N",
         help="parallel workers (default: cpu count)",
+    )
+    ap.add_argument(
+        "--gate", action="store_true",
+        help="run the WI-20 floor gate from tools/history_gate.json (ignores rev_range/--limit)",
+    )
+    ap.add_argument(
+        "--self-test", action="store_true",
+        help="synthetic two-commit gate check (compressing + ordinary arms)",
     )
     args = ap.parse_args()
 
@@ -290,69 +561,43 @@ def main() -> int:
     # Ensure the empty-tree object (fresh clones may lack it; idempotent).
     run(["git", "-C", str(top), "mktree"], inp=b"")
 
-    out = run(["git", "-C", str(top), "rev-list", "--topo-order", "--reverse", "--parents", args.rev_range])
-    if out.returncode != 0:
-        print(f"error: rev-list {args.rev_range} failed", file=sys.stderr)
+    if args.self_test:
+        return run_self_test(top, bins)
+    if args.gate:
+        return run_gate(top, args.jobs, bins)
+
+    listed = list_commits(top, args.rev_range, args.limit)
+    if listed is None:
         return 2
-    commits: list[str] = []
-    parents_of: dict[str, str | None] = {}
-    for line in out.stdout.decode().splitlines():
-        toks = line.split()
-        if not toks:
-            continue
-        commits.append(toks[0])
-        parents_of[toks[0]] = toks[1] if len(toks) > 1 else None
-    if args.limit is not None:
-        commits = commits[: args.limit]
+    commits, parents_of = listed
     if not commits:
         print("no commits in range", file=sys.stderr)
         return 2
 
-    jobs = max(1, min(args.jobs, len(commits)))
-    base, extra = divmod(len(commits), jobs)
-    chunks: list[tuple[int, list[str]]] = []
-    s = 0
-    for i in range(jobs):
-        e = s + base + (1 if i < extra else 0)
-        chunks.append((i, commits[s:e]))
-        s = e
-
-    tmp = Path(tempfile.mkdtemp(prefix="sweep-"))
-    try:
-        progress: list = [threading.Lock(), 0]
-        total = len(commits)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
-            futs = [
-                ex.submit(sweep_chunk, top, tmp, i, chunk, parents_of, diffrs, applyrs, progress, total)
-                for i, chunk in chunks
-            ]
-            ordered = [f.result() for f in futs]
-        total_failures: list[str] = []
-        failed: set[str] = set()
-        compressing: list[tuple[str, int]] = []
-        for results in ordered:
-            for short, sem, failures in results:
-                if failures:
-                    failed.add(short)
-                total_failures.extend(failures)
-                if sem:
-                    compressing.append((short, sem))
-        print(f"head {head_full} range {args.rev_range} commits {len(commits)} tip {commits[-1][:7]} root {commits[0][:7]}")
-        head_short = head_full[:7] if len(head_full) >= 7 else head_full
-        print(f"convert {len(commits) - len(failed)}/{len(commits)} (head {head_short})")
-        if total_failures:
-            print("failures:")
-            for f in total_failures:
-                print(f"  {f}")
-        if compressing:
-            print("compressing:")
-            for short, sem in sorted(compressing):
-                print(f"  {short} sem={sem}")
-        else:
-            print("compressing: none")
-        return 1 if total_failures else 0
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    ordered = run_sweep(top, commits, parents_of, diffrs, applyrs, args.jobs)
+    total_failures: list[str] = []
+    failed: set[str] = set()
+    compressing: list[tuple[str, int]] = []
+    for short, sem, failures in ordered:
+        if failures:
+            failed.add(short)
+        total_failures.extend(failures)
+        if sem:
+            compressing.append((short, sem))
+    print(f"head {head_full} range {args.rev_range} commits {len(commits)} tip {commits[-1][:7]} root {commits[0][:7]}")
+    head_short = head_full[:7] if len(head_full) >= 7 else head_full
+    print(f"convert {len(commits) - len(failed)}/{len(commits)} (head {head_short})")
+    if total_failures:
+        print("failures:")
+        for f in total_failures:
+            print(f"  {f}")
+    if compressing:
+        print("compressing:")
+        for short, sem in sorted(compressing):
+            print(f"  {short} sem={sem}")
+    else:
+        print("compressing: none")
+    return 1 if total_failures else 0
 
 
 if __name__ == "__main__":
