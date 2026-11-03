@@ -11,7 +11,8 @@
 
 use rsmpl_pattern::VariantPayload;
 
-use crate::postcheck::{span_lines, spans_overlap};
+use crate::postcheck::spans_overlap;
+use crate::postcheck_defs::span_lines;
 
 /// Verify a `StructRenameFieldEvo` hunk in the post-image.
 /// `None` when the post-image is unparseable (caller downgrades to

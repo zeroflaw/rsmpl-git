@@ -19,7 +19,7 @@ use crate::matcher_attr_delta::{
     attr_delta, norm_pat, norm_pat_list, site_attr_texts,
     subsequence_positions as subsequence_indices, AttrDelta,
 };
-use crate::postcheck::DefKind;
+use crate::postcheck_defs::DefKind;
 
 /// One definition ident with its normalized attached attributes.
 struct AttrDef {

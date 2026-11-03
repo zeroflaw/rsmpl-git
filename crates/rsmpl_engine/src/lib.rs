@@ -52,6 +52,7 @@ mod plan_symbol;
 mod postcheck;
 mod postcheck_assoc;
 mod postcheck_attr;
+mod postcheck_defs;
 mod postcheck_follow;
 mod postcheck_item_joint;
 mod postcheck_move;

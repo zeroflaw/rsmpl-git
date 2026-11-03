@@ -41,7 +41,7 @@ pub(crate) fn verify_assoc_rename(
             Some(
                 crate::postcheck_attr::count_spans_named_with_attrs(
                     parsed,
-                    crate::postcheck::DefKind::Item,
+                    crate::postcheck_defs::DefKind::Item,
                     Some(plus_name.trim()),
                     m,
                     p,
