@@ -1207,9 +1207,9 @@ fn trait_unsafe_gain_fires_with_unsafe_template_and_round_trips() {
 
 #[test]
 fn trait_item_edited_pair_stays_ordinary() {
-    // A trait item on either side vetoes the trait move: the scalar
-    // `- I` cut would match the method too, so the pair stays a full
-    // delete+insert.
+    // E2 slice 1: a method-add delta (empty `trait Old {}` → `pub trait
+    // New { fn f }`) vetoes the trait move — the token-equal-methods
+    // gate requires identical item sets.
     let minus_item = big_trait("", "Old");
     let plus_item = "pub trait New {\n    fn f(&self);\n}\n".to_string();
     let a_old = format!("fn keep() {{}}\n{minus_item}");

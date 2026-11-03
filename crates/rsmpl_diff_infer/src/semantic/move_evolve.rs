@@ -1507,16 +1507,18 @@ mod tests {
         let base = item_trait("trait Old {}");
         let same = item_trait("trait Old {}");
         assert_eq!(trait_evolved_match(&base, &same), None);
-        // Any trait item vetoes, even identical content (the scalar
-        // `- I` cut cannot isolate a trait with methods, it would match
-        // them too — same narrowing as empty-only `mod` evolution).
+        // E2 slice 1: header-only evolution with token-equal methods
+        // fires (the engine cut isolates the whole trait).
         let plus = item_trait("pub trait New {\n    fn f(&self);\n}");
         assert_eq!(trait_evolved_match(&base, &plus), None);
         let method = item_trait("trait Old {\n    fn f(&self);\n}");
         let method_same = item_trait("trait Old {\n    fn f(&self);\n}");
         assert_eq!(trait_evolved_match(&method, &method_same), None);
         let method_plus = item_trait("pub trait New {\n    fn f(&self);\n}");
-        assert_eq!(trait_evolved_match(&method, &method_plus), None);
+        assert_eq!(
+            trait_evolved_match(&method, &method_plus),
+            Some("New".to_string())
+        );
         // Generics delta.
         let plus = item_trait("pub trait New<T> {}");
         assert_eq!(trait_evolved_match(&base, &plus), None);
@@ -1533,6 +1535,25 @@ mod tests {
             syn::parse_str("pub auto trait New {}").expect("auto trait must parse");
         assert_eq!(trait_evolved_match(&auto_minus, &auto_plus), None);
         assert_eq!(trait_evolved_match(&auto_minus, &base), None);
+    }
+
+    #[test]
+    fn trait_method_rename_stays_ordinary() {
+        // E2 slice 1 remainder (slice 2 owner): a method rename inside
+        // an otherwise header-only trait evolution vetoes — needs the
+        // `trait Old as New` splice + one-method-rename joint.
+        let minus = item_trait("trait Old {\n    fn m_old(&self);\n}");
+        let plus = item_trait("trait New {\n    fn m_new(&self);\n}");
+        assert_eq!(trait_evolved_match(&minus, &plus), None);
+        // Method add/remove veto likewise.
+        let added = item_trait("trait New {\n    fn m_old(&self);\n    fn extra(&self);\n}");
+        assert_eq!(trait_evolved_match(&minus, &added), None);
+        // Self-ref body (Old mentioned inside) is NOT token-equal when
+        // the plus updated it, so it vetoes here and stays ordinary
+        // pending the slice-2 `as` splice.
+        let self_minus = item_trait("trait Old {\n    fn f(x: Old);\n}");
+        let self_plus = item_trait("trait New {\n    fn f(x: New);\n}");
+        assert_eq!(trait_evolved_match(&self_minus, &self_plus), None);
     }
 
     #[test]

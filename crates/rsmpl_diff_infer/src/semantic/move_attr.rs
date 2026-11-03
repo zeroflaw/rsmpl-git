@@ -25,13 +25,13 @@
 //! empty `trait` in slice 9 —
 //! the inner rename pairs through the abstract evolved matcher in
 //! `move_evolve.rs` / `move_evolve_tail.rs` via `added_attr_block_len`
-//! below (method-bearing traits veto inside the trait matcher and stay
-//! engine-owned). Slice 10 closes the added axis: the struct arm admits
-//! a vis delta riding with rename+attr, and the rename-only
-//! method-bearing trait twin is pinned ordinary. The remaining axes
-//! (replaced-interior, item-interior attr deltas, method-bearing trait
-//! moves) stay ordinary by construction (owners: E1 residue (b)
-//! remainder, E2). Removed/replaced + rename
+//! below (E2 slice 1: method-bearing traits with token-equal methods
+//! fire). Slice 10 closes the added axis: the struct arm admits
+//! a vis delta riding with rename+attr, and the method-rename
+//! trait twin (`Old/m_old` → `New/m_new`) is pinned ordinary. The remaining axes
+//! (replaced-interior, item-interior attr deltas, method-rename /
+//! self-ref trait joints) stay ordinary by construction (owners: E1 residue (b)
+//! remainder, E2 slice 2). Removed/replaced + rename
 //! now fires via the E1 slice-2 stripped evolved delegation (owner:
 //! `move_attr_removed.rs` — fire pins below, shape pins there).
 
@@ -122,9 +122,9 @@ pub(crate) fn added_attr_block_len(span_lines: &[&str]) -> Option<usize> {
 /// minus item; this checks the plus-side shape only: an item whose span
 /// starts exactly `k` lines above the run, those `k` lines form the one
 /// added attr/doc block, and the remaining item lines equal the run
-/// lines verbatim. Content-bearing `mod` / method-bearing `trait` decline
-/// via the shared `move_cut_eligible` gate (the cut cannot carry them);
-/// ident-less items (use/macro/trait-impl) decline since no minus item
+/// lines verbatim. Content-bearing `mod` declines
+/// via the shared `move_cut_eligible` gate (the cut cannot carry it);
+/// method-bearing traits are eligible (E2 slice 1); ident-less items (use/macro/trait-impl) decline since no minus item
 /// ever pairs them.
 pub(crate) fn plus_run_is_attr_added_item(body: &[String], first: usize, last: usize) -> bool {
     if first == 0 || last < first || last >= body.len() {
@@ -1561,10 +1561,11 @@ mod tests {
     }
 
     #[test]
-    fn rename_plus_attr_method_bearing_trait_stays_ordinary() {
-        // Method-bearing trait rename+attr stays ordinary by the
-        // `trait_evolved_match` empty-items gate (engine cut law: the
-        // scalar `- I` cut cannot isolate a trait with methods).
+    fn rename_plus_attr_method_bearing_trait_fires_with_ordinary_prefix() {
+        // E2 slice 1: method-bearing trait rename+attr with token-equal
+        // methods fires via the stripped evolved delegation (the added
+        // attr rides the ordinary prefix, the stripped inner evolves
+        // through `trait_evolved_match`'s token-equal-methods gate).
         let mut docs = String::new();
         for i in 0..40 {
             docs.push_str(&format!("/// doc line {i}\n"));
@@ -1577,22 +1578,27 @@ mod tests {
         let b_plus: String = plus_item.lines().map(|l| format!("+{l}\n")).collect();
         let (a, b, pre) = two_file_sections(&a_old, &a_minus, &b_plus);
         let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&[a, b], &pre, &mut used)
+            .expect("method-bearing trait rename+attr must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
         assert!(
-            super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "method-bearing trait rename+attr must stay ordinary (engine-owned)"
+            text.contains("+#[allow(dead_code)]\n"),
+            "added attr rides ordinary, got:\n{text}"
         );
+        validated_live(&text, &pre);
     }
 
     #[test]
     fn rename_method_bearing_trait_move_stays_ordinary() {
-        // WI-14 slice 10: the rename-only twin of the pin above —
-        // method-bearing `trait Old { fn m_old }` moves a.rs -> b.rs as
-        // `trait New { fn m_new }` (no attr delta at all). Padding
-        // clears the T375 guard on every landed axis, so staying
-        // ordinary here proves the structural veto, not bytes: the
-        // scalar `- I` cut cannot isolate a trait with methods
-        // (`move_cut_eligible` excludes it) and the evolved trait
-        // cascade vetoes non-empty items inside `trait_evolved_match`.
+        // E2 slice 1 remainder (slice 2 owner): method-bearing
+        // `trait Old { fn m_old }` moves a.rs -> b.rs as
+        // `trait New { fn m_new }` (trait rename PLUS method rename).
+        // Padding clears the T375 guard, so staying ordinary here
+        // proves the method-delta veto inside `trait_evolved_match`,
+        // not bytes: the header-only gate requires token-equal methods.
+        // Slice 2 (`trait Old as New` splice + one-method-rename joint)
+        // owns this shape.
         let mut docs = String::new();
         for i in 0..40 {
             docs.push_str(&format!("/// doc line {i}\n"));
@@ -1606,7 +1612,7 @@ mod tests {
         let mut used = Vec::new();
         assert!(
             super::super::moves::try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "method-bearing trait move+rename must stay ordinary (engine-owned)"
+            "method-bearing trait move+method-rename stays ordinary until slice 2"
         );
     }
 

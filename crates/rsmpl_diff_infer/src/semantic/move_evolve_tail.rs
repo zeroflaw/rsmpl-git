@@ -697,18 +697,20 @@ pub(crate) fn mod_evolution_template(prefix: &str, name: &str) -> String {
     }
 }
 
-/// Evolved `trait` pair check (WI-8 slice 8): same shape modulo the
-/// visibility prefix (which carries an optional `unsafe` qualifier)
-/// and the ident. Attrs, generics, and supertraits must be
-/// token-equal; both sides must declare empty traits (no trait items:
-/// the scalar `- I` cut cannot isolate a trait with methods, it would
-/// match them too — same narrowing as empty-only `mod` evolution,
-/// WI-8 slice 7; see WI-mod-content-cut). Any `auto` token or
-/// `impl Trait for` restriction on either side vetoes (mirroring the
-/// authoring-side `auto trait` rejection). Returns the plus-side
-/// ident when the pair evolves (a vis, name, or unsafety delta is
-/// required — the byte-exact path owns identical items). `unsafe`
-/// rides verbatim in the prefix like `fn` qualifiers / `unsafe mod`.
+/// Evolved `trait` pair check (WI-8 slice 8 + E2 slice 1): same shape
+/// modulo the visibility prefix (which carries an optional `unsafe`
+/// qualifier) and the ident. Attrs, generics, supertraits, AND trait
+/// items must be token-equal; a vis, name, or unsafety delta is
+/// required (the byte-exact path owns identical items). E2 slice 1
+/// admits method-bearing traits whose methods are token-equal (the
+/// engine's scalar cut isolates the whole trait via `outermost_spans`
+/// and `splice_trait_header` keeps the body verbatim, both probed
+/// `verified`); any method delta (rename/add/remove/signature) vetoes
+/// (needs the `trait Old as New` splice + method joint, slice 2).
+/// Any `auto` token or `impl Trait for` restriction on either side
+/// vetoes (mirroring the authoring-side `auto trait` rejection).
+/// `unsafe` rides verbatim in the prefix like `fn` qualifiers /
+/// `unsafe mod`.
 pub(crate) fn trait_evolved_match(minus: &syn::ItemTrait, plus: &syn::ItemTrait) -> Option<String> {
     if minus.auto_token.is_some() || plus.auto_token.is_some() {
         return None;
@@ -737,9 +739,15 @@ pub(crate) fn trait_evolved_match(minus: &syn::ItemTrait, plus: &syn::ItemTrait)
     if tok(&minus.supertraits) != tok(&plus.supertraits) {
         return None;
     }
-    // Only empty traits evolve: any trait item on either side vetoes,
-    // even identical content.
-    if !minus.items.is_empty() || !plus.items.is_empty() {
+    // E2 slice 1: methods must be token-equal (any method delta vetoes
+    // — rename/add/remove/signature all stay ordinary pending slice 2).
+    if minus.items.len() != plus.items.len()
+        || minus
+            .items
+            .iter()
+            .zip(plus.items.iter())
+            .any(|(a, b)| tok(a) != tok(b))
+    {
         return None;
     }
     Some(plus.ident.to_string())

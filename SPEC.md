@@ -9552,8 +9552,8 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     carries the kind's evolution template with the added block as the
     ordinary prefix. WI-14 slice 9 extends the same composition to
     empty `trait` rename+attr (through `trait_evolved_match`, so pure
-    attr-added without rename never double-claims and method-bearing
-    traits veto inside the matcher and stay engine-owned): the paste
+    attr-added without rename never double-claims; E2 slice 1 admits
+    method-bearing traits with token-equal methods): the paste
     carries the trait evolution template with the added block as the
     ordinary prefix. WI-14 slice 10 closes the axis: the struct
     composition arm admits a vis delta riding with rename+attr
@@ -9561,11 +9561,17 @@ Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
     evolved paste + ordinary prefix — the stripped-inner evolved
     match needs only a vis-or-name delta, so the "container-delta
     beyond vis" residue for the added axis is landed, not deferred);
-    the rename-only method-bearing trait twin
-    (`trait Old { fn m_old }` → `trait New { fn m_new }`) is pinned
-    ordinary, closing the veto triangle with the byte-identical and
-    rename+attr twins (structural veto at any size — the scalar cut
-    plus the empty-items gate, never the byte guard). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
+    E2 slice 1 fires the method-bearing trait bare twin
+    (byte-identical move) and the header-only rename twins
+    (`trait Old { fn foo }` → `trait New { fn foo }`,
+    plus the rename+attr twin) via the token-equal-methods gate —
+    the engine scalar cut isolates the whole trait
+    (`outermost_spans`) and the splice keeps the body verbatim.
+    The method-rename twin
+    (`trait Old { fn m_old }` → `trait New { fn m_new }`) and any
+    self-ref body (`Old` mentioned inside, plus updated to `New`)
+    stay ordinary pending the `trait Old as New` splice + method
+    joint (E2 slice 2 owner). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
     T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
     price the cut+paste below the ordinary hunks), and content-bearing
     mods still decline via the shared cut gate. Two added attrs, `//!` /

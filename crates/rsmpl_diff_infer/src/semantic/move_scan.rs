@@ -42,12 +42,16 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     }
     let mut items = Vec::new();
     for it in &file.items {
-        // WI-mod-content-cut: the scalar `- I` cut cannot isolate an item
-        // with nested items (it would match them too — `expected one match,
-        // found N`). Content-bearing inline `mod` (≥1 nested item) and
-        // method-bearing `trait` (any trait item) stay ordinary; empty
-        // `mod {}` / `mod;` / empty trait still move. Mirrors the
-        // empty-only evolved `mod`/`trait` narrowing (WI-8 slices 7-8).
+        // WI-mod-content-cut + E2 slice 1: the scalar `- I` cut cannot
+        // isolate a content-bearing inline `mod` (it would match nested
+        // items too — `expected one match, found N`), so those stay
+        // ordinary. Method-bearing traits ARE eligible: the engine's
+        // `outermost_spans` keeps the outermost (trait) span for scalar
+        // cuts (probed `verified` for bare + `trait New { ... }`
+        // evolution pastes), so the cut isolates the whole trait.
+        // Empty `mod {}` / `mod;` still move. Mirrors the empty-only
+        // evolved `mod` narrowing (WI-8 slice 7); trait evolution now
+        // admits token-equal methods (E2 slice 1).
         if !move_cut_eligible(it) {
             continue;
         }
@@ -68,21 +72,24 @@ fn file_items_in(body: &[String], comments_ok: bool) -> Option<Vec<MoveItem>> {
     Some(items)
 }
 
-/// WI-mod-content-cut: scalar-cut eligibility for byte-identical moves.
+/// WI-mod-content-cut + E2 slice 1: scalar-cut eligibility for moves.
 ///
-/// The engine's `- I` cut matches nested items too (`collect_fns` recurses
-/// into inline `mod` content; `collect_impl_method_spans` collects trait
-/// methods), so cutting a content-bearing `mod` or a method-bearing
-/// `trait` always fails with `expected one match, found N`. Such items
-/// stay ordinary. Empty inline `mod {}` (`Some` empty), outline
-/// `mod;` (`None`), and empty traits stay eligible.
+/// The engine's `- I` cut matches nested items too (`collect_fns`
+/// recurses into inline `mod` content; `collect_impl_method_spans`
+/// collects trait methods), but scalar cuts keep the outermost span
+/// (`outermost_spans` in `plan_cut.rs`), so a method-bearing trait
+/// cuts as one capture (probed `verified`). Content-bearing `mod`
+/// still stays ordinary (nested `fn` items would also pair as
+/// independent moves, unlike trait methods which never move alone).
+/// Empty inline `mod {}` (`Some` empty), outline `mod;` (`None`),
+/// and all traits (empty or method-bearing) stay eligible.
 pub(crate) fn move_cut_eligible(it: &syn::Item) -> bool {
     match it {
         syn::Item::Mod(m) => match &m.content {
             None => true,
             Some((_, inner)) => inner.is_empty(),
         },
-        syn::Item::Trait(t) => t.items.is_empty(),
+        syn::Item::Trait(_) => true,
         _ => true,
     }
 }

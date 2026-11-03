@@ -1454,10 +1454,11 @@ mod tests {
     }
 
     #[test]
-    fn move_method_bearing_trait_stays_ordinary() {
-        // WI-mod-content-cut: same shape for traits — a trait with methods
-        // matches 1 trait + N methods under `- I`, so it stays ordinary.
-        // (Evolved-trait pairing already vetoes this; WI-8 slice 8.)
+    fn move_method_bearing_trait_fires() {
+        // E2 slice 1: method-bearing traits move as one capture — the
+        // engine's scalar cut keeps the outermost (trait) span
+        // (`outermost_spans`), probed `verified`, so the raiser no
+        // longer excludes them.
         let mut methods = String::new();
         for m in 0..2 {
             methods.push_str(&format!("    fn m{m}(&self) {{\n"));
@@ -1477,10 +1478,19 @@ mod tests {
             ("b.rs", "use x;\n"),
         ]);
         let mut used = Vec::new();
+        let out = try_move_sweep(&[a, b], &pre, &mut used).expect("method-bearing trait must fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut must fire, got:\n{text}");
+        assert!(text.contains("# use="), "paste must fire, got:\n{text}");
         assert!(
-            try_move_sweep(&[a, b], &pre, &mut used).is_none(),
-            "method-bearing trait must stay ordinary"
+            !text.contains("-trait Big"),
+            "minus lines must be consumed, got:\n{text}"
         );
+        assert!(
+            !text.contains("+trait Big"),
+            "plus lines must be consumed, got:\n{text}"
+        );
+        validated_live(&text, &pre);
     }
 
     #[test]
