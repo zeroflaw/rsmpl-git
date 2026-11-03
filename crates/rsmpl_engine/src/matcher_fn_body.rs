@@ -160,3 +160,48 @@ fn joint_body_edit(
     let end = start + body_minus.len();
     Ok(TextEdit::new(start, end, body_plus.to_string()).with_label("body"))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    fn apply(patch_text: &str, file_text: &str) -> Result<String, String> {
+        let patch = rsmpl_patch::parse_patch(patch_text).map_err(|e| e.to_string())?;
+        let mut files = HashMap::new();
+        files.insert("src/lib.rs".to_string(), file_text.to_string());
+        let mut patch = patch;
+        for f in &mut patch.files {
+            f.target_path = "src/lib.rs".to_string();
+        }
+        crate::apply_patch_to_tree(&mut files, &patch).map_err(|e| e.render())?;
+        Ok(files["src/lib.rs"].clone())
+    }
+
+    #[test]
+    fn wi13_joint_body_three_pairs_apply_scoped() {
+        // WI-13 slice 3: header + three body pairs (two same-binder
+        // `let`s + one expr) apply as three span-scoped `body` edits
+        // plus the follow calls.
+        let pre =
+            "fn foo(x: i32) -> i32 {\n    let y = 1;\n    let z = y + 1;\n    z + 1\n}\nfn m() {\n    foo(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n- let z = y + 1;\n+ let z = y + 2;\n- z + 1\n+ z + 2\n";
+        let out = apply(patch, pre).expect("three-pair joint must apply");
+        assert_eq!(
+            out,
+            "fn bar(x: i32) -> i32 {\n    let y = 2;\n    let z = y + 2;\n    z + 2\n}\nfn m() {\n    bar(1);\n}\n",
+            "three-pair joint must rename header, all three body lines, and follow calls"
+        );
+    }
+
+    #[test]
+    fn wi13_joint_body_three_pairs_third_absent_fails_loud() {
+        // Per-pair gate: a missing third minus fails loud even when
+        // the first two pairs are present.
+        let pre =
+            "fn foo(x: i32) -> i32 {\n    let y = 1;\n    let z = y + 1;\n    z + 1\n}\nfn m() {\n    foo(1);\n}\n";
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@ rule=j\n# lang=rust\n# sweep\n# follow=uses\n- fn foo(x: i32) -> i32 { ... }\n+ fn bar(x: i32) -> i32 { ... }\n- let y = 1;\n+ let y = 2;\n- let z = y + 1;\n+ let z = y + 2;\n- z + 9\n+ z + 2\n";
+        let err = apply(patch, pre).expect_err("absent third pair must fail");
+        assert!(err.contains("not found in the file"), "got: {err}");
+        assert!(err.contains("fn-joint-body-absent-template"), "got: {err}");
+    }
+}

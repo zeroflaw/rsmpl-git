@@ -1,9 +1,10 @@
-//! WI-20 slice 1 + WI-13 slices 1–2: rename+body-pair joint detector
+//! WI-20 slice 1 + WI-13 slices 1–3: rename+body-pair joint detector
 //! (D5 — `fn_joint.rs` sits at the 2000-line gate; tests stay inline
 //! here per WI-22).
 //!
 //! Fires when one balanced def hunk holds exactly a rename-only `fn`
-//! header pair plus one (WI-20 / WI-13 slice 1) or two (WI-13 slice 2)
+//! header pair plus one (WI-20 / WI-13 slice 1), two (WI-13 slice 2),
+//! or three (WI-13 slice 3)
 //! non-call body line pairs (each a `syn::Expr` or a plain same-binder
 //! `let` with an init, differing text), and every other balanced pair
 //! in the group is a callee-only call of old→new with at least one
@@ -11,7 +12,7 @@
 //! (header `...` pair + raw body pair lines); the engine applies each
 //! body pair span-scoped inside the renamed body with a hard conflict
 //! otherwise. Anything else in the group (slot evolution, attr delta,
-//! a third body line, non-call shapes, unbalanced hunks) returns `None`
+//! a fourth body line, non-call shapes, unbalanced hunks) returns `None`
 //! so the existing suppression path keeps the section wholly ordinary.
 
 use std::collections::{HashMap, HashSet};
@@ -20,8 +21,8 @@ use super::fn_joint::{is_call_site_of, is_callee_only};
 use super::fn_joint_sig::slots_equal_except_name;
 use super::fn_joint_types::{Fire, FlatPair, Joint};
 
-/// WI-13 slices 1–2: per-pair half of the joint gate (mirrors the
-/// engine pattern's `body_pair_holds`; slice 2 calls it once per pair).
+/// WI-13 slices 1–3: per-pair half of the joint gate (mirrors the
+/// engine pattern's `body_pair_holds`; slices 2–3 call it once per pair).
 /// Accepts one `syn::Expr` each side, or one plain same-binder `let`
 /// (`syn::Stmt::Local`, both with `init`, no attributes, binder `pat`
 /// token-equal).
@@ -68,7 +69,8 @@ pub(crate) fn try_body_joint(
         return None;
     }
     // The def hunk holds exactly the header pair plus one (WI-20 /
-    // WI-13 slice 1) or two (WI-13 slice 2) body pairs.
+    // WI-13 slice 1), two (WI-13 slice 2), or three (WI-13 slice 3)
+    // body pairs.
     let (def_sec, def_hunk) = (flat[def_idx].sec, flat[def_idx].hunk);
     let mut members: Vec<usize> = flat
         .iter()
@@ -77,7 +79,7 @@ pub(crate) fn try_body_joint(
         .map(|(i, _)| i)
         .collect();
     members.sort_unstable();
-    if (members.len() != 2 && members.len() != 3) || !members.contains(&def_idx) {
+    if (members.len() < 2 || members.len() > 4) || !members.contains(&def_idx) {
         return None;
     }
     let body_idxs: Vec<usize> = members.iter().copied().filter(|&i| i != def_idx).collect();
@@ -88,7 +90,7 @@ pub(crate) fn try_body_joint(
     // Whole-line body pairs, each differing text, none itself a call
     // site of the rename: a general expression (WI-20) or a plain
     // same-binder `let` statement with an init (WI-13 slice 1),
-    // checked per pair (slice 2 admits two). Binder-changing `let`
+    // checked per pair (slices 2-3 admit two or three). Binder-changing `let`
     // pairs decline — binder renames belong to D11/D16 capture, out of
     // scope here.
     let mut bodies: Vec<(String, String)> = Vec::new();
@@ -341,21 +343,54 @@ mod tests {
     }
 
     #[test]
-    fn body_joint_three_body_lines_suppress() {
-        // Three body-line deltas stay ordinary (WI-13 slice 2 admits
-        // exactly two).
+    fn body_joint_three_body_lines_fire_verified_byte_identical() {
+        // WI-13 slice 3: rename + three body pairs (two same-binder
+        // `let`s + one expr) fires as one follow hunk carrying all
+        // three pairs.
         let pre = pre_map(&[(
             "src.rs",
-            "fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    y * 2\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+            "fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    let z = y * 2;\n    z + 0\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
         )]);
         let sections = vec![section(
             "src.rs",
-            "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-    let y = x + 1;\n-    y * 2\n-    y\n+fn bar(x: i32) -> i32 {\n+    let y = x + 2;\n+    y * 3\n+    y\n@@ -7,2 +7,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+            "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-    let y = x + 1;\n-    let z = y * 2;\n-    z + 0\n+fn bar(x: i32) -> i32 {\n+    let y = x + 2;\n+    let z = y * 3;\n+    z + 1\n@@ -7,2 +7,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("three-pair joint must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("- let y = x + 1;"), "got:\n{out}");
+        assert!(out.contains("+ let y = x + 2;"), "got:\n{out}");
+        assert!(out.contains("- let z = y * 2;"), "got:\n{out}");
+        assert!(out.contains("+ let z = y * 3;"), "got:\n{out}");
+        assert!(out.contains("- z + 0"), "got:\n{out}");
+        assert!(out.contains("+ z + 1"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> i32 {\n    let y = x + 2;\n    let z = y * 3;\n    z + 1\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "three-pair joint must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn body_joint_four_body_lines_suppress() {
+        // Four body-line deltas stay ordinary (WI-13 slice 3 admits
+        // exactly three — IMPROVE caps the set there).
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    let z = y * 2;\n    let w = z + 0;\n    w - 0\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,5 +1,5 @@\n-fn foo(x: i32) -> i32 {\n-    let y = x + 1;\n-    let z = y * 2;\n-    let w = z + 0;\n-    w - 0\n+fn bar(x: i32) -> i32 {\n+    let y = x + 2;\n+    let z = y * 3;\n+    let w = z + 1;\n+    w - 1\n@@ -8,2 +8,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
         )];
         let full = infer_semantic_with_pre_images(&sections, &pre);
         assert!(
             full.as_ref().is_none_or(|s| !s.contains("rule=")),
-            "three-body-line shape must stay wholly ordinary, got: {full:?}"
+            "four-body-line shape must stay wholly ordinary, got: {full:?}"
         );
     }
 
@@ -422,6 +457,25 @@ mod tests {
         assert!(
             full.as_ref().is_none_or(|s| !s.contains("rule=")),
             "two-pair shape with a binder change must stay wholly ordinary, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn body_joint_three_pair_third_binder_change_suppresses() {
+        // Per-pair veto at the new count: two clean pairs do not save
+        // a binder-changing third pair (D11/D16 capture).
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    let y = x + 1;\n    let z = y * 2;\n    z + 0\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,4 +1,4 @@\n-fn foo(x: i32) -> i32 {\n-    let y = x + 1;\n-    let z = y * 2;\n-    z + 0\n+fn bar(x: i32) -> i32 {\n+    let y = x + 2;\n+    let w = y * 2;\n+    z + 1\n@@ -7,2 +7,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let full = infer_semantic_with_pre_images(&sections, &pre);
+        assert!(
+            full.as_ref().is_none_or(|s| !s.contains("rule=")),
+            "three-pair shape with a binder change must stay wholly ordinary, got: {full:?}"
         );
     }
 

@@ -762,9 +762,10 @@ pub fn parse_fn_pattern(
 pub struct FnBodyJoint {
     pub minus: FnPattern,
     pub plus: FnPattern,
-    /// One or two whole-line body pairs (each `body_pair_holds`).
+    /// One to three whole-line body pairs (each `body_pair_holds`).
     /// Single-pair joints carry exactly one entry (WI-20 / WI-13 slice
-    /// 1); two-pair joints carry two (WI-13 slice 2). Three or more
+    /// 1); two-pair joints carry two (WI-13 slice 2); three-pair
+    /// joints carry three (WI-13 slice 3). Four or more
     /// stay on the existing error/suppress paths.
     pub bodies: Vec<(String, String)>,
 }
@@ -834,9 +835,12 @@ pub fn try_parse_fn_body_joint(
     let minus_lines: Vec<&str> = minus_raw.lines().collect();
     let plus_lines: Vec<&str> = plus_raw.lines().collect();
     // Header first, body pairs after (the canonical emission order).
-    // One pair (WI-20 / WI-13 slice 1) or two pairs (WI-13 slice 2);
-    // three or more stay on the existing error/suppress paths.
-    if minus_lines.len() != plus_lines.len() || (minus_lines.len() != 2 && minus_lines.len() != 3) {
+    // One pair (WI-20 / WI-13 slice 1), two pairs (WI-13 slice 2),
+    // or three pairs (WI-13 slice 3); four or more stay on the
+    // existing error/suppress paths.
+    if minus_lines.len() != plus_lines.len()
+        || (minus_lines.len() != 2 && minus_lines.len() != 3 && minus_lines.len() != 4)
+    {
         return None;
     }
     let (hm, hp) = (minus_lines[0], plus_lines[0]);
@@ -870,7 +874,8 @@ pub fn try_parse_fn_body_joint(
     }
     // Whole-line body pairs, each differing text: a general expression
     // (WI-20) or a plain same-binder `let` statement with an init
-    // (WI-13 slice 1), checked per pair (WI-13 slice 2 admits two).
+    // (WI-13 slice 1), checked per pair (WI-13 slices 2-3 admit two
+    // or three).
     // Binder-changing `let` pairs decline (`None`) — binder renames
     // belong to D11/D16 capture, out of scope here.
     let mut bodies: Vec<(String, String)> = Vec::new();
@@ -891,7 +896,7 @@ pub fn try_parse_fn_body_joint(
     })
 }
 
-/// WI-13 slices 1–2: the per-pair half of the joint gate (shared law
+/// WI-13 slices 1–3: the per-pair half of the joint gate (shared law
 /// with the raiser's `body_pair_ok`). Accepts one `syn::Expr` each side,
 /// or one plain same-binder `let` (`syn::Stmt::Local`, both with `init`,
 /// no attributes, binder `pat` token-equal whitespace-insensitively).
@@ -1445,6 +1450,31 @@ mod tests {
     }
 
     #[test]
+    fn wi13_body_joint_fires_on_three_pairs() {
+        // WI-13 slice 3: header + three body pairs (mixed `let` + exprs).
+        let joint = try_parse_fn_body_joint(
+            "fn foo(x: i32) -> i32 { ... }\nlet y = 1;\ny + 1\ny * 2",
+            "fn bar(x: i32) -> i32 { ... }\nlet y = 2;\ny + 2\ny * 3",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .expect("header+three-pair joint must parse");
+        assert_eq!(
+            joint.bodies,
+            vec![
+                ("let y = 1;".to_string(), "let y = 2;".to_string()),
+                ("y + 1".to_string(), "y + 2".to_string()),
+                ("y * 2".to_string(), "y * 3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn wi20_body_joint_declines() {
         let no = |m: &str, p: &str| {
             try_parse_fn_body_joint(m, p, &[], &[], &[], &[], &[], &[], false).is_none()
@@ -1459,11 +1489,11 @@ mod tests {
             "fn foo(x: i32) -> i32 { ... }\nx + 1",
             "fn bar(x: u32) -> i32 { ... }\nx + 2"
         ));
-        // Three body pairs stay on the existing paths (WI-13 slice 2
-        // admits exactly two).
+        // Four body pairs stay on the existing paths (WI-13 slice 3
+        // admits exactly three).
         assert!(no(
-            "fn foo(x: i32) { ... }\nlet y = x + 1;\ny * 2\nfoo(y)",
-            "fn bar(x: i32) { ... }\nlet y = x + 2;\ny * 3\nbar(y)"
+            "fn foo(x: i32) { ... }\nlet y = x + 1;\ny * 2\ny\nw",
+            "fn bar(x: i32) { ... }\nlet y = x + 2;\ny * 3\ny\nw"
         ));
         // `let` without an init carries no init delta.
         assert!(no(
