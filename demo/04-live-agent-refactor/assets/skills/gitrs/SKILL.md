@@ -13,6 +13,15 @@ Use `gitrs` for every Rust refactoring or modification — never hand-edit what 
 - Viewing only: use a targeted file read — the CLI lists nothing.
 - Small file already held: skip discovery entirely — `@@ -1,1 @@` plus `# sweep` searches the whole file (SPEC 17.3).
 
+## Workflow: one patch, few calls
+
+1. Grep every name first (one search per name); note each site's file + line, then read only the spans you will cite.
+2. Compose the ENTIRE refactor as one patch (every file, every hunk) from the complete examples below — standard shapes (item/fn/method/field rename, call sweep, use line, move, ordinary) need NO probe; substitute your names and cite your spans.
+3. Validate with ONE `gitrs apply --file patch.rsmpl --format json --diff-max-lines 0 --check`; read `matches`/`spans`/`files` from that output — never re-run a check to summarize it.
+4. On a hunk error, fix from the `repair` block and re-check the whole patch (one call). Budget: two attempts per site, then that site becomes an ordinary hunk — never a third probe of the same shape, never a deliberate negative probe (no-fallback after a symbol conflict, bare method after a nearest-fn miss).
+5. Confirm `matches` covers every grepped site, then apply ONCE. A no-match failure on re-apply means it already landed — check `git diff`, don't re-apply.
+6. Verify the build (`cargo check` plus whatever tests the task names).
+
 ## Minimal patch
 
 ```diff rsmpl
@@ -86,6 +95,27 @@ Fn rename, full form (untouched slots elided; `...` and `}` keep the one-space m
  }
 ```
 
+Method rename (container header spells generics exactly as written):
+
+```diff rsmpl
+@@ -24,17 @@ rule=rename_bite
+  impl<T> Widget<T> {
+- pub fn bite(...) {
++ pub fn chew(...) {
+    ...
+ }
+```
+
+Field rename (reads follow by receiver anchoring):
+
+```diff rsmpl
+@@ -8,7 @@ rule=rename_field
+# follow=uses
+  struct Widget {
+- tooth: T
++ fang: T
+```
+
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/`unsafe`/generics/`where` explicitly to match them (SPEC 14.1). Explicit slots evolve, `...`/same-metavar slots are preserved, bodies are never rewritten (SPEC 14.7); rename+body joints (one to three `- E`/`+ E` pairs inside the renamed body) ride the same `# follow=uses` hunk. A braced body is an `...` context line plus the closing `}` context line — both keep the one-space hunk marker (`    ...`, ` }`); a bare unprefixed `}` never enters the hunk and fails as an unbalanced body block. A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`, SPEC 13.4); an `impl S {` header + fn pair rewrites inherent methods the same way. Slots run `fn name<generics>(params) -> ret where...` — elide what you don't touch (`(...)`, no return); container headers spell generics exactly as written (`impl<T, F> S<T, F> {`).
 - Call rewrite: needs `# allow=many` for multiple sites, `# optional` to tolerate zero (SPEC 17). Add `# repeat` to fold nested matches (`Box::new(Box::new(x))` → `x`, SPEC 17.8; general-expr shapes fold too, `let`/type/macro hunks reject it). Metavars bind once and repeats must match structurally (SPEC 15.7/17.7). A qualified line with exactly two disjoint deltas (`old::foo(E)` → `new::bar(E)`, or shared receiver+method `old_mod::obj.old_m(E)` → `new_mod::obj.new_m(E)`) composes under one rule; three deltas stay ordinary, and hetero fused hunks partition per contiguous run (declining runs stay ordinary, SPEC D.4).
 - Method-call rewrite: bind the receiver with one bare metavar (binds the whole receiver chain) (`E.to_string()`); composite receivers never match — except a leading `&`, which routes to general-expr matching (`- &E.path()` / `+ E.path()`, SPEC 18.5).
@@ -95,7 +125,7 @@ Fn rename, full form (untouched slots elided; `...` and `}` keep the one-space m
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`); paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in document order with one blank line between items; `as` paste (`+ fn old as new(...)`) renames the moved fn + self-calls, joint (`+ fn old as new(x: i64) -> i64 { ... }`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, trait (`+ trait old as new { ... }`) renames trait + self-referential method signatures/bodies, joint-trait (`+ trait old as new { fn m_old as m_new; ... }`) adds one method rename, inherent-`impl` (`+ impl old as new { ... }`) renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto (`RSMPL_PATTERN_CONFLICT`), two evolution slots stay ordinary; move+attr (E1) / trait-move (E2) ride the same cut/paste probe with the delta as ordinary leftover (SPEC 20); file-module move (deleted+created file pair, N≥1 items, stems match) joins its `mod old;`→`mod new;` pair under the first cut's rule (SPEC 20.6).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many` or `# sweep`) moves imports after a `mod` rename; plain/grouped/glob/`as`/`pub use` tails preserved, segment-wise; members at the matched position rewrite too (`crate::{old, x}` → `crate::{new, x}`), never by suffix; regroup merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` and splits the inverse (same order/vis, no attrs; `as`/glob/nested stay ordinary) (SPEC 14.9).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, General-expression rewrites (`- E + 1`), types (`` - `Vec`<T> `` / `` + `Box`<[T]> ``, `T` inferred — the backticks are required, a bare `Box` reads as an unbound hole), 2–4-line `let` sequences (per-position `P0`/`E0` holes, SPEC 16.4.2). A bare `P` never matches annotated `x: T` — write `P: T`. Ellipsis `...` is legal only in SPEC 16 positions (fn/arg/body/path slots). Full supported-vs-rejected table with exact errors: SPEC 18.6 (mixed `let-else`, concrete-head `P @`, macro types stay ordinary hunks; block macros opaque, `fn` items strict-header + body; blocks, `if`, `match`, loops, closures, `async`/`try`/`unsafe` blocks, `yield`, `break`/`continue`, `let` expressions, agreed `let-else`, placeholder-head `P @`, array-repeat `[E; N]`, and `&raw` addr match structurally).
-- Ordinary hunks: text edits with no `#` lines; headers stay two-sided (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11; blank insertion needs bare `+`, `- foo` removal a `-- ` body line, SPEC 11); they may mix with semantic hunks but must not overlap semantic ranges (SPEC 10.6).
+- Ordinary hunks: text edits with no `#` lines; headers stay two-sided (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11; blank insertion needs bare `+`, `- foo` removal a `-- ` body line, SPEC 11); content starts immediately after the `+`/`-` marker — a space there becomes part of the line; they may mix with semantic hunks but must not overlap semantic ranges (SPEC 10.6).
 - Macros: plain call patterns never enter macro bodies; `# macro=token_tree` renames verbatim (`M!(...)`→`N!(...)`) or binds one hole per top-level arg; shared-enclosing lines raise as one sweep (SPEC 21).
 
 ## CLI: apply (`gitrs apply` = `applyrs`, SPEC D.1/D.2)
