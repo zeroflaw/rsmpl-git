@@ -337,6 +337,229 @@ fn parse_qualified_pair(old_line: &str, new_line: &str) -> Option<QualDelta> {
     })
 }
 
+/// A parsed N=1 qualified double-delta pair (WI-13 slice 1): shared
+/// leading `::` spelling and `qself` qualifier, both prefix segment
+/// lists (differing in exactly one position), both last-segment callees
+/// (a real delta), uniform arity with token-equal value args, and the
+/// rendered subterm texts for the frame check.
+struct QualDoubleDelta {
+    leading: bool,
+    qself: Option<String>,
+    qself_pos: usize,
+    old_pre: Vec<String>,
+    new_pre: Vec<String>,
+    old_cal: String,
+    new_cal: String,
+    arity: usize,
+    old_raw: String,
+    new_raw: String,
+}
+
+/// Parse a `-`/`+` line pair as a qualified prefix+callee double delta:
+/// both sides parse (via `parse_call_expr`, so `let`-inits unwrap under
+/// the T449 precedent) as multi-segment generic-free qualified calls
+/// with agreeing leading `::`, token-equal `qself` qualifiers, the same
+/// segment count, and token-equal value args — while the prefix segments
+/// differ in exactly one position AND the last segment differs (exactly
+/// two disjoint segment deltas). A single-delta pair (prefix-only or
+/// callee-only) is not this shape: single-delta N=1 qual lines stay
+/// verbatim (a follow-up slice may tighten them; claiming them here
+/// would change their bytes). Three-or-more deltas (prefix differing in
+/// 2+ positions plus the callee) stay ordinary. Turbofish segments never
+/// qualify (turbofish territory), and arg/arity/leading/`qself` deltas
+/// veto (their singles' territory, never partially claimed).
+fn parse_qual_double_pair(old_line: &str, new_line: &str) -> Option<QualDoubleDelta> {
+    use quote::ToTokens;
+    let old_expr = parse_call_expr(old_line)?;
+    let new_expr = parse_call_expr(new_line)?;
+    let (syn::Expr::Call(o_call), syn::Expr::Call(n_call)) = (&old_expr, &new_expr) else {
+        return None;
+    };
+    let (syn::Expr::Path(o_p), syn::Expr::Path(n_p)) = (o_call.func.as_ref(), n_call.func.as_ref())
+    else {
+        return None;
+    };
+    if o_p.path.leading_colon != n_p.path.leading_colon {
+        return None;
+    }
+    let (o_qself, o_qpos) = super::qualifier_of(o_p);
+    let (n_qself, n_qpos) = super::qualifier_of(n_p);
+    if o_qself != n_qself || o_qpos != n_qpos {
+        return None;
+    }
+    if o_p.path.segments.len() != n_p.path.segments.len() || o_p.path.segments.len() < 2 {
+        return None;
+    }
+    for seg in o_p.path.segments.iter().chain(n_p.path.segments.iter()) {
+        if !matches!(seg.arguments, syn::PathArguments::None) {
+            return None;
+        }
+    }
+    let segs: Vec<String> = o_p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let n_segs: Vec<String> = n_p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    // Post-qualifier prefix (the qualifier carries the trait path, never
+    // doubled — `parse_qualified_pair` precedent) must differ in exactly
+    // one position; the last segment carries the callee delta.
+    let skip = o_qpos.min(segs.len().saturating_sub(1));
+    let (old_pre, new_pre) = (&segs[skip..segs.len() - 1], &n_segs[skip..segs.len() - 1]);
+    let mut prefix_deltas = 0usize;
+    for (a, b) in old_pre.iter().zip(new_pre.iter()) {
+        if ident_len(a)? != a.len() || ident_len(b)? != b.len() {
+            return None;
+        }
+        if a != b {
+            prefix_deltas += 1;
+        }
+    }
+    if prefix_deltas != 1 {
+        return None;
+    }
+    let old_cal = segs.last()?.clone();
+    let new_cal = n_segs.last()?.clone();
+    if ident_len(&old_cal)? != old_cal.len()
+        || ident_len(&new_cal)? != new_cal.len()
+        || old_cal == new_cal
+    {
+        return None;
+    }
+    if o_call.args.len() != n_call.args.len() {
+        return None;
+    }
+    for (a, b) in o_call.args.iter().zip(n_call.args.iter()) {
+        if a.to_token_stream().to_string() != b.to_token_stream().to_string() {
+            return None;
+        }
+    }
+    Some(QualDoubleDelta {
+        leading: o_p.path.leading_colon.is_some(),
+        qself: o_qself,
+        qself_pos: o_qpos,
+        old_pre: old_pre.to_vec(),
+        new_pre: new_pre.to_vec(),
+        old_cal,
+        new_cal,
+        arity: o_call.args.len(),
+        old_raw: old_expr.to_token_stream().to_string(),
+        new_raw: new_expr.to_token_stream().to_string(),
+    })
+}
+
+/// WI-13 slice 1: N=1 qualified prefix+callee double-delta single under
+/// `PrecisionUnique`. Fires iff the pair parses as a double delta
+/// (`parse_qual_double_pair`: exactly one prefix-segment delta plus the
+/// callee delta, token-equal args) and the frame rule holds over the
+/// single subterm pair (a frame delta alongside vetoes — never a partial
+/// claim). Uniqueness is proved by `template_pair_counts` at n=1 over
+/// the emitted holed pair (the same probe as the slice-22/23 wrap
+/// singles — one site file-wide) plus the T361 byte-compare
+/// pre-reservation (`single_reproduces`, slices-4–23 posture), which also
+/// proves the D13 composed emission reproduces the line exactly.
+/// Single-delta N=1 qual pairs decline here (they stay verbatim — no
+/// bypass around the verbatim floor); three-or-more-delta lines decline
+/// (ordinary territory). Multi-subterm lines decline
+/// (`parse_qual_double_pair` takes whole-line calls only — uniform
+/// two-site lines are multi territory by site count, even at one pair).
+/// Emission is the allow-one spelling (tight range, directive-free,
+/// default `allow=one`). Detector name `call_sweep` (same family — the
+/// emitted template is the qualified-call shape the engine already
+/// matches, so provenance is unchanged).
+pub(crate) fn try_qual_double_single(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Counted<String> {
+    if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
+        return Counted::Miss;
+    }
+    // Uniqueness needs the whole file; section-visible fallback stays
+    // ordinary (no guessing).
+    let Some(pre) = file_old else {
+        return Counted::Miss;
+    };
+    let Some(d) = parse_qual_double_pair(minuses[0], pluses[0]) else {
+        return Counted::Miss;
+    };
+    if !super::subline::frame_holds(
+        minuses[0],
+        pluses[0],
+        &[(d.old_raw.clone(), d.new_raw.clone())],
+    ) {
+        return Counted::Miss;
+    }
+    let old_prefix = QualPrefix {
+        leading: d.leading,
+        qself: d.qself.clone(),
+        qself_pos: d.qself_pos,
+        segs: d.old_pre.clone(),
+    };
+    let new_prefix = QualPrefix {
+        leading: d.leading,
+        qself: d.qself.clone(),
+        qself_pos: d.qself_pos,
+        segs: d.new_pre.clone(),
+    };
+    let old_path = qual_full(&old_prefix, &d.old_cal);
+    let new_path = qual_full(&new_prefix, &d.new_cal);
+    let mut vars = Vec::with_capacity(d.arity);
+    for i in 0..d.arity {
+        vars.push(format!("E{i}"));
+    }
+    let args = vars.join(", ");
+    // Defensive: the emitted template must sit on a re-parseable path —
+    // a non-parsing template must never leave this core (TOOL-5).
+    let raw_minus = format!("{old_path}({args})");
+    let raw_plus = format!("{new_path}({args})");
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return Counted::Miss;
+    }
+    // WI-7-upper: an uppercase last segment infers as an `expr` hole —
+    // the last segment rides backticks (full-path quotes are
+    // engine-rejected); lowercase paths pass through untouched.
+    let minus_tpl = format!("{}({args})", super::shape::literal_path_last(&old_path));
+    let plus_tpl = format!("{}({args})", super::shape::literal_path_last(&new_path));
+    // WI-4 counted decline: the shape matched, so a failing probe names
+    // its counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_tpl, &plus_tpl),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+    }
+    // T361 byte gate (slices-4–23 posture): the sub-expression rewrite
+    // must reproduce the native line swap byte-identical.
+    if !super::general_expr::single_reproduces(
+        path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
+    ) {
+        return Counted::Miss;
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{}_to_{}", d.old_cal, d.new_cal));
+    // Allow-one: directive-free ranged hunk (slices-1–23 precedent).
+    let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Counted::Fire(hunk)
+}
+
 /// One turbofish argument: token text plus whether it is a plain type
 /// (only type positions may become the inferred `T` hole — a
 /// lifetime/const hole is unexpressible, so those stay verbatim).
@@ -1327,6 +1550,118 @@ mod tests {
             files["f.rs"].contains("gamma.Other::<u8>(twin_argument)"),
             "twin must survive, got: {}",
             files["f.rs"]
+        );
+    }
+    #[test]
+    fn wi13_qual_double_single_fires() {
+        // WI-13 slice 1: an N=1 line carrying exactly two disjoint
+        // segment deltas (one prefix segment + the callee) raises as one
+        // holed qualified pattern under `call_sweep`, and the applied
+        // tree is byte-identical to the native post-image.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let v = oldmod::foo(1);\n+    let v = newmod::bar(1);\n }\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn m() {\n    let v = oldmod::foo(1);\n}\n")]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(
+            !out.contains("# allow=many"),
+            "allow-one, no allow=many: {out}"
+        );
+        assert!(out.contains("- oldmod::foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ newmod::bar(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], "fn m() {\n    let v = newmod::bar(1);\n}\n");
+    }
+
+    #[test]
+    fn wi13_qual_double_single_delta_stays_verbatim() {
+        // Single-delta N=1 qual lines stay verbatim — the double arm
+        // declines (no shared bypass around the verbatim floor): a
+        // prefix-only twin and a callee-only twin each keep the whole
+        // line spelling, never a holed qualified pattern.
+        let pre = pre_map(&[("f.rs", "fn m() {\n    let v = oldmod::foo(1);\n}\n")]);
+        let prefix_only = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let v = oldmod::foo(1);\n+    let v = newmod::foo(1);\n }\n",
+        );
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&prefix_only), &pre)
+                .unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let v = oldmod::foo(1);\n"), "got: {out}");
+        assert!(!out.contains("foo(E0)"), "no holed qual emission: {out}");
+        let callee_only = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let v = oldmod::foo(1);\n+    let v = oldmod::bar(1);\n }\n",
+        );
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&callee_only), &pre)
+                .unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("- let v = oldmod::foo(1);\n"), "got: {out}");
+        assert!(
+            !out.contains("oldmod::foo(E0)"),
+            "no holed qual emission: {out}"
+        );
+    }
+
+    #[test]
+    fn wi13_qual_double_three_delta_stays_ordinary() {
+        // Three disjoint deltas (two prefix segments + the callee) never
+        // compose — no holed qualified emission.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let v = a::b::foo(1);\n+    let v = x::y::bar(1);\n }\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn m() {\n    let v = a::b::foo(1);\n}\n")]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(!out.contains("foo(E0)"), "no holed qual emission: {out}");
+        assert!(!out.contains("bar(E0)"), "no holed qual emission: {out}");
+    }
+
+    #[test]
+    fn wi13_qual_double_extra_site_vetoes() {
+        // Occurrence totality: an untouched same-shape twin vetoes the
+        // holed double (found 2 vs want 1); the line keeps its verbatim
+        // floor spelling instead.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let v = oldmod::foo(1);\n+    let v = newmod::bar(1);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let v = oldmod::foo(1);\n    let w = oldmod::foo(9);\n}\n",
+        )]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(!out.contains("oldmod::foo(E0)"), "twin must veto: {out}");
+        assert!(out.contains("- let v = oldmod::foo(1);\n"), "got: {out}");
+    }
+
+    #[test]
+    fn wi13_qual_double_frame_delta_vetoes() {
+        // A frame delta alongside the double delta vetoes the composition
+        // (never a partial claim) — no holed qualified emission.
+        let raw = section(
+            "f.rs",
+            "@@ -1,3 +1,3 @@\n fn m() {\n-    let v = oldmod::foo(1);\n+    let w = newmod::bar(1);\n }\n",
+        );
+        let pre = pre_map(&[("f.rs", "fn m() {\n    let v = oldmod::foo(1);\n}\n")]);
+        // A frame delta alongside the double delta vetoes the composition
+        // (never a partial claim) — and the binder delta keeps even the
+        // verbatim floor out, so the pair stays wholly ordinary.
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none(),
+            "frame delta must veto the composition",
         );
     }
 }

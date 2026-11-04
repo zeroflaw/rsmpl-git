@@ -629,6 +629,32 @@ pub(crate) fn compress_balanced_pair_body(
             );
             used_rules.truncate(checkpoint);
         }
+        // WI-13 slice 1: N=1 qualified prefix+callee double-delta single
+        // under the precision guard (exactly two disjoint segment
+        // deltas — one prefix segment plus the callee — with token-equal
+        // args; uniqueness proved by `template_pair_holds` at n=1 over
+        // the emitted holed pair plus the T361 byte-compare;
+        // single-delta N=1 qual lines stay verbatim, three-or-more-delta
+        // lines stay ordinary).
+        if let Some(single) = attempt_counted(
+            declined,
+            "call_sweep",
+            super::try_qual_double_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
+                return Some((body.to_string(), "call_sweep"));
+            }
+            declined_guard_with_numbers(
+                declined,
+                "call_sweep",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
+            used_rules.truncate(checkpoint);
+        }
         // WI-7 slice-1 (repeat family): single-pair full-strip fold
         // under the precision guard (uniqueness proved by
         // `template_repeat_holds` at n=1 plus the T361 byte-compare with

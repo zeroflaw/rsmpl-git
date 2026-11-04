@@ -8971,6 +8971,21 @@ every length and the totals stay the default truth at any size.
     T361 byte-compare; uppercase callees ride backticks with the
     raw-callee re-parse check (TOOL-5). The sub-line wrap family is
     closed (whole-line slices 6-9 plus sub-line slices 22-23).
+ Slice-24 adds the N=1 qualified prefix+callee double-delta single
+ (`let v = old_mod::foo(alpha_arg);` → `let v = new_mod::bar(alpha_arg);`,
+ bare-statement and `let`-init framings via the shared `side_expr` entry,
+ detector inline in `paths.rs` — the qualified-call owner, well under the
+ D5 gates): the pair must parse on both sides as a multi-segment
+ generic-free qualified call with agreeing leading `::`, token-equal
+ `qself` qualifiers, the same segment count, and token-equal value args,
+ while the prefix segments differ in exactly one position AND the last
+ segment differs (exactly two disjoint segment deltas); single-delta N=1
+ qual pairs stay verbatim (no bypass around the verbatim floor), prefix
+ deltas in 2+ positions stay ordinary (three or more deltas); turbofish
+ segments veto (turbofish territory); the frame rule holds over the single
+ subterm pair; uniqueness proved by `template_pair_holds` at n=1 over the
+ emitted holed pair plus the T361 byte-compare; uppercase last segments
+ ride backticks with the raw-path re-parse check (TOOL-5 precedent).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
