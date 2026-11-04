@@ -35,12 +35,21 @@ Five invariants; everything below is their spelling:
    (`S″ == S′` canonical fixed point, tree-lossless natives); every
    remaining divergence is named, owned, and pinned — never silent.
 
-*Note (WI-23d, docs slice): the contract above stays hand-owned until
-WI-24's table generators (error table, guard table, directive
-inventory) land; it is then assembled from those generated blocks.
-The per-section `Read this if` lines below are this slice's
-contribution: one navigation line per body section, no normative
-change.*
+*Note (WI-9): the contract above stays hand-owned; the three inventory
+lines below it are generated from code (directive keys, error codes,
+guard posture) — edit the code, never the blocks.*
+
+<!-- generated: contract-directives start -- do not hand-edit; run `python3 tools/gen_directives.py --write` -->
+Directives: 16 keys, 3 bare flags, 20 kinds (SPEC 9.3; generated block).
+<!-- generated: contract-directives end -->
+
+<!-- generated: contract-errors start -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->
+Errors: 9 codes (SPEC 25; generated block).
+<!-- generated: contract-errors end -->
+
+<!-- generated: contract-guard start -- do not hand-edit; run `python3 tools/gen_guard.py --write` -->
+Guards: 17 Precision, rest Strict (`PRECISION_GUARD` = 16; SPEC D.4, generated block).
+<!-- generated: contract-guard end -->
 
 ---
 
@@ -879,6 +888,13 @@ hunks that already carry other directives omit it.
 | `# follow=uses` | Rewrite same-file use sites alongside a fn/item rename (WI-6a, Section 14.8; legal only on fn/item rename hunks). |
 | `# symbol Name=path` | Bind a semantic symbol to a fully-qualified path (Sections 9.5, 19). |
 | `# metavars=sigiled/bare` | Sigiled mode requires `$Name` in bodies; bare is the token-efficient default (Section 15.5). |
+
+<!-- generated: directives start -- do not hand-edit; run `python3 tools/gen_directives.py --write` -->
+Directive inventory (code is the source: `directives.rs` + `model.rs`): 16 keys, 3 bare flags, 20 kinds.
+Keys: lang, allow, optional, scope, bind, use, attrs, mode, macro, format, returns, root, fallback, metavars, symbol, follow.
+Bare: optional, repeat, sweep.
+Kinds: identifier, ident, path, symbol, expr, stmt, item, type, pat, lifetime, generic_params, where_clause, visibility, qualifier, qualifier_list, attributes, block, field, macro, token_tree.
+<!-- generated: directives end -->
 
 ### 9.4 Metavariable directives
 
@@ -5377,6 +5393,11 @@ if:
 *Read this if you got an `RSMPL_*_CONFLICT` code and need the fix.*
 
 The engine should report structured errors.
+
+<!-- generated: errors start -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->
+Error-code inventory (code is the source: `errors.rs`): 9 codes.
+Codes: RSMPL_RANGE_CONFLICT, RSMPL_PARSE_CONFLICT, RSMPL_PATTERN_CONFLICT, RSMPL_MATCH_CONFLICT, RSMPL_SYMBOL_CONFLICT, RSMPL_CAPTURE_CONFLICT, GIT_HUNK_CONFLICT, RSMPL_IO_CONFLICT, RSMPL_BUILD_CONFLICT.
+<!-- generated: errors end -->
 
 ### 25.1 Range conflict
 
@@ -10085,8 +10106,32 @@ competing risks (WI-19/WI-7, one decision point:
 `rsmpl_diff_infer::semantic::guard_for` for the posture plus
 `guard::precision_allowance` for the number, decided by the single
 helpers `within_precision` / `within_strict` — whole-section
-pair-chain emissions consult `guard::pair_section_gate`, which prices
-Precision detectors under the allowance and keeps T375 for Strict).
+ pair-chain emissions consult `guard::pair_section_gate`, which prices
+ Precision detectors under the allowance and keeps T375 for Strict).
+
+<!-- generated: guard start -- do not hand-edit; run `python3 tools/gen_guard.py --write` -->
+Guard posture (code is the source: `guard_for` in `guard.rs`, `PRECISION_GUARD` = 16): 17 Precision detectors; every other detector rides Strict.
+| Detector | Guard |
+|---|---|
+| `item_rename` | Precision |
+| `member_rename` | Precision |
+| `assoc_rename` | Precision |
+| `macro_rules_rename` | Precision |
+| `fn_slot_sweep` | Precision |
+| `sig_evolution` | Precision |
+| `header_evolution` | Precision |
+| `definition_evolution` | Precision |
+| `definition_addition` | Precision |
+| `definition_addition_follow` | Precision |
+| `variant_addition_follow` | Precision |
+| `delete` | Precision |
+| `move` | Precision |
+| `mod_rename` | Precision |
+| `item_intent` | Precision |
+| `trait_method_rename` | Precision |
+| `inherent_method_rename` | Precision |
+<!-- generated: guard end -->
+
 Sweep shapes (calls, method sweeps, `general_expr`,
 `control_template`, verbatim, macro interiors — any minus pattern
 that could match wider than the diff)

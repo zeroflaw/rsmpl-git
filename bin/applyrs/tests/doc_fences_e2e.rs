@@ -384,3 +384,236 @@ fn error_inventory_sync() {
         );
     }
 }
+
+/// WI-9: generated guard table sync — `guard_for` in `guard.rs` plus
+/// `PRECISION_GUARD` are the single source of the SPEC D.4 guard table
+/// and the SPEC-head contract-guard line. Mirrors
+/// `python3 tools/gen_guard.py --check` (same layering as
+/// `d5_exclusions_sync`); both layers are mutation-checked.
+#[test]
+fn generated_guard_sync() {
+    let root = workspace_root();
+    let guard = std::fs::read_to_string(root.join("crates/rsmpl_diff_infer/src/semantic/guard.rs"))
+        .expect("guard.rs must be readable");
+    let evo = std::fs::read_to_string(
+        root.join("crates/rsmpl_diff_infer/src/semantic/definition_evolution.rs"),
+    )
+    .expect("definition_evolution.rs must be readable");
+    let spec = std::fs::read_to_string(root.join("SPEC.md")).expect("SPEC.md must be readable");
+
+    // Precision arms: quoted names between `match detector {` and the
+    // `_ =>` default (every other detector rides Strict by construction).
+    let m = guard.find("fn guard_for").expect("guard_for missing");
+    let after = &guard[m..];
+    let end = after.find("_ =>").expect("guard_for default arm missing");
+    let mut precision = Vec::new();
+    let mut rest = &after[..end];
+    while let Some(a) = rest.find('"') {
+        let b = rest[a + 1..].find('"').expect("closing quote");
+        precision.push(rest[a + 1..a + 1 + b].to_string());
+        rest = &rest[a + 1 + b + 1..];
+    }
+    assert!(!precision.is_empty(), "Precision set parsed empty");
+    let mut seen = std::collections::BTreeSet::new();
+    for d in &precision {
+        assert!(seen.insert(d.clone()), "duplicate Precision detector `{d}`");
+    }
+    let i = evo
+        .find("const PRECISION_GUARD")
+        .expect("PRECISION_GUARD missing");
+    let tail = &evo[i..];
+    let eq = tail.find('=').expect("const value missing");
+    let semi = tail[eq..].find(';').expect("const terminator missing");
+    let n: usize = tail[eq + 1..eq + semi]
+        .trim()
+        .parse()
+        .expect("PRECISION_GUARD must parse");
+
+    const START: &str = "<!-- generated: guard start";
+    const END: &str = "<!-- generated: guard end -->";
+    const CSTART: &str = "<!-- generated: contract-guard start";
+    const CEND: &str = "<!-- generated: contract-guard end -->";
+    let mut expected = format!(
+        "{START} -- do not hand-edit; run `python3 tools/gen_guard.py --write` -->\n\
+         Guard posture (code is the source: `guard_for` in `guard.rs`, \
+         `PRECISION_GUARD` = {n}): {len} Precision detectors; \
+         every other detector rides Strict.\n\
+         | Detector | Guard |\n\
+         |---|---|\n",
+        len = precision.len()
+    );
+    for d in &precision {
+        expected.push_str(&format!("| `{d}` | Precision |\n"));
+    }
+    expected.push_str(&format!("{END}\n"));
+    let expected_c = format!(
+        "{CSTART} -- do not hand-edit; run `python3 tools/gen_guard.py --write` -->\n\
+         Guards: {len} Precision, rest Strict \
+         (`PRECISION_GUARD` = {n}; SPEC D.4, generated block).\n\
+         {CEND}\n",
+        len = precision.len()
+    );
+    let cur = |text: &str, s: &str, e: &str| {
+        let a = text
+            .find(s)
+            .unwrap_or_else(|| panic!("marker missing: {s}"));
+        let b = text
+            .find(e)
+            .unwrap_or_else(|| panic!("marker missing: {e}"));
+        format!("{}\n", &text[a..b + e.len()])
+    };
+    assert_eq!(
+        cur(&spec, START, END),
+        expected,
+        "SPEC D.5 guard table drifts from `guard_for`: run `python3 tools/gen_guard.py --write`"
+    );
+    assert_eq!(
+        cur(&spec, CSTART, CEND),
+        expected_c,
+        "SPEC head contract-guard drifts: run `python3 tools/gen_guard.py --write`"
+    );
+}
+
+/// WI-9: generated inventory blocks sync — the directive/error extractors
+/// own the `generated: directives` / `generated: errors` blocks in
+/// SPEC.md, AGENTS.md, SKILL.md and the SPEC-head contract one-liners.
+/// Mirrors `python3 tools/gen_directives.py --check` and
+/// `python3 tools/gen_errors.py --check` for the block layer (the
+/// coverage layer stays in `directive_inventory_sync` /
+/// `error_inventory_sync`); both layers are mutation-checked.
+#[test]
+fn generated_inventory_blocks_sync() {
+    let root = workspace_root();
+    let directives = std::fs::read_to_string(root.join("crates/rsmpl_patch/src/directives.rs"))
+        .expect("directives.rs must be readable");
+    let model = std::fs::read_to_string(root.join("crates/rsmpl_patch/src/model.rs"))
+        .expect("model.rs must be readable");
+    let errors = std::fs::read_to_string(root.join("crates/rsmpl_patch/src/errors.rs"))
+        .expect("errors.rs must be readable");
+    let spec = std::fs::read_to_string(root.join("SPEC.md")).expect("SPEC.md must be readable");
+    let agents =
+        std::fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must be readable");
+    let skill = std::fs::read_to_string(root.join("skills/gitrs/SKILL.md"))
+        .expect("SKILL.md must be readable");
+
+    fn str_list(src: &str, name: &str) -> Vec<String> {
+        let i = src.find(name).unwrap_or_else(|| panic!("{name} not found"));
+        let after = &src[i..];
+        let l = after.find('[').expect("list open");
+        let r = after.find("];").expect("list close");
+        let mut out = Vec::new();
+        let mut rest = &after[l..r];
+        while let Some(a) = rest.find('"') {
+            let b = rest[a + 1..].find('"').expect("closing quote");
+            out.push(rest[a + 1..a + 1 + b].to_string());
+            rest = &rest[a + 1 + b + 1..];
+        }
+        out
+    }
+    let keys = str_list(&directives, "KNOWN_KV_KEYS");
+    let bare = str_list(&directives, "BARE_FLAGS");
+    // `MetavarKind::parse` arms: `"kind" => Some(Self::...)`.
+    let mut kinds = Vec::new();
+    let mut rest = model.as_str();
+    while let Some(a) = rest.find("=> Some(Self::") {
+        let head = &rest[..a];
+        let q = head.rfind('"').expect("kind quote");
+        let open = head[..q].rfind('"').expect("kind open quote");
+        kinds.push(head[open + 1..q].to_string());
+        rest = &rest[a + 1..];
+    }
+    // `ErrorCode::as_str` arms: `Self::X => "CODE_CONFLICT"`.
+    let mut codes = Vec::new();
+    let mut tail = errors.as_str();
+    while let Some(a) = tail.find("=> \"") {
+        let after = &tail[a + 4..];
+        let end = after.find('"').expect("code closing quote");
+        let code = after[..end].to_string();
+        if code.ends_with("CONFLICT") {
+            codes.push(code);
+        }
+        tail = &after[end + 1..];
+    }
+    assert!(!kinds.is_empty() && !codes.is_empty(), "parse walked empty");
+
+    const DSTART: &str = "<!-- generated: directives start";
+    const DEND: &str = "<!-- generated: directives end -->";
+    const DCSTART: &str = "<!-- generated: contract-directives start";
+    const DCEND: &str = "<!-- generated: contract-directives end -->";
+    const ESTART: &str = "<!-- generated: errors start";
+    const EEND: &str = "<!-- generated: errors end -->";
+    const ECSTART: &str = "<!-- generated: contract-errors start";
+    const ECEND: &str = "<!-- generated: contract-errors end -->";
+    let expected_d = format!(
+        "{DSTART} -- do not hand-edit; run `python3 tools/gen_directives.py --write` -->\n\
+         Directive inventory (code is the source: `directives.rs` + `model.rs`): \
+         {nk} keys, {nb} bare flags, {nn} kinds.\n\
+         Keys: {keys}.\n\
+         Bare: {bare}.\n\
+         Kinds: {kinds}.\n\
+         {DEND}\n",
+        nk = keys.len(),
+        nb = bare.len(),
+        nn = kinds.len(),
+        keys = keys.join(", "),
+        bare = bare.join(", "),
+        kinds = kinds.join(", "),
+    );
+    let expected_dc = format!(
+        "{DCSTART} -- do not hand-edit; run `python3 tools/gen_directives.py --write` -->\n\
+         Directives: {nk} keys, {nb} bare flags, {nn} kinds (SPEC 9.3; generated block).\n\
+         {DCEND}\n",
+        nk = keys.len(),
+        nb = bare.len(),
+        nn = kinds.len(),
+    );
+    let expected_e = format!(
+        "{ESTART} -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->\n\
+         Error-code inventory (code is the source: `errors.rs`): {n} codes.\n\
+         Codes: {codes}.\n\
+         {EEND}\n",
+        n = codes.len(),
+        codes = codes.join(", "),
+    );
+    let expected_ec = format!(
+        "{ECSTART} -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->\n\
+         Errors: {n} codes (SPEC 25; generated block).\n\
+         {ECEND}\n",
+        n = codes.len(),
+    );
+    let cur = |text: &str, s: &str, e: &str| {
+        let a = text
+            .find(s)
+            .unwrap_or_else(|| panic!("marker missing: {s}"));
+        let b = text
+            .find(e)
+            .unwrap_or_else(|| panic!("marker missing: {e}"));
+        format!("{}\n", &text[a..b + e.len()])
+    };
+    for (text, name) in [
+        (&spec, "SPEC.md"),
+        (&agents, "AGENTS.md"),
+        (&skill, "SKILL.md"),
+    ] {
+        assert_eq!(
+            cur(text, DSTART, DEND),
+            expected_d,
+            "{name} directives block drifts: run `python3 tools/gen_directives.py --write`"
+        );
+        assert_eq!(
+            cur(text, ESTART, EEND),
+            expected_e,
+            "{name} errors block drifts: run `python3 tools/gen_errors.py --write`"
+        );
+    }
+    assert_eq!(
+        cur(&spec, DCSTART, DCEND),
+        expected_dc,
+        "SPEC head contract-directives drifts: run `python3 tools/gen_directives.py --write`"
+    );
+    assert_eq!(
+        cur(&spec, ECSTART, ECEND),
+        expected_ec,
+        "SPEC head contract-errors drifts: run `python3 tools/gen_errors.py --write`"
+    );
+}

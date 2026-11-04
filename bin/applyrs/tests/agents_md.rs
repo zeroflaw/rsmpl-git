@@ -17,13 +17,49 @@ fn read_root(rel: &str) -> String {
     std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
 }
 
+/// WI-9: hand-owned line count — total lines minus generated-block lines
+/// (between `<!-- generated:` start/end markers) minus the blank
+/// separator lines immediately adjacent to a block.
+fn hand_lines(text: &str) -> usize {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut gen = vec![false; lines.len()];
+    let mut in_gen = false;
+    for (i, l) in lines.iter().enumerate() {
+        if l.contains("<!-- generated:") && l.contains("start") {
+            in_gen = true;
+            gen[i] = true;
+        } else if in_gen {
+            gen[i] = true;
+            if l.contains("<!-- generated:") && l.contains("end") {
+                in_gen = false;
+            }
+        }
+    }
+    for i in 0..lines.len() {
+        if gen[i] || !lines[i].trim().is_empty() {
+            continue;
+        }
+        let before = i > 0 && gen[i - 1];
+        let after = i + 1 < lines.len() && gen[i + 1];
+        if before || after {
+            gen[i] = true;
+        }
+    }
+    gen.iter().filter(|g| !**g).count()
+}
+
 #[test]
 fn agents_md_citations_resolve() {
     let agents = read_root("AGENTS.md");
     let spec = read_root("SPEC.md");
     let readme = read_root("README.md");
 
-    let lines = agents.lines().count();
+    // WI-9: line budgets count hand-owned prose only — generated
+    // inventory blocks (between `<!-- generated:` markers, plus the
+    // blank separators they bring) are machine-capped by their
+    // generators (`gen_directives.py` / `gen_errors.py --check`), so the
+    // anti-rot cap still binds every hand edit.
+    let lines = hand_lines(&agents);
     assert!(lines <= 180, "AGENTS.md budget is 180 lines, got {lines}");
 
     // SPEC section anchors cited by the cheat-sheet: (agents-side citation,
@@ -97,9 +133,9 @@ fn agents_md_citations_resolve() {
     // loop (scope=file over file reads, budget flags) plus the repair path.
     let skill = read_root("skills/gitrs/SKILL.md");
     assert!(
-        skill.lines().count() <= 150,
+        hand_lines(&skill) <= 150,
         "skill budget is 150 lines, got {}",
-        skill.lines().count()
+        hand_lines(&skill)
     );
     for needle in [
         "scope=file",

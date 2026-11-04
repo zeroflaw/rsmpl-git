@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Error-code inventory coverage gate (WI-24 slice 2).
+"""Error-code inventory coverage gate + generated inventory blocks (WI-9).
 
 Source of truth: the engine itself —
   crates/rsmpl_patch/src/errors.rs (ErrorCode::as_str arms).
 SPEC.md section 25 plus the AGENTS.md / skills/gitrs/SKILL.md
-"Errors: code -> fix" tables must cover every code; the tables stay
-hand-written, only the coverage is machine-checked (WI-24 boundary:
-prose hand-owned, inventory machine-checked).
+"Errors: code -> fix" tables must cover every code (coverage checked);
+the inventory blocks between the `generated: errors` markers in SPEC.md,
+AGENTS.md, and SKILL.md plus the `contract-errors` one-liner at the SPEC
+head are generated from the same extractor (`--write` rewrites them;
+`--check` fails on drift). Fix prose stays hand-written outside the
+markers — tables and enumerations only.
 
 Usage:
   python3 tools/gen_errors.py --check   # exit 0 in sync, 2 on drift
-Bare run defaults to --check. No --write: coverage is fixed by
-hand-editing the tables (one flag only, per the minimal-CLI rule).
+  python3 tools/gen_errors.py --write   # rewrite the doc blocks
+Bare run defaults to --check.
 """
 
 import re
@@ -23,6 +26,11 @@ ERRORS = ROOT / "crates" / "rsmpl_patch" / "src" / "errors.rs"
 SPEC = ROOT / "SPEC.md"
 AGENTS = ROOT / "AGENTS.md"
 SKILL = ROOT / "skills" / "gitrs" / "SKILL.md"
+
+START = "<!-- generated: errors start -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->"
+END = "<!-- generated: errors end -->"
+CSTART = "<!-- generated: contract-errors start -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->"
+CEND = "<!-- generated: contract-errors end -->"
 
 
 def parse_codes():
@@ -36,16 +44,66 @@ def parse_codes():
     return codes
 
 
+def render(codes) -> str:
+    return (
+        f"{START}\n"
+        f"Error-code inventory (code is the source: `errors.rs`): "
+        f"{len(codes)} codes.\n"
+        f"Codes: {', '.join(codes)}.\n"
+        f"{END}\n"
+    )
+
+
+def render_contract(codes) -> str:
+    return (
+        f"{CSTART}\n"
+        f"Errors: {len(codes)} codes (SPEC 25; generated block).\n"
+        f"{CEND}\n"
+    )
+
+
+def block(text: str, start: str, end: str, where: str) -> str:
+    i = text.find(start)
+    j = text.find(end)
+    if i < 0 or j < 0 or j < i:
+        raise SystemExit(f"gen_errors: markers not found in {where}")
+    return text[i : j + len(end)] + "\n"
+
+
 def main(argv) -> int:
     args = argv or ["--check"]
-    if args != ["--check"]:
-        print("gen_errors: usage: `python3 tools/gen_errors.py --check`")
-        return 2
     codes = parse_codes()
     spec = SPEC.read_text()
     agents = AGENTS.read_text()
     skill = SKILL.read_text()
-
+    expected = render(codes)
+    expected_c = render_contract(codes)
+    targets = [
+        (spec, "SPEC.md errors"),
+        (agents, "AGENTS.md errors"),
+        (skill, "SKILL.md errors"),
+    ]
+    if "--write" in args:
+        changed = []
+        for path in [SPEC, AGENTS, SKILL]:
+            text = path.read_text()
+            cur = block(text, START, END, str(path))
+            if cur != expected:
+                path.write_text(text.replace(cur, expected))
+                changed.append(path.name)
+        text = SPEC.read_text()
+        cur_c = block(text, CSTART, CEND, "SPEC.md contract-errors")
+        if cur_c != expected_c:
+            SPEC.write_text(text.replace(cur_c, expected_c))
+            changed.append("SPEC.md(contract)")
+        if changed:
+            print(f"gen_errors: wrote ({', '.join(sorted(set(changed)))})")
+        else:
+            print(f"gen_errors: in sync ({len(codes)} codes)")
+        return 0
+    if args != ["--check"]:
+        print("gen_errors: usage: `python3 tools/gen_errors.py [--check|--write]`")
+        return 2
     problems = []
     missing_spec = [c for c in codes if c not in spec]
     missing_agents = [c for c in codes if c not in agents]
@@ -56,9 +114,14 @@ def main(argv) -> int:
         problems.append(f"AGENTS={missing_agents}")
     if missing_skill:
         problems.append(f"SKILL={missing_skill}")
+    for text, where in targets:
+        if block(text, START, END, where) != expected:
+            problems.append(f"stale-block:{where}")
+    if block(spec, CSTART, CEND, "SPEC.md contract-errors") != expected_c:
+        problems.append("stale-block:SPEC.md contract-errors")
     if problems:
         print(f"gen_errors: DRIFT {'; '.join(problems)}")
-        print("gen_errors: cover the missing code in SPEC 25 / AGENTS.md / SKILL.md")
+        print("gen_errors: run `python3 tools/gen_errors.py --write`")
         return 2
     print(f"gen_errors: in sync ({len(codes)} codes)")
     return 0

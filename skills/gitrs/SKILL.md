@@ -44,6 +44,13 @@ renames use the terse form plus `rule=` (SPEC 7.1).
 | `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant/assoc rename (fn/item: unique-definition only, multi-def vetoes; fields anchor `.old` by receiver type — fn params, `let x: C`, `let x = S{…}`, `self` in `impl S` — plus `S`-labels with shorthand `S { old }` → `S { new: old }`, siblings never veto (`shadowed`/`off-target` skips); variants claim `E::Old` paths, bare `Old` needs `use E::*` else `second-hop`; assoc claims container-proven `Self::`/`S::`/`Tr::`/qself tails with per-block `shadowed` skips; trait-method headers claim `impl Tr for S` defs + anchored `recv.old()`/`S::old` calls; `mod` claims `old::`/`crate::old::` path uses plus its file move) (definition-only without it, with `orphans` evidence; raised as `item_intent` (items) / `member_rename` pre-pass (members, file/section-pure partial) / `mod_rename` pre-pass (`mod` + file move, file/section-pure partial) / `assoc_rename` pre-pass (assoc, one section per def file) / `trait_method_rename` pre-pass (trait-method, single trait hunk) when the cross-file probe proves the group) |
 | `# returns=none` | minus-side requires no return type (fn only) |
 
+<!-- generated: directives start -- do not hand-edit; run `python3 tools/gen_directives.py --write` -->
+Directive inventory (code is the source: `directives.rs` + `model.rs`): 16 keys, 3 bare flags, 20 kinds.
+Keys: lang, allow, optional, scope, bind, use, attrs, mode, macro, format, returns, root, fallback, metavars, symbol, follow.
+Bare: optional, repeat, sweep.
+Kinds: identifier, ident, path, symbol, expr, stmt, item, type, pat, lifetime, generic_params, where_clause, visibility, qualifier, qualifier_list, attributes, block, field, macro, token_tree.
+<!-- generated: directives end -->
+
 ## Shapes (SPEC 14/15/16/18.6)
 
 ```diff rsmpl
@@ -138,6 +145,11 @@ gitrs apply --file change.rsmpl                       # apply for real
 | `GIT_HUNK_CONFLICT` | rebase the ordinary-hunk context (the file line differs from the hunk text: paste `actual` from the repair or re-read the file; blank file lines are empty context: ` ` or empty line in-body) |
 | `RSMPL_BUILD_CONFLICT` | post-lowering `--verify build` failure — read `repair.file` at `repair.range` and fix the build breakage (SPEC 25.10) |
 | `RSMPL_IO_CONFLICT` | unreadable path or bad flags (`--format json` → stdout envelope) — fix per suggestion; absolute/`..`-escaping targets rejected |
+
+<!-- generated: errors start -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->
+Error-code inventory (code is the source: `errors.rs`): 9 codes.
+Codes: RSMPL_RANGE_CONFLICT, RSMPL_PARSE_CONFLICT, RSMPL_PATTERN_CONFLICT, RSMPL_MATCH_CONFLICT, RSMPL_SYMBOL_CONFLICT, RSMPL_CAPTURE_CONFLICT, GIT_HUNK_CONFLICT, RSMPL_IO_CONFLICT, RSMPL_BUILD_CONFLICT.
+<!-- generated: errors end -->
 
 JSON failures (`--format json`) print `{version, error: {code, rule, file, range, reason, suggestion, repair}}` to stdout only, exit 2. `repair` carries machine self-correction on every patch-input failure (SPEC D.2/25.9); `null` only on environmental IO.
 

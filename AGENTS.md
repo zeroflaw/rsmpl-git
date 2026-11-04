@@ -45,6 +45,13 @@ inheriting the section's most-recent RSmPL hunk (same file+rule+directives only;
 | `# follow=uses` | rewrite workspace use sites alongside a fn/item/field/variant/assoc rename (fn/item: unique-definition only, multi-def vetoes; one-hop `pub use` re-exports followed, second-hop/off-target/glob-re-export vetoes; fields anchor `.old` by receiver type — fn params, `let x: C`, `let x = S{…}`, `self` in `impl S` — plus `S`-labels with shorthand `S { old }` → `S { new: old }`, siblings never veto (`shadowed`/`off-target` skips); variants claim `E::Old` paths, bare `Old` needs `use E::*` else `second-hop`; assoc claims container-proven `Self::`/`S::`/`Tr::`/qself tails with per-block `shadowed` skips; trait-method headers claim `impl Tr for S` defs + anchored `recv.old()`/`S::old` calls; `mod` claims `old::`/`crate::old::` path uses plus its file move); definition-only without it, with `orphans` evidence; raised as `item_intent` (items) / `member_rename` pre-pass (members, file/section-pure partial) / `mod_rename` pre-pass (`mod` + file move, file/section-pure partial) / `assoc_rename` pre-pass (assoc, one section per def file) / `trait_method_rename` pre-pass (trait-method, single trait hunk) when the cross-file probe proves the group (SPEC 14.8) |
 | `# returns=none` | minus-side requires no return type (SPEC 14.2, fn only) |
 
+<!-- generated: directives start -- do not hand-edit; run `python3 tools/gen_directives.py --write` -->
+Directive inventory (code is the source: `directives.rs` + `model.rs`): 16 keys, 3 bare flags, 20 kinds.
+Keys: lang, allow, optional, scope, bind, use, attrs, mode, macro, format, returns, root, fallback, metavars, symbol, follow.
+Bare: optional, repeat, sweep.
+Kinds: identifier, ident, path, symbol, expr, stmt, item, type, pat, lifetime, generic_params, where_clause, visibility, qualifier, qualifier_list, attributes, block, field, macro, token_tree.
+<!-- generated: directives end -->
+
 Everything else lives in the full table (SPEC 9.3); you rarely need it.
 
 ## Shapes that work
@@ -164,6 +171,11 @@ is always 0-context, `--context N` renders reported/`--output` for vanilla `git 
 | `GIT_HUNK_CONFLICT` | ordinary hunk failed — rebase the hunk context (the file line differs from the hunk text: paste `actual` from the repair or re-read the file; blank file lines are empty context: ` ` or empty line in-body) |
 | `RSMPL_BUILD_CONFLICT` | post-lowering `--verify build` failure — read `repair.file` at `repair.range` and fix the build breakage (SPEC 25.10) |
 | `RSMPL_IO_CONFLICT` | unreadable patch/repo/output file or bad flags (`--format json` → stdout envelope, else clap text) — check paths; absolute/`..`-escaping targets rejected (SPEC 27.6) |
+
+<!-- generated: errors start -- do not hand-edit; run `python3 tools/gen_errors.py --write` -->
+Error-code inventory (code is the source: `errors.rs`): 9 codes.
+Codes: RSMPL_RANGE_CONFLICT, RSMPL_PARSE_CONFLICT, RSMPL_PATTERN_CONFLICT, RSMPL_MATCH_CONFLICT, RSMPL_SYMBOL_CONFLICT, RSMPL_CAPTURE_CONFLICT, GIT_HUNK_CONFLICT, RSMPL_IO_CONFLICT, RSMPL_BUILD_CONFLICT.
+<!-- generated: errors end -->
 
 With `--format json`, failures print `{version, error: {code, rule, file, range,
 reason, suggestion, repair}}` to stdout only (no stderr `error:` line), exit 2 (SPEC D.2).
