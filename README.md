@@ -129,7 +129,7 @@ vanilla `git apply` (same post-tree either way). Exit `0` clean,
 `2` patch error (`RSMPL_*`/`GIT_*` + suggestion). Full envelope contract:
 SPEC D.2/D.2.2/D.2.3; history: SPEC D.1.
 
-## Token savings
+## Compression
 
 `example-benches/applyrs/` (32 benches) compares the agent-authored `patch.rsmpl`
 against the lowered 0-context `native.patch` for the same end state —
@@ -172,7 +172,7 @@ context would be larger, so these are lower bounds.)
 | 43-scale-follow-wide (`# sweep` + follow over a 500-file workspace, 500 sites) | 109 B / 6 ln | 68292 B / 3000 ln | 100% |
 | 44-scale-postcheck-deep (10k-line file, 99-site sweep with span-local re-verification) | 78 B / 5 ln | 4985 B / 300 ln | 98% |
 
-`example-benches/diffrs/` (29 benches) compares `git diff -U0` (`native.patch`,
+`example-benches/diffrs/` (50 benches) compares `git diff -U0` (`native.patch`,
 `index` lines stripped) against the `diffrs` compression (`sem.patch`):
 
 | bench | native | semantic | saved |
@@ -293,10 +293,14 @@ crates/rsmpl_patch/   patch document model + parser
 crates/rsmpl_pattern/ Rust pattern language (metavars, ellipsis, fn slots)
 crates/rsmpl_engine/  semantic matching + plan/move engine
 crates/rsmpl_git/     unified-diff lowering + `git apply` wrapper
-crates/rsmpl_diff*/   inverse mapping: git source -> infer -> emit RSmPL (see T340)
+crates/rsmpl_diff/        facade: git source -> infer -> emit RSmPL
+crates/rsmpl_diff_infer/  pure inference: native diff -> compressed semantic patch
+crates/rsmpl_diff_source/ git-facing source: collect pending native diff via `git`
 test-fixtures/        binary-driven e2e fixtures: applyrs/ + diffrs/ (see bin tests)
 ```
 
-No single `.rs` file exceeds 2000 lines (enforced by test).
+## Environment
 
-Agent authoring: see `AGENTS.md` (one-page reference) and `skills/gitrs/SKILL.md` (patch-first loop); full contract: `SPEC.md`.
+Rust (nightly): `rustc 1.101.0-nightly (822182db4 2026-10-13)`, host `x86_64-unknown-linux-gnu`, LLVM 23.1.3.
+
+OS: Debian GNU/Linux 13 (trixie), kernel `6.12.94+deb13-amd64` (`#1 SMP PREEMPT_DYNAMIC Debian 6.12.94-1 (2026-06-20)`).
