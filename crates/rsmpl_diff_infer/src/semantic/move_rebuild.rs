@@ -21,9 +21,9 @@ fn rule_of(cut: &str) -> Option<String> {
 /// Name every pair, then rebuild each touched section once. Returns the
 /// rebuilt section list when the emission beats the replaced bytes
 /// (T375), else `None` (caller releases the reserved rule names).
-/// WI-15 slice 1: `mod_join` splices a lone `mod` pair under the cut's
-/// rule (single-pair, collection-free moves only); `None` keeps today's
-/// split emission.
+/// WI-15 residue: `mod_join` splices a `mod` pair under the first cut's
+/// rule (collection-free moves sharing one file pair only); `None` keeps
+/// today's split emission.
 pub(crate) fn rebuild_sections(
     mut final_pairs: Vec<MovePair>,
     parsed: &[SectionParts],
@@ -44,9 +44,10 @@ pub(crate) fn rebuild_sections(
     let collections =
         super::move_collection::plan_collections(&final_pairs, parsed, used_rules, &mut bind_seq);
     let mut bind_of: HashMap<(usize, usize, usize, usize), (String, String)> = HashMap::new();
-    // WI-15 slice 1: the join rides the single cut's rule (single-pair,
-    // collection-free moves only — wider shapes keep today's names).
-    let join_pending = mod_join.is_some() && final_pairs.len() == 1 && collections.is_empty();
+    // WI-15 residue: the join rides the first cut's rule (one file
+    // pair, collection-free moves only — wider shapes keep today's
+    // names; `find_mod_join` already proved the file pair).
+    let join_pending = mod_join.is_some() && !final_pairs.is_empty() && collections.is_empty();
     let mut join_cut_rule: Option<String> = None;
     for (pair_idx, p) in final_pairs.iter().enumerate() {
         if let Some((cell, is_primary)) = super::move_collection::cell_for(&collections, pair_idx) {
@@ -77,14 +78,16 @@ pub(crate) fn rebuild_sections(
             bind_of.insert(key, (bind.clone(), cut.clone()));
             (bind, cut)
         };
-        // WI-15 slice 1: capture the single cut's rule for the paste
-        // and the `mod` pair to share.
-        if join_pending && join_cut_rule.is_none() {
+        // WI-15 residue: capture the first cut's rule for the first
+        // paste and the `mod` pair to share (later pastes keep their
+        // own rule names).
+        let is_first_cut = join_cut_rule.is_none();
+        if join_pending && is_first_cut {
             join_cut_rule = rule_of(&cut);
         }
-        let paste_rule = if join_pending {
-            // The paste shares the cut's rule (named just above; the
-            // single-pair loop always names the cut first).
+        let paste_rule = if join_pending && is_first_cut {
+            // The first paste shares the first cut's rule (named just
+            // above; the sorted loop always names the first cut first).
             join_cut_rule.clone().unwrap_or_else(|| {
                 super::unique_rule(used_rules, &format!("paste_{}", p.item.ident))
             })
@@ -173,7 +176,7 @@ pub(crate) fn rebuild_sections(
         };
         named.push((p.clone(), cut, paste));
     }
-    // WI-15 slice 1: settle the join — the `mod` pair rides the single
+    // WI-15 residue: settle the join — the `mod` pair rides the first
     // cut's rule. Anything off (collection cell, unparsed cut header)
     // keeps today's split emission.
     let join: Option<(&super::move_mod_join::ModJoin, String)> = match (mod_join, &join_cut_rule) {
@@ -203,7 +206,7 @@ pub(crate) fn rebuild_sections(
         let h = &parsed[*si].hunks[*hi];
         replaced += h.header.len() + 1 + h.body.iter().map(|l| l.len() + 1).sum::<usize>();
     }
-    // WI-15 slice 1: the joined `mod` hunk counts as replaced bytes
+    // WI-15 residue: the joined `mod` group counts as replaced bytes
     // (its native lines leave the section like any claimed hunk). No
     // original carried (never for run-split groups) declines the join.
     if let Some((j, _)) = &join {
@@ -223,25 +226,95 @@ pub(crate) fn rebuild_sections(
     }
     for si in &touched_secs {
         let sec = &parsed[*si];
-        // WI-15 slice 1: the joined `mod` section re-emits with the
-        // pair hunk replaced by the shared-rule semantic hunk; every
-        // other hunk rides verbatim.
+        // WI-15 residue: the joined `mod` section re-emits with the
+        // pair replaced by the shared-rule semantic hunk; every other
+        // hunk rides verbatim.
         if let Some((j, rule)) = &join {
             if *si == j.sec_idx {
-                // WI-15 slice 1: the joined `mod` run-group is replaced
-                // by the shared-rule semantic hunk (emitted once); every
-                // other run-group re-emits its untouched original once
-                // and every pure hunk rides verbatim.
+                // WI-15 residue: the two joined `mod` runs are replaced
+                // by the shared-rule semantic hunk (emitted once at the
+                // first run); other runs of a mixed group re-emit as
+                // ordinary run hunks (exact run anchors), every other
+                // run-group re-emits its untouched original once and
+                // every pure hunk rides verbatim.
                 let mut rebuilt = sec.prelude.clone();
                 let mut mod_done = false;
                 let mut group_done: HashSet<usize> = HashSet::new();
                 for (hi, hunk) in sec.hunks.iter().enumerate() {
                     if hunk.group == Some(j.group) {
-                        if !mod_done {
-                            let mh = super::move_mod_join::mod_hunk_text(j, rule);
-                            emitted += mh.len();
-                            rebuilt.push_str(&mh);
-                            mod_done = true;
+                        if hi == j.mod_minus_hi || hi == j.mod_plus_hi {
+                            // `mod`-carrying run: leftover spans around
+                            // the `mod` line stay ordinary (exact ranges,
+                            // run anchors reused per the leftover
+                            // convention below); the semantic hunk fires
+                            // once at the first run.
+                            let is_minus = hi == j.mod_minus_hi;
+                            let midx = if is_minus {
+                                j.mod_minus_idx
+                            } else {
+                                j.mod_plus_idx
+                            };
+                            let span = |lo: usize, len: usize| {
+                                let header = if is_minus {
+                                    format!(
+                                        "@@ -{},{} +{},0 @@",
+                                        hunk.old_start + lo as u32,
+                                        len,
+                                        hunk.new_start
+                                    )
+                                } else {
+                                    format!(
+                                        "@@ -{},0 +{},{} @@",
+                                        hunk.old_start,
+                                        hunk.new_start + lo as u32,
+                                        len
+                                    )
+                                };
+                                (header, &hunk.body[lo..lo + len])
+                            };
+                            if midx > 0 {
+                                let (header, lines) = span(0, midx);
+                                emitted += header.len()
+                                    + 1
+                                    + lines.iter().map(|l| l.len() + 1).sum::<usize>();
+                                rebuilt.push_str(&header);
+                                rebuilt.push('\n');
+                                for line in lines {
+                                    rebuilt.push_str(line);
+                                    rebuilt.push('\n');
+                                }
+                            }
+                            if !mod_done {
+                                let mh = super::move_mod_join::mod_hunk_text(j, rule);
+                                emitted += mh.len();
+                                rebuilt.push_str(&mh);
+                                mod_done = true;
+                            }
+                            if midx + 1 < hunk.body.len() {
+                                let len = hunk.body.len() - midx - 1;
+                                let (header, lines) = span(midx + 1, len);
+                                emitted += header.len()
+                                    + 1
+                                    + lines.iter().map(|l| l.len() + 1).sum::<usize>();
+                                rebuilt.push_str(&header);
+                                rebuilt.push('\n');
+                                for line in lines {
+                                    rebuilt.push_str(line);
+                                    rebuilt.push('\n');
+                                }
+                            }
+                            continue;
+                        }
+                        // Mixed-group leftover run: ordinary hunk with
+                        // the run's own header + body.
+                        emitted += hunk.header.len()
+                            + 1
+                            + hunk.body.iter().map(|l| l.len() + 1).sum::<usize>();
+                        rebuilt.push_str(&hunk.header);
+                        rebuilt.push('\n');
+                        for line in &hunk.body {
+                            rebuilt.push_str(line);
+                            rebuilt.push('\n');
                         }
                         continue;
                     }

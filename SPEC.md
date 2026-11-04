@@ -4830,7 +4830,7 @@ diff --git src/new.rs
 
 Renaming a file-module (`old.rs` → `new.rs` beside `mod old;` →
 `mod new;` in the parent) raises as cut/paste across the file
-sections with the `mod` pair under the same rule (WI-15 slice 1) —
+sections with the `mod` pair under the same rule (WI-15 residue) —
 contents never restated, file creation/deletion carried by the
 sections themselves:
 
@@ -4857,15 +4857,27 @@ new file mode 100644
 + M1
 ```
 
-Narrowing: exactly one moved item, deleted-file source + created-file
-target in the same directory with stems naming the `mod` idents,
-exactly one lone `mod old;` → `mod new;` declaration pair (no use
-lines — those belong to the `mod` intent, never stolen), a unique
-`mod old;` declaration workspace-wide, and the cited site verified;
-the joined T375 must pass or the emission falls back to today's split
-(a separate `mod` single beside the move). Rename sections,
-multi-item/fan-out moves, mixed-hunk claims, stem mismatches, and twin
-declarations stay split by design.
+Narrowing: N≥1 moved items sharing one deleted-file source +
+one created-file target in the same directory with stems naming the
+`mod` idents (one file pair; fan-out across file pairs stays split),
+exactly one adjacent minus-run + plus-run `mod old;` → `mod new;`
+declaration pair (no use lines — those belong to the `mod` intent,
+never stolen) in a move-untouched section, a unique `mod old;`
+declaration workspace-wide, and the cited site verified; the joined
+T375 must pass or the emission falls back to today's split (a
+separate `mod` single beside the move). The pair rides under the
+first cut's rule (later pastes keep their own rules); other runs of a
+mixed group stay ordinary leftovers beside the semantic hunk.
+Rename sections, fan-out moves, collection moves, stem mismatches,
+and twin declarations stay split by design.
+
+Move+delta axis verdicts (each proved by its own probe; the file-module
+join only adds the `mod` pair to an already-firing move): identical
+pairs ride the bare bind paste; signature evolution rides the concrete
+template paste; body evolution rides the `as` paste when T375 allows
+(tiny bodies stay ordinary by law); joint `impl` trait+self-type pairs
+ride two shared-rule follows; attr/trait compositions (E1/E2) ride the
+same cut/paste probe with the delta as an ordinary leftover.
 
 ---
 
@@ -10018,17 +10030,17 @@ every length and the totals stay the default truth at any size.
        `140-container-body-evolve-fires`) and inherent-`impl`
        body-evolving `as` pastes (diffrs fixture
        `141-impl-body-evolve-fires`).
-    WI-15 slice 1 joins a file-module move with its lone `mod` pair: a
-    deleted-file → created-file single-item move (same dir, file stems
-    naming the `mod` idents) beside exactly one adjacent-run `mod old;`
-    → `mod new;` declaration pair (no use lines, unique workspace
-    declaration, cited site verified) raises the pair as `- mod old` /
-    `+ mod new` under the move cut's rule — contents never restated,
-    file creation/deletion carried by the sections. Rename sections,
-    multi-item/fan-out moves, mixed-hunk claims, `mod` + use lines
-    (`mod_rename` territory), stem mismatches, twin declarations, and
-    a failing joined T375 (falls back to today's split) stay split by
-    design.
+     WI-15 residue joins a file-module move with its `mod` pair: a
+     deleted-file → created-file move over one file pair (same dir, file
+     stems naming the `mod` idents, N≥1 moved items) beside exactly one
+     adjacent-run `mod old;` → `mod new;` declaration pair (no use lines,
+     unique workspace declaration, cited site verified) raises the pair
+     as `- mod old` / `+ mod new` under the first cut's rule — contents
+     never restated, file creation/deletion carried by the sections;
+     other runs of a mixed group stay ordinary leftovers. Rename
+     sections, fan-out/collection moves, `mod` + use lines (`mod_rename`
+     territory), stem mismatches, twin declarations, and a failing joined
+     T375 (falls back to today's split) stay split by design.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,

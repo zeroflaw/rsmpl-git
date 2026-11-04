@@ -1,20 +1,23 @@
-//! WI-15 slice 1: file-module move + lone `mod` pair under one shared rule.
+//! WI-15 residue: file-module move + `mod` pair under one shared rule.
 //!
-//! A deleted-file + created-file single-item move paired with a lone
-//! `mod old;` → `mod new;` declaration pair (file stems match the `mod`
-//! idents, no use lines, unique definition) raises the `mod` pair under
-//! the move cut's rule instead of as a separate item single — contents
-//! never restated, file creation/deletion carried by the sections
-//! themselves. Every condition that is off declines the join and the
-//! caller falls back to today's split emission (move + separate `mod`
-//! single), so the join can never regress a firing move.
+//! A deleted-file + created-file move (one file pair, N≥1 moved items)
+//! paired with a `mod old;` → `mod new;` declaration pair (file stems
+//! match the `mod` idents, no use lines, unique definition) raises the
+//! `mod` pair under the first cut's rule instead of as a separate item
+//! single — contents never restated, file creation/deletion carried by
+//! the sections themselves. Every condition that is off declines the
+//! join and the caller falls back to today's split emission (move +
+//! separate `mod` single), so the join can never regress a firing move.
 //!
-//! Narrowing (slice 1): exactly one `MovePair`, deleted-file source +
-//! created-file target, exactly one 2-line `mod` hunk in a move-untouched
-//! section, no other native mention of the old ident, unique `mod`
-//! declaration across involved pre-images, cited site verified.
-//! Fan-out, multi-item moves, mixed-hunk `mod` claims, and `mod` + use
-//! lines (`mod_rename` territory) stay split by design.
+//! Narrowing: all pairs share one deleted-file source + one created-file
+//! target (same dir, stems naming the `mod` idents), exactly one
+//! adjacent minus-run + plus-run `mod` pair in a move-untouched section
+//! (lone-pair group or one adjacent pair inside a mixed group, whose
+//! other runs stay ordinary leftovers), no other native mention of the
+//! old ident, unique `mod` declaration workspace-wide, cited site
+//! verified. Fan-out across file pairs, collection moves, `mod` + use
+//! lines (`mod_rename` territory), stem mismatches, twin declarations,
+//! and rename sections stay split by design.
 
 use std::collections::HashMap;
 
@@ -26,13 +29,39 @@ use super::move_parts::{line_text, MovePair, SectionParts};
 pub(crate) struct ModJoin {
     pub(crate) sec_idx: usize,
     /// Run-split group id of the native mixed hunk (`-mod old;` /
-    /// `+mod new;` arrive as an adjacent minus-run + plus-run pair
-    /// sharing one group — `push_hunk` splits every mixed `-U0` hunk).
+    /// `+mod new;` arrive inside one adjacent minus-run + plus-run pair
+    /// sharing one group — `push_hunk` splits every mixed `-U0` hunk into
+    /// maximal pure runs, so real `git diff -U0` shapes are multi-line
+    /// runs, e.g. `[-mod old;, -fn k() {}]` then `[+mod new;, +fn k2() {}]`).
     pub(crate) group: usize,
+    /// Hunk indices of the two `mod`-carrying runs inside
+    /// `parsed[sec_idx]` (adjacent minus-run then plus-run).
+    pub(crate) mod_minus_hi: usize,
+    pub(crate) mod_plus_hi: usize,
+    /// Line indices of the `mod` lines inside their run bodies (other
+    /// lines of the runs stay ordinary leftovers).
+    pub(crate) mod_minus_idx: usize,
+    pub(crate) mod_plus_idx: usize,
     pub(crate) old: String,
     pub(crate) new: String,
-    /// Cited site of the `mod` line (minus-run `old_start`, 1-based).
+    /// Cited site of the `mod` line (minus-run `old_start` +
+    /// `mod_minus_idx`, 1-based).
     pub(crate) site: u32,
+}
+
+/// One `mod`-delta line pair candidate: its section, run group, the two
+/// carrying runs, the line positions inside those runs, the delta, and
+/// the cited site.
+struct ModCandidate {
+    sec_idx: usize,
+    group: usize,
+    minus_hi: usize,
+    plus_hi: usize,
+    minus_idx: usize,
+    plus_idx: usize,
+    old: String,
+    new: String,
+    site: u32,
 }
 
 /// File stem without the `.rs` suffix (`src/old.rs` → `old`), or `None`
@@ -117,9 +146,11 @@ pub(crate) fn find_mod_join(
     final_pairs: &[MovePair],
     pre: &HashMap<String, String>,
 ) -> Option<ModJoin> {
-    // Slice-1 narrowing: exactly one moved item (one cut rule to share;
-    // fan-out and multi-item moves stay split).
-    if final_pairs.len() != 1 {
+    // Residue narrowing: N≥1 moved items sharing one deleted-file
+    // source + one created-file target (one file pair; fan-out across
+    // file pairs stays split). Collection moves keep today's names
+    // (the rebuild declines the join when cells exist).
+    if final_pairs.is_empty() {
         return None;
     }
     // Rename sections own their shape (headers-only passthrough,
@@ -130,9 +161,26 @@ pub(crate) fn find_mod_join(
             return None;
         }
     }
-    let p = &final_pairs[0];
-    let minus_sec = parsed.get(p.minus_hunk_key.0)?;
-    let plus_sec = parsed.get(p.plus_hunk_key.0)?;
+    let mut minus_secs: Vec<usize> = Vec::new();
+    let mut plus_secs: Vec<usize> = Vec::new();
+    for p in final_pairs {
+        if !minus_secs.contains(&p.minus_hunk_key.0) {
+            minus_secs.push(p.minus_hunk_key.0);
+        }
+        if !plus_secs.contains(&p.plus_hunk_key.0) {
+            plus_secs.push(p.plus_hunk_key.0);
+        }
+    }
+    // One file pair only: every minus run lives in one deleted-file
+    // section, every plus run in one created-file section.
+    if minus_secs.len() != 1 || plus_secs.len() != 1 {
+        return None;
+    }
+    if minus_secs[0] == plus_secs[0] {
+        return None;
+    }
+    let minus_sec = parsed.get(minus_secs[0])?;
+    let plus_sec = parsed.get(plus_secs[0])?;
     // File-module shape only: deleted-file source, created-file target.
     if !minus_sec.is_deleted {
         return None;
@@ -145,15 +193,16 @@ pub(crate) fn find_mod_join(
     if dir(&minus_sec.path) != dir(&plus_sec.path) {
         return None;
     }
-    // The lone `mod` pair: exactly one adjacent minus-run + plus-run
-    // pair carrying a `mod` delta in a move-untouched section. Mixed
-    // `-U0` hunks always arrive run-split (one group per native hunk),
-    // so the pair is two 1-line pure runs, never one 2-line hunk.
-    // Mixed groups (pair + other lines) and multi-hunk sections with
-    // two `mod`-shaped groups decline — residues.
-    let mut found: Option<(usize, usize, String, String, u32)> = None;
+    // The `mod` pair: exactly one `mod old;` → `mod new;` line pair
+    // inside one adjacent minus-run + plus-run pair of a move-untouched
+    // section. Mixed `-U0` hunks always arrive run-split (one group per
+    // native hunk, maximal pure runs), so the pair is one line pair at
+    // run-relative positions `(i, j)` — either the whole group (two
+    // 1-line runs) or one line pair inside larger multi-line runs
+    // (whose other lines stay ordinary leftovers).
+    let mut found: Option<ModCandidate> = None;
     for (si, sec) in parsed.iter().enumerate() {
-        if si == p.minus_hunk_key.0 || si == p.plus_hunk_key.0 {
+        if minus_secs.contains(&si) || plus_secs.contains(&si) {
             continue;
         }
         let mut by_group: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -163,30 +212,56 @@ pub(crate) fn find_mod_join(
             }
         }
         for (g, his) in &by_group {
-            if his.len() != 2 {
-                continue;
+            let mut ordered = his.clone();
+            ordered.sort_unstable();
+            for w in ordered.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let (ha, hb) = (&sec.hunks[a], &sec.hunks[b]);
+                if ha.body.is_empty() || hb.body.is_empty() {
+                    continue;
+                }
+                if !ha.body[0].starts_with('-') || ha.body[0].starts_with("---") {
+                    continue;
+                }
+                if !hb.body[0].starts_with('+') || hb.body[0].starts_with("+++") {
+                    continue;
+                }
+                for (i, mline) in ha.body.iter().enumerate() {
+                    for (j, pline) in hb.body.iter().enumerate() {
+                        let Some((old, new)) = mod_delta(line_text(mline), line_text(pline)) else {
+                            continue;
+                        };
+                        if found.is_some() {
+                            return None;
+                        }
+                        found = Some(ModCandidate {
+                            sec_idx: si,
+                            group: *g,
+                            minus_hi: a,
+                            plus_hi: b,
+                            minus_idx: i,
+                            plus_idx: j,
+                            old,
+                            new,
+                            site: ha.old_start + i as u32,
+                        });
+                    }
+                }
             }
-            let (a, b) = (his[0], his[1]);
-            let (ha, hb) = (&sec.hunks[a], &sec.hunks[b]);
-            if ha.body.len() != 1 || hb.body.len() != 1 {
-                continue;
-            }
-            if !ha.body[0].starts_with('-') || ha.body[0].starts_with("---") {
-                continue;
-            }
-            if !hb.body[0].starts_with('+') || hb.body[0].starts_with("+++") {
-                continue;
-            }
-            let Some((old, new)) = mod_delta(line_text(&ha.body[0]), line_text(&hb.body[0])) else {
-                continue;
-            };
-            if found.is_some() {
-                return None;
-            }
-            found = Some((si, *g, old, new, ha.old_start));
         }
     }
-    let (si, group, old, new, site) = found?;
+    let cand = found?;
+    let ModCandidate {
+        sec_idx: si,
+        group,
+        minus_hi: mod_minus_hi,
+        plus_hi: mod_plus_hi,
+        minus_idx: mod_minus_idx,
+        plus_idx: mod_plus_idx,
+        old,
+        new,
+        site,
+    } = cand;
     // File stems must name the `mod` delta (never filename similarity
     // alone: the stems must equal the declaration idents exactly).
     if minus_stem != old || plus_stem != new {
@@ -195,24 +270,35 @@ pub(crate) fn find_mod_join(
     // No other native mention of the old ident: use lines belong to the
     // `mod_rename` intent (def + uses), twin `mod` lines to the
     // per-section singles — both stay split so no intent loses a pair.
-    // Moved runs and the joined `mod` runs are exempt (cut/paste carry
-    // them verbatim).
+    // Moved runs and the two joined `mod` lines are exempt (cut/paste
+    // carry them verbatim); other lines of mixed runs are scanned.
     for (asi, sec) in parsed.iter().enumerate() {
         for (ahi, hunk) in sec.hunks.iter().enumerate() {
             for (idx, line) in hunk.body.iter().enumerate() {
-                if asi == si && hunk.group == Some(group) {
+                if asi == si && ahi == mod_minus_hi && idx == mod_minus_idx {
                     continue;
                 }
-                if asi == p.minus_hunk_key.0
-                    && ahi == p.minus_hunk_key.1
-                    && (p.item.first..=p.item.last).contains(&idx)
-                {
+                if asi == si && ahi == mod_plus_hi && idx == mod_plus_idx {
                     continue;
                 }
-                if asi == p.plus_hunk_key.0
-                    && ahi == p.plus_hunk_key.1
-                    && (p.plus_first..=p.plus_last).contains(&idx)
-                {
+                let mut moved = false;
+                for p in final_pairs {
+                    if asi == p.minus_hunk_key.0
+                        && ahi == p.minus_hunk_key.1
+                        && (p.item.first..=p.item.last).contains(&idx)
+                    {
+                        moved = true;
+                        break;
+                    }
+                    if asi == p.plus_hunk_key.0
+                        && ahi == p.plus_hunk_key.1
+                        && (p.plus_first..=p.plus_last).contains(&idx)
+                    {
+                        moved = true;
+                        break;
+                    }
+                }
+                if moved {
                     continue;
                 }
                 if contains_ident(line_text(line), &old) {
@@ -239,6 +325,10 @@ pub(crate) fn find_mod_join(
     Some(ModJoin {
         sec_idx: si,
         group,
+        mod_minus_hi,
+        mod_plus_hi,
+        mod_minus_idx,
+        mod_plus_idx,
         old,
         new,
         site,
@@ -520,27 +610,65 @@ mod tests {
     }
 
     #[test]
-    fn mixed_mod_hunk_stays_split() {
-        // The mod pair sharing its hunk with another line is not the
-        // lone-pair shape: no join, move still fires.
+    fn mixed_mod_hunk_joins_with_leftover() {
+        // WI-15 residue: the mod pair sharing its run-split group with
+        // another edit joins (semantic mod hunk under the cut's rule)
+        // while the other lines stay ordinary leftovers. Real
+        // `git diff -U0` shape: all minus lines first, then plus lines
+        // (two 2-line runs, mod at index 0 of each).
         let big = big_fn("foo");
         let (m, pl) = move_sections(&big);
         let sections = file_module_sections(
-            "@@ -1,2 +1,2 @@\n-mod old;\n+mod new;\n-let x = 1;\n+let x = 2;\n",
+            "@@ -1,2 +1,2 @@\n-mod old;\n-fn keep() {}\n+mod new;\n+fn keep2() {}\n",
             &m,
             &pl,
         );
         let pre = pre_map(&[
-            ("src/lib.rs", "mod old;\nlet x = 1;\nfn main() {}\n"),
+            ("src/lib.rs", "mod old;\nfn keep() {}\nfn main() {}\n"),
             ("src/old.rs", &format!("fn keep() {{}}\n{big}")),
         ]);
         let mut used = Vec::new();
         let out = super::super::moves::try_move_sweep(&sections, &pre, &mut used)
-            .expect("move must still fire");
+            .expect("mixed-group join must fire");
         let text = out.join("");
         assert!(
-            text.contains("-mod old;"),
-            "mixed hunk must stay native, got:\n{text}"
+            text.contains("- mod old\n+ mod new\n"),
+            "mod pair must join, got:\n{text}"
+        );
+        assert!(
+            text.contains("-fn keep() {}") && text.contains("+fn keep2() {}"),
+            "mixed-group leftover must stay ordinary, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn mixed_mod_hunk_joins_mod_second() {
+        // WI-15 residue: same mixed shape with the mod pair second in
+        // each run (mod at index 1) — leftover spans fire on both sides
+        // of the semantic hunk.
+        let big = big_fn("foo");
+        let (m, pl) = move_sections(&big);
+        let sections = file_module_sections(
+            "@@ -1,2 +1,2 @@\n-fn keep() {}\n-mod old;\n+fn keep2() {}\n+mod new;\n",
+            &m,
+            &pl,
+        );
+        let pre = pre_map(&[
+            ("src/lib.rs", "fn keep() {}\nmod old;\nfn main() {}\n"),
+            ("src/old.rs", &format!("fn keep() {{}}\n{big}")),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&sections, &pre, &mut used)
+            .expect("mod-second mixed-group join must fire");
+        let text = out.join("");
+        assert!(
+            text.contains("- mod old\n+ mod new\n"),
+            "mod pair must join, got:\n{text}"
+        );
+        assert!(
+            text.contains("-fn keep() {}") && text.contains("+fn keep2() {}"),
+            "mixed-group leftover must stay ordinary, got:\n{text}"
         );
         validated_live(&text, &pre);
     }
@@ -649,6 +777,277 @@ mod tests {
             "dropped item stays ordinary, got:\n{text}"
         );
         validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn multi_item_file_module_joins() {
+        // WI-15 residue: a whole-file two-item move (old.rs deleted,
+        // new.rs created, WI-18 whole-file soundness keeps both pairs)
+        // joins the mod pair under the FIRST cut's rule; the second
+        // cut keeps its own rule.
+        let one = big_fn("one");
+        let two = big_fn("two");
+        let old_text = format!("{one}\n{two}");
+        let mut m = String::new();
+        for l in old_text.lines() {
+            m.push_str(&format!("-{l}\n"));
+        }
+        let mut pl = String::new();
+        for l in old_text.lines() {
+            pl.push_str(&format!("+{l}\n"));
+        }
+        let n = old_text.lines().count();
+        let sections = file_module_sections(
+            "@@ -1,1 +1,1 @@\n-mod old;\n+mod new;\n",
+            &format!("@@ -1,{n} +1,0 @@\n{m}"),
+            &format!("@@ -0,0 +1,{n} @@\n{pl}"),
+        );
+        let pre = pre_map(&[
+            ("src/lib.rs", "mod old;\nfn main() {}\n"),
+            ("src/old.rs", &old_text),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&sections, &pre, &mut used)
+            .expect("two-item move must still fire");
+        let text = out.join("");
+        assert_eq!(
+            text.matches("# bind=").count(),
+            2,
+            "two cuts expected, got:\n{text}"
+        );
+        assert!(
+            text.contains("- mod old\n+ mod new\n"),
+            "mod pair must join, got:\n{text}"
+        );
+        // The mod hunk shares the first cut's rule (document order).
+        let lines: Vec<&str> = text.lines().collect();
+        let rule_of_header = |h: &str| {
+            h.split_once("rule=")
+                .map(|(_, r)| r.to_string())
+                .unwrap_or_default()
+        };
+        let mod_rule = lines
+            .windows(3)
+            .find(|w| w[1] == "- mod old" && w[2] == "+ mod new")
+            .map(|w| rule_of_header(w[0]));
+        let first_cut_rule = lines
+            .windows(2)
+            .find(|w| w[0].starts_with("@@") && w[1].starts_with("# bind="))
+            .map(|w| rule_of_header(w[0]));
+        assert!(mod_rule.is_some() && first_cut_rule.is_some());
+        assert_eq!(mod_rule.unwrap(), first_cut_rule.unwrap());
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn fan_out_across_targets_stays_split() {
+        // WI-15 residue: one deleted source feeding two created targets
+        // is fan-out, not one file pair — the move still fires but the
+        // mod pair stays native (split).
+        let one = big_fn("one");
+        let two = big_fn("two");
+        let old_text = format!("{one}\n{two}");
+        let mut m = String::new();
+        for l in old_text.lines() {
+            m.push_str(&format!("-{l}\n"));
+        }
+        let mut p1 = String::new();
+        for l in one.lines() {
+            p1.push_str(&format!("+{l}\n"));
+        }
+        let mut p2 = String::new();
+        for l in two.lines() {
+            p2.push_str(&format!("+{l}\n"));
+        }
+        let n = old_text.lines().count();
+        let n1 = one.lines().count();
+        let n2 = two.lines().count();
+        let sections = vec![
+            "diff --git src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-mod old;\n+mod new;\n".to_string(),
+            format!(
+                "diff --git src/old.rs\ndeleted file mode 100644\n--- a/src/old.rs\n+++ /dev/null\n@@ -1,{n} +1,0 @@\n{m}"
+            ),
+            format!(
+                "diff --git src/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1,{n1} @@\n{p1}"
+            ),
+            format!(
+                "diff --git src/other.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/other.rs\n@@ -0,0 +1,{n2} @@\n{p2}"
+            ),
+        ];
+        let pre = pre_map(&[
+            ("src/lib.rs", "mod old;\nfn main() {}\n"),
+            ("src/old.rs", &old_text),
+        ]);
+        let mut used = Vec::new();
+        let out = super::super::moves::try_move_sweep(&sections, &pre, &mut used)
+            .expect("fan-out move must still fire");
+        let text = out.join("");
+        assert!(text.contains("# bind="), "cut missing, got:\n{text}");
+        assert!(
+            text.contains("-mod old;"),
+            "fan-out must keep the mod pair native, got:\n{text}"
+        );
+        validated_live(&text, &pre);
+    }
+
+    #[test]
+    fn joined_t375_failure_falls_back_to_split() {
+        // WI-15 residue fallback pin: a hand-built move whose split
+        // margin is exactly 1 byte joins to -2 (fails T375) and falls
+        // back to the split — the caller retries unjoined, so the move
+        // still fires. Padding one minus line by one char raises the
+        // split margin by exactly one byte (emitted is body-independent),
+        // so the first pad that fires has margin exactly 1.
+        use super::super::move_parts::{HunkParts, MoveItem, MovePair, SectionParts};
+        fn build(pad: usize) -> (Vec<SectionParts>, Vec<String>, MovePair, ModJoin) {
+            let pad_line = format!("-{}", "x".repeat(pad));
+            let minus_body = vec!["-fn m() {".to_string(), pad_line, "-}".to_string()];
+            let plus_body = vec!["+fn m() {".to_string(), "+y".to_string(), "+}".to_string()];
+            let minus_hunk = HunkParts {
+                header: "@@ -1,3 +1,0 @@".to_string(),
+                old_start: 1,
+                old_len: 3,
+                new_start: 1,
+                new_len: 0,
+                body: minus_body,
+                group: None,
+                unsplit: None,
+            };
+            let plus_hunk = HunkParts {
+                header: "@@ -0,0 +1,3 @@".to_string(),
+                old_start: 0,
+                old_len: 0,
+                new_start: 1,
+                new_len: 3,
+                body: plus_body,
+                group: None,
+                unsplit: None,
+            };
+            let orig_header = "@@ -1,1 +1,1 @@".to_string();
+            let orig_body = vec!["-mod old;".to_string(), "+mod new;".to_string()];
+            let mod_minus = HunkParts {
+                header: "@@ -1,1 +1,0 @@".to_string(),
+                old_start: 1,
+                old_len: 1,
+                new_start: 1,
+                new_len: 0,
+                body: vec!["-mod old;".to_string()],
+                group: Some(7),
+                unsplit: Some((orig_header.clone(), orig_body.clone())),
+            };
+            let mod_plus = HunkParts {
+                header: "@@ -1,0 +1,1 @@".to_string(),
+                old_start: 1,
+                old_len: 0,
+                new_start: 1,
+                new_len: 1,
+                body: vec!["+mod new;".to_string()],
+                group: Some(7),
+                unsplit: Some((orig_header, orig_body)),
+            };
+            let parsed = vec![
+                SectionParts {
+                    orig_idx: 0,
+                    path: "src/old.rs".to_string(),
+                    is_deleted: true,
+                    prelude: "diff --git src/old.rs\ndeleted file mode 100644\n--- a/src/old.rs\n+++ /dev/null\n".to_string(),
+                    hunks: vec![minus_hunk],
+                },
+                SectionParts {
+                    orig_idx: 1,
+                    path: "src/new.rs".to_string(),
+                    is_deleted: false,
+                    prelude: "diff --git src/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.rs\n".to_string(),
+                    hunks: vec![plus_hunk],
+                },
+                SectionParts {
+                    orig_idx: 2,
+                    path: "src/lib.rs".to_string(),
+                    is_deleted: false,
+                    prelude: "diff --git src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n".to_string(),
+                    hunks: vec![mod_minus, mod_plus],
+                },
+            ];
+            let sections = vec![String::new(), String::new(), String::new()];
+            let pair = MovePair {
+                minus_hunk_key: (0, 0),
+                plus_hunk_key: (1, 0),
+                item: MoveItem {
+                    ident: "m".to_string(),
+                    text: "fn m() {}".to_string(),
+                    lines: vec!["fn m() {}".to_string()],
+                    first: 0,
+                    last: 2,
+                },
+                plus_first: 0,
+                plus_last: 2,
+                evolved: None,
+            };
+            let join = ModJoin {
+                sec_idx: 2,
+                group: 7,
+                mod_minus_hi: 0,
+                mod_plus_hi: 1,
+                mod_minus_idx: 0,
+                mod_plus_idx: 0,
+                old: "old".to_string(),
+                new: "new".to_string(),
+                site: 1,
+            };
+            (parsed, sections, pair, join)
+        }
+        let pre = pre_map(&[("src/lib.rs", "mod old;\n")]);
+        // Find the first pad where the split fires (margin exactly 1).
+        let mut fired_pad = None;
+        for pad in 0..400 {
+            let (parsed, sections, pair, _) = build(pad);
+            let mut used = Vec::new();
+            let out = super::super::move_rebuild::rebuild_sections(
+                vec![pair],
+                &parsed,
+                &sections,
+                &pre,
+                &mut used,
+                0,
+                None,
+            );
+            if out.is_some() {
+                fired_pad = Some(pad);
+                break;
+            }
+        }
+        let pad = fired_pad.expect("split must fire within the pad window");
+        // At margin exactly 1 the joined (+3 B) emission fails T375.
+        let (parsed, sections, pair, join) = build(pad);
+        let mut used = Vec::new();
+        assert!(
+            super::super::move_rebuild::rebuild_sections(
+                vec![pair.clone()],
+                &parsed,
+                &sections,
+                &pre,
+                &mut used,
+                0,
+                Some(&join),
+            )
+            .is_none(),
+            "joined T375 must fail at split margin 1 (pad {pad})"
+        );
+        // …and the caller fallback (unjoined retry) still fires.
+        let mut used = Vec::new();
+        assert!(
+            super::super::move_rebuild::rebuild_sections(
+                vec![pair],
+                &parsed,
+                &sections,
+                &pre,
+                &mut used,
+                0,
+                None,
+            )
+            .is_some(),
+            "split retry must fire (pad {pad})"
+        );
     }
 
     #[test]
