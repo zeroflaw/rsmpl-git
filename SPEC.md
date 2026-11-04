@@ -9036,9 +9036,17 @@ every length and the totals stay the default truth at any size.
  qual pairs stay verbatim (no bypass around the verbatim floor), prefix
  deltas in 2+ positions stay ordinary (three or more deltas); turbofish
  segments veto (turbofish territory); the frame rule holds over the single
- subterm pair; uniqueness proved by `template_pair_holds` at n=1 over the
- emitted holed pair plus the T361 byte-compare; uppercase last segments
- ride backticks with the raw-path re-parse check (TOOL-5 precedent).
+  subterm pair; uniqueness proved by `template_pair_holds` at n=1 over the
+  emitted holed pair plus the T361 byte-compare; uppercase last segments
+  ride backticks with the raw-path re-parse check (TOOL-5 precedent).
+  Slice-25 adds the N>=2 sweep twin (chain `call_sweep` before the
+  single-delta qualified sweep, same holed spelling with `# allow=many`,
+  detector inline in `paths.rs`): every pair parses via the slice-24
+  parser with one shared class (leading, `qself`+pos, old/new prefix
+  vectors, old/new callee, uniform arity), the per-pair frame rule holds
+  over the call subterm, and `template_pair_counts` proves want=N
+  (`CountMismatch`/`OpaqueHit` decline counted; divergent classes veto
+  whole).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

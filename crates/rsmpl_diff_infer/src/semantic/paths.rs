@@ -560,6 +560,133 @@ pub(crate) fn try_qual_double_single(
     Counted::Fire(hunk)
 }
 
+/// WI-13 residue slice: N>=2 qualified prefix+callee double-delta sweep
+/// under `call_sweep` (Strict, like its siblings). Fires iff every pair
+/// parses via `parse_qual_double_pair` with one shared class (leading,
+/// `qself`+pos, old/new prefix vectors, old/new callee, uniform arity),
+/// the per-pair frame rule holds over the call subterm, and the engine
+/// proves the holed pair at want=N (`template_pair_counts` +
+/// `engine_verdict`). Single-delta classes never enter the parser;
+/// three-or-more-delta lines veto there. Emission is the `# allow=many`
+/// spelling with `literal_path_last` (WI-7-upper) and the raw-path
+/// re-parse check (TOOL-5 precedent).
+pub(crate) fn try_qual_double_sweep(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> Counted<String> {
+    if minuses.len() < 2 || minuses.len() != pluses.len() || changed.len() != minuses.len() {
+        return Counted::Miss;
+    }
+    let Some(pre) = file_old else {
+        return Counted::Miss;
+    };
+    let mut first_old_pre: Option<Vec<String>> = None;
+    let mut first_new_pre: Option<Vec<String>> = None;
+    let mut leading: Option<bool> = None;
+    let mut qself: Option<Option<String>> = None;
+    let mut qself_pos: Option<usize> = None;
+    let mut old_cal: Option<String> = None;
+    let mut new_cal: Option<String> = None;
+    let mut arity: Option<usize> = None;
+    let mut raws: Vec<(String, String)> = Vec::with_capacity(minuses.len());
+    for (m, p) in minuses.iter().zip(pluses.iter()) {
+        let Some(d) = parse_qual_double_pair(m, p) else {
+            return Counted::Miss;
+        };
+        if leading.is_some_and(|x| x != d.leading)
+            || qself.as_ref().is_some_and(|x| *x != d.qself)
+            || qself_pos.is_some_and(|x| x != d.qself_pos)
+            || first_old_pre.as_ref().is_some_and(|x| *x != d.old_pre)
+            || first_new_pre.as_ref().is_some_and(|x| *x != d.new_pre)
+            || old_cal.as_ref().is_some_and(|x| *x != d.old_cal)
+            || new_cal.as_ref().is_some_and(|x| *x != d.new_cal)
+            || arity.is_some_and(|x| x != d.arity)
+        {
+            return Counted::Miss;
+        }
+        leading = Some(d.leading);
+        qself = Some(d.qself.clone());
+        qself_pos = Some(d.qself_pos);
+        first_old_pre = Some(d.old_pre.clone());
+        first_new_pre = Some(d.new_pre.clone());
+        old_cal = Some(d.old_cal.clone());
+        new_cal = Some(d.new_cal.clone());
+        arity = Some(d.arity);
+        raws.push((d.old_raw, d.new_raw));
+    }
+    let (leading, qself, qself_pos, old_pre, new_pre, old_cal, new_cal, arity) = match (
+        leading,
+        qself,
+        qself_pos,
+        first_old_pre,
+        first_new_pre,
+        old_cal,
+        new_cal,
+        arity,
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f), Some(g), Some(h)) => {
+            (a, b, c, d, e, f, g, h)
+        }
+        _ => return Counted::Miss,
+    };
+    if old_cal == new_cal {
+        return Counted::Miss;
+    }
+    for ((m, p), (om, nm)) in minuses.iter().zip(pluses.iter()).zip(raws.iter()) {
+        if !super::subline::frame_holds(m, p, &[(om.clone(), nm.clone())]) {
+            return Counted::Miss;
+        }
+    }
+    let old_prefix = QualPrefix {
+        leading,
+        qself: qself.clone(),
+        qself_pos,
+        segs: old_pre,
+    };
+    let new_prefix = QualPrefix {
+        leading,
+        qself,
+        qself_pos,
+        segs: new_pre,
+    };
+    let old_path = qual_full(&old_prefix, &old_cal);
+    let new_path = qual_full(&new_prefix, &new_cal);
+    let mut vars = Vec::with_capacity(arity);
+    for i in 0..arity {
+        vars.push(format!("E{i}"));
+    }
+    let args = vars.join(", ");
+    let raw_minus = format!("{old_path}({args})");
+    let raw_plus = format!("{new_path}({args})");
+    if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
+        || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
+    {
+        return Counted::Miss;
+    }
+    let minus_tpl = format!("{}({args})", super::shape::literal_path_last(&old_path));
+    let plus_tpl = format!("{}({args})", super::shape::literal_path_last(&new_path));
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_tpl, &plus_tpl),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+    }
+    let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
+    let mut hunk = crate::emission_header(path, &rule, changed);
+    hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+    Counted::Fire(hunk)
+}
+
 /// One turbofish argument: token text plus whether it is a plain type
 /// (only type positions may become the inferred `T` hole — a
 /// lifetime/const hole is unexpressible, so those stay verbatim).
@@ -1662,6 +1789,73 @@ mod tests {
             super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
                 .is_none(),
             "frame delta must veto the composition",
+        );
+    }
+
+    #[test]
+    fn wi13r_qual_double_sweep_fires() {
+        // WI-13 residue: two lines sharing one prefix+callee double delta
+        // raise as one `# allow=many` holed pattern; hetero value args
+        // across sites bind the hole, and the tree re-applies byte-exact.
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = oldmod::foo(1);\n-    let b = oldmod::foo(2);\n+    let a = newmod::bar(1);\n+    let b = newmod::bar(2);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = oldmod::foo(1);\n    let b = oldmod::foo(2);\n}\n",
+        )]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre).unwrap();
+        validated_live(&out, &pre);
+        assert!(out.contains("# allow=many"), "sweep spelling: {out}");
+        assert!(out.contains("- oldmod::foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ newmod::bar(E0)\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let a = newmod::bar(1);\n    let b = newmod::bar(2);\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi13r_qual_double_sweep_mixed_class_stays_ordinary() {
+        // Divergent callees across sites never partially claim: a shared
+        // prefix with `foo`→`bar` on one line and `foo`→`baz` on the next
+        // declines the sweep (wholly ordinary, no holed emission).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = oldmod::foo(1);\n-    let b = oldmod::foo(2);\n+    let a = newmod::bar(1);\n+    let b = newmod::baz(2);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = oldmod::foo(1);\n    let b = oldmod::foo(2);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none(),
+            "mixed class must stay ordinary"
+        );
+    }
+
+    #[test]
+    fn wi13r_qual_double_sweep_extra_site_vetoes() {
+        // Occurrence totality at N=2: an untouched same-shape twin (found
+        // 3 vs want 2) vetoes (wholly ordinary, sweep precedent).
+        let raw = section(
+            "f.rs",
+            "@@ -1,4 +1,4 @@\n fn m() {\n-    let a = oldmod::foo(1);\n-    let b = oldmod::foo(2);\n+    let a = newmod::bar(1);\n+    let b = newmod::bar(2);\n }\n",
+        );
+        let pre = pre_map(&[(
+            "f.rs",
+            "fn m() {\n    let a = oldmod::foo(1);\n    let b = oldmod::foo(2);\n    let c = oldmod::foo(9);\n}\n",
+        )]);
+        assert!(
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
+                .is_none(),
+            "twin must veto"
         );
     }
 }

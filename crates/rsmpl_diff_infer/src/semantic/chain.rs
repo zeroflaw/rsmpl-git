@@ -208,7 +208,16 @@ pub(crate) fn run_pair_chain(
     }
     // WI-3: qualified-path, turbofish, and macro-rename sweeps — after
     // the method sweeps, before the bare-call sweep (tightest first).
-    // WI-4 slice 2b-1: counted declines.
+    // WI-4 slice 2b-1: counted declines. WI-13 residue: the double-delta
+    // sweep rides `call_sweep` before the single-delta qualified sweep
+    // (the classes are disjoint by parser, so order only names priority).
+    if let Some(dd) = attempt_counted(
+        declined,
+        "call_sweep",
+        super::try_qual_double_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
+        return Some((dd, "call_sweep"));
+    }
     if let Some(qual) = attempt_counted(
         declined,
         "qualified_call",
