@@ -243,7 +243,7 @@ pub(crate) fn run_pair_chain(
     // this owns permuted-args classes), before the trailing-arg
     // sweeps. Pure whole-line classes decline here (they belong to
     // `call_arg_template` below).
-    if let Some(perm) = attempt(
+    if let Some(perm) = attempt_counted(
         declined,
         "call_arg_template",
         super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -275,14 +275,14 @@ pub(crate) fn run_pair_chain(
     // the engine applies but no detector raised) — after the concrete
     // literal sweeps (those own uniform-concrete classes; this owns
     // hole/wrapper classes), before the peel sweep.
-    if let Some(arg) = attempt(
+    if let Some(arg) = attempt_counted(
         declined,
         "call_arg_template",
         super::try_call_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((arg, "call_arg_template"));
     }
-    if let Some(marg) = attempt(
+    if let Some(marg) = attempt_counted(
         declined,
         "method_arg_template",
         super::try_method_arg_template_sweep(minuses, pluses, path, file_old, changed, used_rules),

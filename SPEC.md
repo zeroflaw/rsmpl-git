@@ -7913,10 +7913,14 @@ single: the shape matched and the file-wide count `found` differs
   call-literal family, the ref-strip family, and the sig-evolution
   family (free-fn + per-block counts); WI-4 slice 2b-1 wires the
   fn-slot family (free + per-block counts), the header-evolution
-  family (free + per-block counts), the qualified-call family, the
-  turbofish family (call + method), the use-prefix family, and the
-  macro-rename family (bare + qualified); every other detector still
-  declines shape-or-count as `no-match` pending WI-4 slice 2b-rest),
+   family (free + per-block counts), the qualified-call family, the
+   turbofish family (call + method), the use-prefix family, and the
+   macro-rename family (bare + qualified); WI-4 slice 2b-rest-a wires
+   the call-perm family (sub-line perm, same emission family as
+   call-arg-template), the call-arg-template family, and the
+   method-arg-template family (all via the real-pair engine count);
+   every other detector still
+   declines shape-or-count as `no-match` pending WI-4 slice 2b-rest-b),
   `veto:<name>` (named veto: off-diff
   use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
   family when a macro/string twin covers a changed line, WI-4 slice 1

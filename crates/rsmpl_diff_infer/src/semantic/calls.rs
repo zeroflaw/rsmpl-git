@@ -25,9 +25,9 @@ pub(crate) fn try_call_perm_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != pluses.len() || minuses.is_empty() {
-        return None;
+        return Counted::Miss;
     }
     // All-identical multi-pair classes stay for the tighter verbatim
     // sweep (T422). A single pair is never "all-identical" in the
@@ -35,7 +35,7 @@ pub(crate) fn try_call_perm_sweep(
     // never claims single pairs on this path) — the subterm count gate
     // below owns singles.
     if minuses.len() >= 2 && super::subline::all_identical_pairs(minuses, pluses) {
-        return None;
+        return Counted::Miss;
     }
     let mut cal: Option<String> = None;
     let mut arity: Option<usize> = None;
@@ -51,16 +51,19 @@ pub(crate) fn try_call_perm_sweep(
         if !whole(m) || !whole(p) {
             saw_subline_only = true;
         }
-        let sites = super::subline::extract_arg_permutation_sites(m, p)?;
+        let sites = match super::subline::extract_arg_permutation_sites(m, p) {
+            Some(s) => s,
+            None => return Counted::Miss,
+        };
         for s in &sites {
             if cal.as_ref().is_some_and(|c| *c != s.cal) {
-                return None;
+                return Counted::Miss;
             }
             if arity.is_some_and(|x| x != s.arity) {
-                return None;
+                return Counted::Miss;
             }
             if perm.as_ref().is_some_and(|x| *x != s.perm) {
-                return None;
+                return Counted::Miss;
             }
             cal = Some(s.cal.clone());
             arity = Some(s.arity);
@@ -69,11 +72,13 @@ pub(crate) fn try_call_perm_sweep(
         }
     }
     if !saw_subline_only {
-        return None;
+        return Counted::Miss;
     }
-    let (cal, arity, perm) = (cal?, arity?, perm?);
+    let (Some(cal), Some(arity), Some(perm)) = (cal, arity, perm) else {
+        return Counted::Miss;
+    };
     if total < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut minus_args = Vec::with_capacity(arity);
     let mut plus_args = Vec::with_capacity(arity);
@@ -88,13 +93,25 @@ pub(crate) fn try_call_perm_sweep(
     let lit = super::shape::literal_callee(&cal);
     let minus_tpl = format!("{lit}({})", minus_args.join(", "));
     let plus_tpl = format!("{lit}({})", plus_args.join(", "));
-    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, total) {
-        return None;
+    // WI-4 slice 2b-rest-a: the shape matched, so a failing probe names
+    // its counts (`totality:`). No opaque arm by construction: the
+    // engine never matches inside macros/strings.
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+        total,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, "call_arg_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N-site (N ≥ 2) bare-call rewrite with a callee-only delta:

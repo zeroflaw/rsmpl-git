@@ -58,8 +58,11 @@ pub struct HunkProvenance {
 /// numbers), `totality:<a>:<b>` (site-count mismatch — WI-17 slice 4
 /// wires the call family first; WI-4 slice 1 wires method, let-add, and
 /// type; WI-4 slice 2a adds general-expr, method-literal, call-literal,
-/// ref-strip, and sig-evolution; every other detector still declines
-/// shape-or-count as `no-match` pending WI-4 slice 2b), `veto:<name>`
+/// ref-strip, and sig-evolution; WI-4 slice 2b-1 adds fn-slot,
+/// header-evolution, qualified-call, turbofish, use-prefix, and
+/// macro-rename; WI-4 slice 2b-rest-a adds call-perm, call-arg-template,
+/// and method-arg-template; every other detector still declines
+/// shape-or-count as `no-match` pending WI-4 slice 2b-rest-b), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
 /// anti-unification, joint-territory section gates),
 /// `precondition:<name>` (a stated shape premise failed, incl. the

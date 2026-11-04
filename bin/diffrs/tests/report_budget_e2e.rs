@@ -916,3 +916,48 @@ fn wi4_slice2a_superseded_whole_section_decline_stays_hidden() {
         "no ordinary remainder, got: {v}"
     );
 }
+#[test]
+fn wi4_slice2brest_a_call_arg_template_names_totality_end_to_end() {
+    // WI-4 slice 2b-rest-a: a 2-pair hetero call-arg template over 4
+    // same-template sites stays wholly ordinary (per-hunk verbatim
+    // singles veto on the twins), and the trial names the counted
+    // decline (`call_arg_template` / `totality:4:2`) with text parity.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    foo(a, 1);\n    foo(b, 1);\n    foo(a, 1);\n    foo(b, 1);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    bar(a, 2);\n    bar(b, 2);\n    foo(a, 1);\n    foo(b, 1);\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "stays ordinary, got: {v}");
+    let declined = hunks[0]["declined"].as_array().unwrap();
+    assert!(
+        declined
+            .iter()
+            .any(|d| d["detector"] == serde_json::json!("call_arg_template")
+                && d["reason"] == serde_json::json!("totality:4:2")),
+        "counted decline named, got: {declined:?}"
+    );
+    let text_out = run(dir.path(), &[]);
+    assert!(
+        String::from_utf8_lossy(&text_out.stderr)
+            .lines()
+            .any(|l| l == "declined: src/f.rs call_arg_template totality:4:2"),
+        "text parity, got: {}",
+        String::from_utf8_lossy(&text_out.stderr)
+    );
+}

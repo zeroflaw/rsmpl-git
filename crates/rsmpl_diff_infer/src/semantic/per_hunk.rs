@@ -749,7 +749,7 @@ pub(crate) fn compress_balanced_pair_body(
             )
         })
         .or_else(|| {
-            attempt(
+            attempt_counted(
                 declined,
                 "call_arg_template",
                 super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules),

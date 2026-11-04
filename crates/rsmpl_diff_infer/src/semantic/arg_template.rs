@@ -369,37 +369,43 @@ pub(crate) fn try_call_arg_template_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // All-identical classes stay for the tighter verbatim sweep (T422).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut old_cal: Option<String> = None;
     let mut new_cal: Option<String> = None;
     let mut minus_sets: Vec<Vec<syn::Expr>> = Vec::with_capacity(minuses.len());
     let mut plus_sets: Vec<Vec<syn::Expr>> = Vec::with_capacity(pluses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n, o_args, n_args) = parse_bare_pair(m, p)?;
+        let Some((o, n, o_args, n_args)) = parse_bare_pair(m, p) else {
+            return super::prov::Counted::Miss;
+        };
         if old_cal.as_ref().is_some_and(|c| *c != o) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if new_cal.as_ref().is_some_and(|c| *c != n) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         old_cal = Some(o);
         new_cal = Some(n);
         minus_sets.push(o_args);
         plus_sets.push(n_args);
     }
-    let (old_cal, new_cal) = (old_cal?, new_cal?);
-    let (m_tpl, p_tpl) = antiunify_call_args(&minus_sets, &plus_sets)?;
+    let (Some(old_cal), Some(new_cal)) = (old_cal, new_cal) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((m_tpl, p_tpl)) = antiunify_call_args(&minus_sets, &plus_sets) else {
+        return super::prov::Counted::Miss;
+    };
     // Disjoint from `call_sweep` (callee-only delta, identical args):
     // a template with no arg delta is that detector's class.
     if m_tpl == p_tpl {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let minus_call = format!(
         "{}({})",
@@ -411,14 +417,28 @@ pub(crate) fn try_call_arg_template_sweep(
         super::shape::literal_callee(&new_cal),
         p_tpl.join(", ")
     );
-    if !crate::totality::template_pair_holds(path, file_old, &minus_call, &plus_call, minuses.len())
-    {
-        return None;
+    // WI-4 slice 2b-rest-a: the shape matched, so a failing probe names
+    // its counts (`totality:`). No opaque arm by construction.
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_call, &plus_call),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(used_rules, "call_arg_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// One method-call line: receiver token text, method ident, arg exprs.
@@ -482,57 +502,80 @@ pub(crate) fn try_method_arg_template_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut method_old: Option<String> = None;
     let mut method_new: Option<String> = None;
     let mut minus_sets: Vec<Vec<syn::Expr>> = Vec::with_capacity(minuses.len());
     let mut plus_sets: Vec<Vec<syn::Expr>> = Vec::with_capacity(pluses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o_recv, o_method, o_args) = parse_method_line(m)?;
-        let (n_recv, n_method, n_args) = parse_method_line(p)?;
+        let Some((o_recv, o_method, o_args)) = parse_method_line(m) else {
+            return super::prov::Counted::Miss;
+        };
+        let Some((n_recv, n_method, n_args)) = parse_method_line(p) else {
+            return super::prov::Counted::Miss;
+        };
         // Receivers preserved per site (a receiver delta is the
         // method-to-function domain, never guessed here).
         if o_recv != n_recv {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if method_old.as_ref().is_some_and(|c| *c != o_method) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if method_new.as_ref().is_some_and(|c| *c != n_method) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if o_args.len() != n_args.len() {
-            return None;
+            return super::prov::Counted::Miss;
         }
         method_old = Some(o_method);
         method_new = Some(n_method);
         minus_sets.push(o_args);
         plus_sets.push(n_args);
     }
-    let (method_old, method_new) = (method_old?, method_new?);
-    let (m_tpl, p_tpl) = antiunify_call_args(&minus_sets, &plus_sets)?;
+    let (Some(method_old), Some(method_new)) = (method_old, method_new) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((m_tpl, p_tpl)) = antiunify_call_args(&minus_sets, &plus_sets) else {
+        return super::prov::Counted::Miss;
+    };
     // Disjoint from `method_to_method` (method-only delta, identical
     // args): a template with no arg delta is that detector's class.
     if m_tpl == p_tpl {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let old_lit = super::shape::literal_callee(&method_old);
     let new_lit = super::shape::literal_callee(&method_new);
     let minus_tpl = format!("Receiver.{old_lit}({})", m_tpl.join(", "));
     let plus_tpl = format!("Receiver.{new_lit}({})", p_tpl.join(", "));
-    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
-        return None;
+    // WI-4 slice 2b-rest-a: the shape matched, so a failing probe names
+    // its counts (`totality:`). No opaque arm by construction.
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(used_rules, "method_arg_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// Single-pair structural wrapper (WI-7 slices 8-9): the N ≥ 2

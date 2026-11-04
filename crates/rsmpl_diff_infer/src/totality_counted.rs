@@ -1015,4 +1015,47 @@ mod tests {
             FamilyVerdict::Holds
         );
     }
+
+    #[test]
+    fn wi4_slice2brest_a_arg_template_verdicts_name_counts() {
+        // WI-4 slice 2b-rest-a: the 3 arg-template families share the
+        // real-pair engine count (`template_pair_counts` +
+        // `engine_verdict`). No opaque arm by construction (the engine
+        // never matches inside macros/strings).
+        // Call-perm: 3 `swap(E0,E1)->swap(E1,E0)` sites vs 2 claimed.
+        let ppre = "fn m() {\n    swap(a, b);\n    swap(c, d);\n    swap(e, f);\n}\n";
+        let pfound =
+            template_pair_counts("f.rs", Some(ppre), "swap(E0, E1)", "swap(E1, E0)").unwrap();
+        assert_eq!(
+            engine_verdict(Some(ppre), Some(pfound), 2),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        // Call-arg-template: 2 `foo(E0, 1)->bar(E0, 2)` sites, exact holds.
+        let cpre = "fn m() {\n    foo(a, 1);\n    foo(b, 1);\n}\n";
+        let cfound = template_pair_counts("f.rs", Some(cpre), "foo(E0, 1)", "bar(E0, 2)").unwrap();
+        assert_eq!(
+            engine_verdict(Some(cpre), Some(cfound), 2),
+            FamilyVerdict::Holds
+        );
+        // Method-arg-template: 3 `Receiver.old(E0, 1)` sites vs 2 claimed.
+        let mpre = "fn m() {\n    r.old(a, 1);\n    r.old(b, 1);\n    r.old(c, 1);\n}\n";
+        let mfound = template_pair_counts(
+            "f.rs",
+            Some(mpre),
+            "Receiver.old(E0, 1)",
+            "Receiver.new(E0, 2)",
+        )
+        .unwrap();
+        assert_eq!(
+            engine_verdict(Some(mpre), Some(mfound), 2),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        // Unproven on unparseable pre-image; Holds on None pre-image
+        // (legacy section-visible allow).
+        assert_eq!(
+            engine_verdict(Some("not rust {{{"), None, 2),
+            FamilyVerdict::Unproven
+        );
+        assert_eq!(engine_verdict(None, None, 2), FamilyVerdict::Holds);
+    }
 }
