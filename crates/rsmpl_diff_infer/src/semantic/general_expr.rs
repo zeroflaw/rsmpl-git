@@ -83,23 +83,124 @@ pub(crate) fn variant(expr: &syn::Expr) -> Option<&'static str> {
     }
 }
 
+/// One anti-unification site: the parsed expression plus the snippet it
+/// was parsed from (WI-3 span-slice discipline). The snippet is the
+/// exact source the expression's spans are relative to — whole-line
+/// path: the terminator-stripped trimmed line; `let`-init path: the
+/// full trimmed `let` line (init spans are line-relative); frame-
+/// unwrapped lines: `None` (detached re-parse spans, legacy render).
+/// `None` anywhere in a class keeps the legacy `tok` render for the
+/// whole template (never a guessed slice).
+pub(crate) struct GeneralExprSite<'a> {
+    pub snippet: Option<&'a str>,
+    pub expr: &'a syn::Expr,
+}
+
+/// Byte range of `span` inside `snippet`, or `None` on any irregular
+/// span (multi-line, out-of-bounds, non-boundary, empty).
+fn span_bytes(snippet: &str, span: proc_macro2::Span) -> Option<(usize, usize)> {
+    if span.start().line != 1 || span.end().line != 1 {
+        return None;
+    }
+    let (s, e) = (
+        rsmpl_pattern::char_col_to_byte(snippet, span.start().column),
+        rsmpl_pattern::char_col_to_byte(snippet, span.end().column),
+    );
+    if s >= e || e > snippet.len() {
+        return None;
+    }
+    if !snippet.is_char_boundary(s) || !snippet.is_char_boundary(e) {
+        return None;
+    }
+    Some((s, e))
+}
+
+/// Span of the `idx`-th expression child of `expr` (variant child order
+/// matches the classifier's), or `None` for token-column positions
+/// (operators, members, types, mutability carry no independent span —
+/// they ride the verbatim remainder).
+fn hole_span(expr: &syn::Expr, idx: usize) -> Option<proc_macro2::Span> {
+    use syn::spanned::Spanned;
+    match expr {
+        syn::Expr::Binary(b) => [b.left.span(), b.right.span()].get(idx).copied(),
+        syn::Expr::Unary(u) => (idx == 0).then(|| u.expr.span()),
+        syn::Expr::Cast(c) => (idx == 0).then(|| c.expr.span()),
+        syn::Expr::Field(f) => (idx == 0).then(|| f.base.span()),
+        syn::Expr::Index(i) => [i.expr.span(), i.index.span()].get(idx).copied(),
+        syn::Expr::Reference(r) => (idx == 0).then(|| r.expr.span()),
+        syn::Expr::Await(a) => (idx == 0).then(|| a.base.span()),
+        _ => None,
+    }
+}
+
+/// Render one template side from the first site's own source bytes:
+/// the whole-expression slice verbatim, with the hole child's span
+/// replaced by `E0` when the class carries a hole. Operators, dots,
+/// brackets, `&`, and type spellings all ride the verbatim remainder —
+/// nothing re-renders through `TokenStream` spacing.
+fn span_template(snippet: &str, expr: &syn::Expr, hole_pos: Option<usize>) -> Option<String> {
+    use syn::spanned::Spanned;
+    let (ws, we) = span_bytes(snippet, expr.span())?;
+    let mut out = snippet.get(ws..we)?.to_string();
+    if let Some(idx) = hole_pos {
+        let (hs, he) = span_bytes(snippet, hole_span(expr, idx)?)?;
+        if hs < ws || he > we {
+            return None;
+        }
+        let (rs, re) = (hs - ws, he - ws);
+        if rs >= re || re > out.len() {
+            return None;
+        }
+        if !out.is_char_boundary(rs) || !out.is_char_boundary(re) {
+            return None;
+        }
+        out.replace_range(rs..re, "E0");
+    }
+    Some(out)
+}
+
+/// Render both template sides from the first sites' source bytes, or
+/// `None` when any snippet is missing (framed lines) or any span is
+/// irregular — the caller keeps the legacy `tok` render then.
+fn render_span_templates(
+    minus: &[GeneralExprSite],
+    plus: &[GeneralExprSite],
+    hole_pos: Option<usize>,
+) -> Option<(String, String)> {
+    let m_snip = minus[0].snippet?;
+    let p_snip = plus[0].snippet?;
+    // Every site's spans must slice its own snippet, else the first
+    // site's slice cannot stand for the class (the classifier already
+    // proved token equality; spans prove slicability).
+    for site in minus.iter().chain(plus.iter()) {
+        site.snippet?;
+    }
+    let m_tpl = span_template(m_snip, minus[0].expr, hole_pos)?;
+    let p_tpl = span_template(p_snip, plus[0].expr, hole_pos)?;
+    Some((m_tpl, p_tpl))
+}
+
 /// Anti-unify N ≥ 2 `(minus, plus)` whole-line expression pairs into one
 /// template pair with at most one `E{i}` hole, or `None` (stays
 /// ordinary). See the module docs for the guards.
 pub(crate) fn antiunify_general_exprs(
-    minus: &[syn::Expr],
-    plus: &[syn::Expr],
+    minus: &[GeneralExprSite],
+    plus: &[GeneralExprSite],
 ) -> Option<(String, String)> {
     if minus.len() != plus.len() || minus.len() < 2 {
         return None;
     }
-    let key = variant(&minus[0])?;
-    if minus.iter().any(|e| variant(e) != Some(key)) {
+    let key = variant(minus[0].expr)?;
+    if minus.iter().any(|s| variant(s.expr) != Some(key)) {
         return None;
     }
-    if plus.iter().any(|e| variant(e) != Some(key)) {
+    if plus.iter().any(|s| variant(s.expr) != Some(key)) {
         return None;
     }
+    // Project the site expressions (classification stays token-based;
+    // rendering below prefers the sites' own source bytes).
+    let minus_exprs: Vec<&syn::Expr> = minus.iter().map(|s| s.expr).collect();
+    let plus_exprs: Vec<&syn::Expr> = plus.iter().map(|s| s.expr).collect();
     // Token columns (operators/members/types/mutability) per side and
     // expression children in order, per variant.
     let mut tok_minus: Vec<Vec<String>> = Vec::new();
@@ -109,13 +210,13 @@ pub(crate) fn antiunify_general_exprs(
     // Render closures rebuild each side's template from classified
     // children; one per variant (concrete positions keep first-site
     // spelling, holes ride `E{k}`).
-    match (&minus[0], &plus[0]) {
+    match (minus_exprs[0], plus_exprs[0]) {
         (syn::Expr::Binary(_), syn::Expr::Binary(_)) => {
-            let collect = |es: &[syn::Expr],
+            let collect = |es: &[&syn::Expr],
                            left: &mut Vec<String>,
                            right: &mut Vec<String>,
                            op: &mut Vec<String>| {
-                for e in es {
+                for e in es.iter().copied() {
                     if let syn::Expr::Binary(b) = e {
                         left.push(tok(&b.left));
                         right.push(tok(&b.right));
@@ -125,8 +226,8 @@ pub(crate) fn antiunify_general_exprs(
             };
             let (mut ml, mut mr, mut mo) = (vec![], vec![], vec![]);
             let (mut pl, mut pr, mut po) = (vec![], vec![], vec![]);
-            collect(minus, &mut ml, &mut mr, &mut mo);
-            collect(plus, &mut pl, &mut pr, &mut po);
+            collect(&minus_exprs, &mut ml, &mut mr, &mut mo);
+            collect(&plus_exprs, &mut pl, &mut pr, &mut po);
             tok_minus.push(mo);
             tok_plus.push(po);
             expr_minus.push(ml);
@@ -139,13 +240,13 @@ pub(crate) fn antiunify_general_exprs(
             let mut po = vec![];
             let mut me = vec![];
             let mut pe = vec![];
-            for e in minus {
+            for e in minus_exprs.iter().copied() {
                 if let syn::Expr::Unary(u) = e {
                     mo.push(tok(&u.op));
                     me.push(tok(&u.expr));
                 }
             }
-            for e in plus {
+            for e in plus_exprs.iter().copied() {
                 if let syn::Expr::Unary(u) = e {
                     po.push(tok(&u.op));
                     pe.push(tok(&u.expr));
@@ -161,13 +262,13 @@ pub(crate) fn antiunify_general_exprs(
             let mut pe = vec![];
             let mut mt = vec![];
             let mut pt = vec![];
-            for e in minus {
+            for e in minus_exprs.iter().copied() {
                 if let syn::Expr::Cast(c) = e {
                     me.push(tok(&c.expr));
                     mt.push(tok(&c.ty));
                 }
             }
-            for e in plus {
+            for e in plus_exprs.iter().copied() {
                 if let syn::Expr::Cast(c) = e {
                     pe.push(tok(&c.expr));
                     pt.push(tok(&c.ty));
@@ -183,13 +284,13 @@ pub(crate) fn antiunify_general_exprs(
             let mut pe = vec![];
             let mut mm = vec![];
             let mut pm = vec![];
-            for e in minus {
+            for e in minus_exprs.iter().copied() {
                 if let syn::Expr::Field(f) = e {
                     me.push(tok(&f.base));
                     mm.push(tok(&f.member));
                 }
             }
-            for e in plus {
+            for e in plus_exprs.iter().copied() {
                 if let syn::Expr::Field(f) = e {
                     pe.push(tok(&f.base));
                     pm.push(tok(&f.member));
@@ -205,13 +306,13 @@ pub(crate) fn antiunify_general_exprs(
             let mut pb = vec![];
             let mut mi = vec![];
             let mut pi = vec![];
-            for e in minus {
+            for e in minus_exprs.iter().copied() {
                 if let syn::Expr::Index(i) = e {
                     mb.push(tok(&i.expr));
                     mi.push(tok(&i.index));
                 }
             }
-            for e in plus {
+            for e in plus_exprs.iter().copied() {
                 if let syn::Expr::Index(i) = e {
                     pb.push(tok(&i.expr));
                     pi.push(tok(&i.index));
@@ -227,7 +328,7 @@ pub(crate) fn antiunify_general_exprs(
             let mut pe = vec![];
             let mut mm = vec![];
             let mut pm = vec![];
-            for e in minus {
+            for e in minus_exprs.iter().copied() {
                 if let syn::Expr::Reference(r) = e {
                     me.push(tok(&r.expr));
                     mm.push(if r.mutability.is_some() {
@@ -237,7 +338,7 @@ pub(crate) fn antiunify_general_exprs(
                     });
                 }
             }
-            for e in plus {
+            for e in plus_exprs.iter().copied() {
                 if let syn::Expr::Reference(r) = e {
                     pe.push(tok(&r.expr));
                     pm.push(if r.mutability.is_some() {
@@ -255,12 +356,12 @@ pub(crate) fn antiunify_general_exprs(
         (syn::Expr::Await(_), syn::Expr::Await(_)) => {
             let mut me = vec![];
             let mut pe = vec![];
-            for e in minus {
+            for e in minus_exprs.iter().copied() {
                 if let syn::Expr::Await(a) = e {
                     me.push(tok(&a.base));
                 }
             }
-            for e in plus {
+            for e in plus_exprs.iter().copied() {
                 if let syn::Expr::Await(a) = e {
                     pe.push(tok(&a.base));
                 }
@@ -330,100 +431,114 @@ pub(crate) fn antiunify_general_exprs(
             t.0.clone()
         }
     };
-    let (minus_tpl, plus_tpl) = match key {
-        "binary" => {
-            let op_m = tok_tpl(&toks[0], false);
-            let op_p = tok_tpl(&toks[0], true);
-            (
-                format!(
-                    "{} {} {}",
-                    child_tpl(&children[0], false),
-                    op_m,
-                    child_tpl(&children[1], false)
-                ),
-                format!(
-                    "{} {} {}",
-                    child_tpl(&children[0], true),
-                    op_p,
-                    child_tpl(&children[1], true)
-                ),
-            )
-        }
-        "unary" => (
-            format!(
-                "{}{}",
-                tok_tpl(&toks[0], false),
-                child_tpl(&children[0], false)
-            ),
-            format!(
-                "{}{}",
-                tok_tpl(&toks[0], true),
-                child_tpl(&children[0], true)
-            ),
-        ),
-        "cast" => (
-            format!(
-                "{} as {}",
-                child_tpl(&children[0], false),
-                tok_tpl(&toks[0], false)
-            ),
-            format!(
-                "{} as {}",
-                child_tpl(&children[0], true),
-                tok_tpl(&toks[0], true)
-            ),
-        ),
-        "field" => (
-            format!(
-                "{}.{}",
-                child_tpl(&children[0], false),
-                tok_tpl(&toks[0], false)
-            ),
-            format!(
-                "{}.{}",
-                child_tpl(&children[0], true),
-                tok_tpl(&toks[0], true)
-            ),
-        ),
-        "index" => (
-            format!(
-                "{}[{}]",
-                child_tpl(&children[0], false),
-                child_tpl(&children[1], false)
-            ),
-            format!(
-                "{}[{}]",
-                child_tpl(&children[0], true),
-                child_tpl(&children[1], true)
-            ),
-        ),
-        "reference" => {
-            let prefix = |t: &(String, String), side: bool| {
-                let m = tok_tpl(t, side);
-                if m == "mut" {
-                    "&mut ".to_string()
-                } else {
-                    "&".to_string()
-                }
-            };
-            (
+    // WI-3 span-first render: replay the first sites' own source bytes
+    // (operators, dots, brackets, `&`, and type spellings included), so
+    // `&cand.body_text` stays `&cand.body_text` and never becomes
+    // `& cand . body_text`. Any missing snippet (framed lines) or
+    // irregular span keeps the legacy `tok`-join render below — the
+    // totality probe plus the defensive re-parse gate still own soundness
+    // there, and N=1 singles additionally carry the T361 byte-compare.
+    let hole_pos: Option<usize> = children.iter().position(|c| matches!(c, Child::Hole(_)));
+    let (minus_tpl, plus_tpl) = match render_span_templates(minus, plus, hole_pos) {
+        Some(pair) => pair,
+        // Legacy `tok`-join render: only reached when a snippet is
+        // missing (framed lines) or a span is irregular. The strings
+        // below are comparison-normalized, not source bytes.
+        None => match key {
+            "binary" => {
+                let op_m = tok_tpl(&toks[0], false);
+                let op_p = tok_tpl(&toks[0], true);
+                (
+                    format!(
+                        "{} {} {}",
+                        child_tpl(&children[0], false),
+                        op_m,
+                        child_tpl(&children[1], false)
+                    ),
+                    format!(
+                        "{} {} {}",
+                        child_tpl(&children[0], true),
+                        op_p,
+                        child_tpl(&children[1], true)
+                    ),
+                )
+            }
+            "unary" => (
                 format!(
                     "{}{}",
-                    prefix(&toks[0], false),
+                    tok_tpl(&toks[0], false),
                     child_tpl(&children[0], false)
                 ),
                 format!(
                     "{}{}",
-                    prefix(&toks[0], true),
+                    tok_tpl(&toks[0], true),
                     child_tpl(&children[0], true)
                 ),
-            )
-        }
-        "await" => (
-            format!("{}.await", child_tpl(&children[0], false)),
-            format!("{}.await", child_tpl(&children[0], true)),
-        ),
-        _ => return None,
+            ),
+            "cast" => (
+                format!(
+                    "{} as {}",
+                    child_tpl(&children[0], false),
+                    tok_tpl(&toks[0], false)
+                ),
+                format!(
+                    "{} as {}",
+                    child_tpl(&children[0], true),
+                    tok_tpl(&toks[0], true)
+                ),
+            ),
+            "field" => (
+                format!(
+                    "{}.{}",
+                    child_tpl(&children[0], false),
+                    tok_tpl(&toks[0], false)
+                ),
+                format!(
+                    "{}.{}",
+                    child_tpl(&children[0], true),
+                    tok_tpl(&toks[0], true)
+                ),
+            ),
+            "index" => (
+                format!(
+                    "{}[{}]",
+                    child_tpl(&children[0], false),
+                    child_tpl(&children[1], false)
+                ),
+                format!(
+                    "{}[{}]",
+                    child_tpl(&children[0], true),
+                    child_tpl(&children[1], true)
+                ),
+            ),
+            "reference" => {
+                let prefix = |t: &(String, String), side: bool| {
+                    let m = tok_tpl(t, side);
+                    if m == "mut" {
+                        "&mut ".to_string()
+                    } else {
+                        "&".to_string()
+                    }
+                };
+                (
+                    format!(
+                        "{}{}",
+                        prefix(&toks[0], false),
+                        child_tpl(&children[0], false)
+                    ),
+                    format!(
+                        "{}{}",
+                        prefix(&toks[0], true),
+                        child_tpl(&children[0], true)
+                    ),
+                )
+            }
+            "await" => (
+                format!("{}.await", child_tpl(&children[0], false)),
+                format!("{}.await", child_tpl(&children[0], true)),
+            ),
+            _ => return None,
+        },
     };
     if minus_tpl == plus_tpl {
         return None;
@@ -460,6 +575,26 @@ pub(crate) fn parse_line_expr(line: &str) -> Option<syn::Expr> {
         }
     }
     super::frame::frame_inner(line)
+}
+
+/// Whole-line parse plus the snippet the expression was parsed from
+/// (WI-3): direct parses return their stripped source text (spans slice
+/// it); frame-unwrapped re-parses return `None` (detached spans — the
+/// caller keeps the legacy render for the whole class).
+/// `pub(crate)` so the sweep entry reuses the same parse (no mirrored
+/// duplicate).
+pub(crate) fn parse_line_expr_snippet(line: &str) -> Option<(Option<String>, syn::Expr)> {
+    let text = strip_one_terminator(line.trim())?;
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Ok(expr) = syn::parse_str::<syn::Expr>(text) {
+        if !matches!(expr, syn::Expr::Let(_)) {
+            return Some((Some(text.to_string()), expr));
+        }
+    }
+    super::frame::frame_inner(line).map(|e| (None, e))
 }
 
 /// One `let`-init sub-expression (WI-5): `let PAT[: TY] = INIT;` with
@@ -511,12 +646,19 @@ pub(crate) fn try_general_expr_sweep(
     // Whole-line first (tightest): every pair parses whole-line.
     let mut minus_exprs = Vec::with_capacity(minuses.len());
     let mut plus_exprs = Vec::with_capacity(pluses.len());
+    // WI-3 snippets: the exact source each expression was parsed from
+    // (direct parses) or `None` (frame-unwrapped re-parses, whose spans
+    // are detached — those sites keep the legacy render).
+    let mut minus_snips: Vec<Option<String>> = Vec::with_capacity(minuses.len());
+    let mut plus_snips: Vec<Option<String>> = Vec::with_capacity(pluses.len());
     let mut whole_ok = true;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        match (parse_line_expr(m), parse_line_expr(p)) {
-            (Some(me), Some(pe)) => {
+        match (parse_line_expr_snippet(m), parse_line_expr_snippet(p)) {
+            (Some((ms, me)), Some((ps, pe))) => {
                 minus_exprs.push(me);
                 plus_exprs.push(pe);
+                minus_snips.push(ms);
+                plus_snips.push(ps);
             }
             _ => {
                 whole_ok = false;
@@ -531,7 +673,23 @@ pub(crate) fn try_general_expr_sweep(
                 return None;
             }
         }
-        if let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_exprs, &plus_exprs) {
+        let minus_sites: Vec<GeneralExprSite> = minus_exprs
+            .iter()
+            .zip(minus_snips.iter())
+            .map(|(e, s)| GeneralExprSite {
+                snippet: s.as_deref(),
+                expr: e,
+            })
+            .collect();
+        let plus_sites: Vec<GeneralExprSite> = plus_exprs
+            .iter()
+            .zip(plus_snips.iter())
+            .map(|(e, s)| GeneralExprSite {
+                snippet: s.as_deref(),
+                expr: e,
+            })
+            .collect();
+        if let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_sites, &plus_sites) {
             // Frame equality (WI-3): when a pair parsed through a frame
             // (`fn`/closure/block/arm/branch rung), the frame text must
             // be identical per pair — the template rewrites only the
@@ -578,7 +736,25 @@ pub(crate) fn try_general_expr_sweep(
             return None;
         }
     }
-    let (minus_tpl, plus_tpl) = antiunify_general_exprs(&minus_inits, &plus_inits)?;
+    // WI-3 snippets: init spans are line-relative (parsed from the full
+    // trimmed `let` line), so the lines themselves are the snippets.
+    let minus_sites: Vec<GeneralExprSite> = minus_inits
+        .iter()
+        .zip(minuses.iter())
+        .map(|(e, m)| GeneralExprSite {
+            snippet: Some(m.trim()),
+            expr: e,
+        })
+        .collect();
+    let plus_sites: Vec<GeneralExprSite> = plus_inits
+        .iter()
+        .zip(pluses.iter())
+        .map(|(e, p)| GeneralExprSite {
+            snippet: Some(p.trim()),
+            expr: e,
+        })
+        .collect();
+    let (minus_tpl, plus_tpl) = antiunify_general_exprs(&minus_sites, &plus_sites)?;
     // Frame equality (WI-3): the `let` wrapper (pattern, type) rides
     // each site's own line — the template rewrites only the init, so a
     // wrapper delta alongside (renamed binding, added ascription)
@@ -882,7 +1058,25 @@ mod tests {
     }
 
     fn anti(minuses: &[&str], pluses: &[&str]) -> Option<(String, String)> {
-        antiunify_general_exprs(&exprs(minuses), &exprs(pluses))
+        let me = exprs(minuses);
+        let pe = exprs(pluses);
+        let ms: Vec<super::GeneralExprSite> = me
+            .iter()
+            .zip(minuses.iter())
+            .map(|(e, s)| super::GeneralExprSite {
+                snippet: Some(*s),
+                expr: e,
+            })
+            .collect();
+        let ps: Vec<super::GeneralExprSite> = pe
+            .iter()
+            .zip(pluses.iter())
+            .map(|(e, s)| super::GeneralExprSite {
+                snippet: Some(*s),
+                expr: e,
+            })
+            .collect();
+        antiunify_general_exprs(&ms, &ps)
     }
 
     fn section(path: &str, body: &str) -> String {
@@ -1562,7 +1756,7 @@ mod tests {
         // anchor spacing is not the source spelling -- real-apply
         // would rewrite `use_it(a)` as `use_it (a . clone ())`. The
         // T361 byte-compare vetoes the drift in the general arm (the
-        // multi path shares the latent drift: TASKS). The pair now
+        // multi path span-slices since WI-3 and never drifts). The pair now
         // raises via the WI-7 slice-23 sub-line bare-wrap single,
         // whose call-template emission carries no drifted anchor and
         // real-applies byte-identical (D10 upgrade pin).
@@ -1590,5 +1784,131 @@ mod tests {
         assert!(out.contains("- use_it(E0)\n"), "got: {out}");
         assert!(out.contains("+ use_it(E0.clone())\n"), "got: {out}");
         validated_live(&out, &pre_map);
+    }
+
+    #[test]
+    fn wi3_let_init_ref_anchor_replays_verbatim_spacing() {
+        // WI-3 F3: a uniform `&a.b` → `&a.c` init anchor must replay the
+        // source bytes, never TokenStream spacing (`& a . b`). Before
+        // the span-slice fix this class failed the reprobe byte-compare
+        // and degraded to ordinary (`veto:reprobe-failed`).
+        let pre = "fn m() {\n    let x = &a.b;\n    let y = &a.b;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let x = &a.b;\n-    let y = &a.b;\n+    let x = &a.c;\n+    let y = &a.c;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("ref-anchor sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- &a.b\n"), "got: {out}");
+        assert!(out.contains("+ &a.c\n"), "got: {out}");
+        assert!(!out.contains("& a . b"), "token spacing leaked: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let x = &a.c;\n    let y = &a.c;\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi3_binary_field_anchor_replays_verbatim_spacing() {
+        // WI-3 F3, hetero half: varying bases ride `E0`, the uniform
+        // `&cand.body_text` → `&cand.value_text` anchor delta replays
+        // source spacing on both sides.
+        let pre =
+            "fn m() {\n    let x = base1 + &cand.body_text;\n    let y = base2 + &cand.body_text;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let x = base1 + &cand.body_text;\n-    let y = base2 + &cand.body_text;\n+    let x = base1 + &cand.value_text;\n+    let y = base2 + &cand.value_text;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("field-anchor sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- E0 + &cand.body_text\n"), "got: {out}");
+        assert!(out.contains("+ E0 + &cand.value_text\n"), "got: {out}");
+        assert!(!out.contains("& cand"), "token spacing leaked: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let x = base1 + &cand.value_text;\n    let y = base2 + &cand.value_text;\n}\n"
+        );
+    }
+
+    #[test]
+    fn wi3_emission_uses_span_slicing_not_token_join() {
+        // WI-3 source-scan gate: the multi core replays source bytes via
+        // span slicing (`render_span_templates` + `char_col_to_byte`).
+        // The legacy `tok`-join render survives only on the
+        // `None`-snippet fallback arm (framed lines carry detached
+        // spans) — a re-introduced blind token-join over replayed
+        // subterms fails this scan.
+        let src = include_str!("general_expr.rs");
+        assert!(
+            src.contains("render_span_templates"),
+            "span-first render must be present"
+        );
+        assert!(
+            src.contains("char_col_to_byte"),
+            "span slicing must go through char-col conversion"
+        );
+        assert!(
+            src.contains("snippet: None"),
+            "legacy render must be fenced to the None-snippet fallback"
+        );
+        // (the needle is concatenated so this very test's own literal
+        // never contains it contiguously).
+        let needle = concat!("None => match", " key {");
+        let legacy_sites = src.match_indices(needle).count();
+        assert_eq!(
+            legacy_sites, 1,
+            "exactly one legacy fallback site, got: {legacy_sites}"
+        );
+    }
+
+    #[test]
+    fn wi3_authored_spacing_variant_replays_verbatim() {
+        // WI-3: a compact uniform anchor (`a.b`) replays its own
+        // spelling, not the spaced TokenStream form (`a . b`).
+        let out = anti(&["a.b + 1", "a.b + 1"], &["a.b + 2", "a.b + 2"])
+            .expect("uniform anchor sweep must anti-unify");
+        assert_eq!(
+            out,
+            ("a.b + 1".to_string(), "a.b + 2".to_string()),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn wi3_spaced_authored_source_replays_verbatim_end_to_end() {
+        // WI-3: an author-spaced uniform anchor (`a . b`) replays its
+        // own spacing end-to-end (sweep fires, applies byte-identical),
+        // not the compact TokenStream form.
+        let pre = "fn m() {\n    let x = a . b;\n    let y = a . b;\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    let x = a . b;\n-    let y = a . b;\n+    let x = a . c;\n+    let y = a . c;\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out =
+            super::super::infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+                .expect("spaced-anchor sweep must fire");
+        validated_live(&out, &pre_map);
+        assert!(out.contains("- a . b\n"), "got: {out}");
+        assert!(out.contains("+ a . c\n"), "got: {out}");
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    let x = a . c;\n    let y = a . c;\n}\n"
+        );
     }
 }

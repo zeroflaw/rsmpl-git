@@ -10220,10 +10220,12 @@ non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
 
 Property harness (WI-19 slice 1, `crates/rsmpl_diff_infer/tests/property_cycle.rs`):
-seeded native-side mutations (fn rename, call swap, control-header decoy, N=1 single)
-raised via `infer_rsmpl_with_pre_images` must parse, apply to the native post tree
-byte-identical, and re-infer byte-identical; hetero `&`/field-arg sweeps are excluded
-until emission spacing fidelity lands (DISCOVERED TASKS.md item).
+seeded native-side mutations (fn rename, call swap, control-header decoy, N=1 single,
+hetero `&`/field-anchor general-expr sweeps) raised via `infer_rsmpl_with_pre_images`
+must parse, apply to the native post tree byte-identical, and re-infer byte-identical.
+Emission is span-sliced verbatim (WI-3 law): every detector emission that replays a
+source subterm copies that subterm's exact source bytes, so `&cand.body_text` never
+renders as `& cand . body_text`.
 Property harness (WI-19 slice 3, same file): verdict-honesty recomputation —
 every lossless semantic raise over the namesake-free generator pre-images must report
 zero orphans plus zero follow skips, and `has_ordinary` must agree with the patch-text

@@ -34,7 +34,7 @@
 //! (WI-4 N = 1 rule).
 
 use super::arg_template::antiunify_call_args;
-use super::general_expr::antiunify_general_exprs;
+use super::general_expr::{antiunify_general_exprs, GeneralExprSite};
 use super::shape;
 use super::{strip_one_terminator, unique_rule};
 use quote::ToTokens;
@@ -289,22 +289,24 @@ fn extract_await_try_base(m: &str, p: &str) -> Option<(syn::Expr, syn::Expr)> {
 /// per-pair-preserved receiver (`Receiver` emission). Mixed variants,
 /// qualified/turbofish callees, and anything the arg core vetoes stay
 /// ordinary.
-fn try_position(minuses: &[syn::Expr], pluses: &[syn::Expr]) -> Option<(String, String)> {
-    for e in minuses.iter().chain(pluses.iter()) {
-        if !sub_ok(e) {
+fn try_position(minus: &[GeneralExprSite], plus: &[GeneralExprSite]) -> Option<(String, String)> {
+    for s in minus.iter().chain(plus.iter()) {
+        if !sub_ok(s.expr) {
             return None;
         }
     }
-    if let Some(pair) = antiunify_general_exprs(minuses, pluses) {
+    if let Some(pair) = antiunify_general_exprs(minus, plus) {
         return Some(pair);
     }
-    try_call_position(minuses, pluses)
+    let minus_exprs: Vec<&syn::Expr> = minus.iter().map(|s| s.expr).collect();
+    let plus_exprs: Vec<&syn::Expr> = plus.iter().map(|s| s.expr).collect();
+    try_call_position(&minus_exprs, &plus_exprs)
 }
 
 /// WI-24 fallback: anti-unify all-`Call` or all-`MethodCall` subterm
 /// columns through the call-arg-template core. Returns the bare call /
 /// `Receiver`-method template pair, or `None` (stays ordinary).
-fn try_call_position(minuses: &[syn::Expr], pluses: &[syn::Expr]) -> Option<(String, String)> {
+fn try_call_position(minuses: &[&syn::Expr], pluses: &[&syn::Expr]) -> Option<(String, String)> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
         return None;
     }
@@ -511,7 +513,26 @@ pub(crate) fn try_control_template_sweep(
         if !ok {
             continue;
         }
-        let Some((minus_tpl, plus_tpl)) = try_position(&minus_subs, &plus_subs) else {
+        // The extracted subterms were re-parsed from sliced snippets
+        // (spans detached from the lines), so WI-3 span slicing is
+        // unavailable here — sites carry no snippet and the core keeps
+        // the legacy render (control-position residue, still totality-
+        // plus-reparse gated).
+        let minus_sites: Vec<GeneralExprSite> = minus_subs
+            .iter()
+            .map(|e| GeneralExprSite {
+                snippet: None,
+                expr: e,
+            })
+            .collect();
+        let plus_sites: Vec<GeneralExprSite> = plus_subs
+            .iter()
+            .map(|e| GeneralExprSite {
+                snippet: None,
+                expr: e,
+            })
+            .collect();
+        let Some((minus_tpl, plus_tpl)) = try_position(&minus_sites, &plus_sites) else {
             continue;
         };
         // Frame equality (WI-3): the template rewrites only the
@@ -550,6 +571,19 @@ mod tests {
         texts
             .iter()
             .map(|t| syn::parse_str::<syn::Expr>(t).expect("test expr must parse"))
+            .collect()
+    }
+
+    /// WI-3 sites: each test expression parsed from its own source
+    /// string, which rides as the span snippet.
+    fn sites<'a>(texts: &[&'a str], exprs: &'a [syn::Expr]) -> Vec<GeneralExprSite<'a>> {
+        exprs
+            .iter()
+            .zip(texts.iter())
+            .map(|(e, s)| GeneralExprSite {
+                snippet: Some(*s),
+                expr: e,
+            })
             .collect()
     }
 
@@ -627,8 +661,10 @@ mod tests {
         // Hetero receivers, uniform `> 0` → `>= 0` delta.
         let minus = exprs(&["v > 0", "w > 0"]);
         let plus = exprs(&["v >= 0", "w >= 0"]);
+        let ms = sites(&["v > 0", "w > 0"], &minus);
+        let ps = sites(&["v >= 0", "w >= 0"], &plus);
         assert_eq!(
-            try_position(&minus, &plus),
+            try_position(&ms, &ps),
             Some(("E0 > 0".to_string(), "E0 >= 0".to_string()))
         );
     }
@@ -637,8 +673,10 @@ mod tests {
     fn closure_subterms_antiunify_through_wi6_core() {
         let minus = exprs(&["x + 1", "y + 1"]);
         let plus = exprs(&["x + 2", "y + 2"]);
+        let ms = sites(&["x + 1", "y + 1"], &minus);
+        let ps = sites(&["x + 2", "y + 2"], &plus);
         assert_eq!(
-            try_position(&minus, &plus),
+            try_position(&ms, &ps),
             Some(("E0 + 1".to_string(), "E0 + 2".to_string()))
         );
     }
@@ -647,7 +685,9 @@ mod tests {
     fn macro_subterm_vetoes() {
         let minus = exprs(&["m!(a) + 1", "m!(b) + 1"]);
         let plus = exprs(&["m!(a) + 2", "m!(b) + 2"]);
-        assert_eq!(try_position(&minus, &plus), None);
+        let ms = sites(&["m!(a) + 1", "m!(b) + 1"], &minus);
+        let ps = sites(&["m!(a) + 2", "m!(b) + 2"], &plus);
+        assert_eq!(try_position(&ms, &ps), None);
     }
 
     use super::super::{infer_semantic, infer_semantic_with_pre_images};

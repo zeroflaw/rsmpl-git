@@ -156,7 +156,7 @@ pub(crate) fn antiunify_let_template(
             site_spelling(pluses[0], &plus_inits[0], &plus_vals[0]),
         )
     } else if !minus_uniform && !plus_uniform {
-        let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits)?;
+        let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits, pluses[0])?;
         ("E0".to_string(), plus_tpl)
     } else {
         // One side uniform, the other varying: an unbound or dropped
@@ -375,7 +375,7 @@ pub(crate) fn antiunify_untyped_let(minuses: &[&str], pluses: &[&str]) -> Option
             site_spelling(pluses[0], &plus_inits[0], &plus_vals[0]),
         )
     } else if !minus_uniform && !plus_uniform {
-        let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits)?;
+        let plus_tpl = antiunify_plus_with_hole(&minus_inits, &plus_inits, pluses[0])?;
         ("E0".to_string(), plus_tpl)
     } else {
         // One side uniform, the other varying: an unbound or dropped
@@ -537,7 +537,16 @@ fn is_let_stmt(text: &str) -> bool {
 /// Slice-1 shapes: method-call with varying receiver, bare call with
 /// one varying argument, binary with one varying side. Every other
 /// shape vetoes (stays ordinary).
-fn antiunify_plus_with_hole(minus: &[syn::Expr], plus: &[syn::Expr]) -> Option<String> {
+/// `plus_line` is the first plus-side `let` line: uniform args, anchors,
+/// and callees replay its source bytes via [`site_spelling`] (WI-3 —
+/// `&cand.body_text` stays compact), never `TokenStream` spacing.
+/// Separators (`.`, `(`, `,`, operators) stay canonical single, matching
+/// the `let`-template emission around them.
+fn antiunify_plus_with_hole(
+    minus: &[syn::Expr],
+    plus: &[syn::Expr],
+    plus_line: &str,
+) -> Option<String> {
     let minus_vals: Vec<String> = minus.iter().map(tok).collect();
     // Method call: `E0.wrapping_add(1)` — receiver varies per site
     // (= the minus init), method + turbofish + args uniform anchors.
@@ -577,13 +586,16 @@ fn antiunify_plus_with_hole(minus: &[syn::Expr], plus: &[syn::Expr]) -> Option<S
                 return None;
             }
         }
-        let turbo = tok(&calls[0].turbofish);
-        let turbo = if turbo.is_empty() {
-            String::new()
-        } else {
-            turbo
+        let turbo = match &calls[0].turbofish {
+            Some(tb) => site_spelling(plus_line, tb, &tok(&calls[0].turbofish)),
+            None => String::new(),
         };
-        let args = calls[0].args.iter().map(tok).collect::<Vec<_>>().join(", ");
+        let args = calls[0]
+            .args
+            .iter()
+            .map(|a| site_spelling(plus_line, a, &tok(a)))
+            .collect::<Vec<_>>()
+            .join(", ");
         return Some(format!("E0.{method0}{turbo}({args})"));
     }
     // Bare call: `foo(E0)` / `foo(x, E0)` — callee uniform anchor,
@@ -627,25 +639,24 @@ fn antiunify_plus_with_hole(minus: &[syn::Expr], plus: &[syn::Expr]) -> Option<S
             hole_at = Some(i);
         }
         let idx = hole_at?;
+        let first_args = match &plus[0] {
+            syn::Expr::Call(c) => &c.args,
+            _ => return None,
+        };
         let mut rendered: Vec<String> = Vec::with_capacity(arities[0]);
-        for (i, arg) in plus
-            .iter()
-            .map(|e| match e {
-                syn::Expr::Call(c) => &c.args,
-                _ => unreachable!(),
-            })
-            .next()
-            .unwrap()
-            .iter()
-            .enumerate()
-        {
+        for (i, arg) in first_args.iter().enumerate() {
             if i == idx {
                 rendered.push("E0".to_string());
             } else {
-                rendered.push(tok(arg));
+                rendered.push(site_spelling(plus_line, arg, &tok(arg)));
             }
         }
-        return Some(format!("{}({})", callees[0], rendered.join(", ")));
+        let first_func = match &plus[0] {
+            syn::Expr::Call(c) => c.func.clone(),
+            _ => return None,
+        };
+        let callee = site_spelling(plus_line, &*first_func, &callees[0]);
+        return Some(format!("{callee}({})", rendered.join(", ")));
     }
     // Binary: `E0 + 1` / `1 + E0` — operator + anchor side uniform,
     // exactly one varying side bound to the minus init.
@@ -679,11 +690,18 @@ fn antiunify_plus_with_hole(minus: &[syn::Expr], plus: &[syn::Expr]) -> Option<S
         if !left_uniform && !right_uniform {
             return None;
         }
+        // WI-3: uniform anchors replay the first plus line's bytes.
+        let (first_left, first_right) = match &plus[0] {
+            syn::Expr::Binary(b) => (b.left.clone(), b.right.clone()),
+            _ => return None,
+        };
         if !left_uniform && lefts == minus_vals && right_uniform {
-            return Some(format!("E0 {} {}", ops[0], rights[0]));
+            let anchor = site_spelling(plus_line, &*first_right, &rights[0]);
+            return Some(format!("E0 {} {anchor}", ops[0]));
         }
         if !right_uniform && rights == minus_vals && left_uniform {
-            return Some(format!("{} {} E0", lefts[0], ops[0]));
+            let anchor = site_spelling(plus_line, &*first_left, &lefts[0]);
+            return Some(format!("{anchor} {} E0", ops[0]));
         }
         return None;
     }
@@ -1054,6 +1072,28 @@ mod tests {
             Some((
                 "let P0: T0 = E0;".to_string(),
                 "let P0: T0 = E0.wrapping_add(1);".to_string()
+            )),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn joint_method_ref_arg_replays_verbatim_spacing() {
+        // WI-3: a uniform `&cand.body_text` wrapper arg replays the
+        // first plus line's source bytes, never TokenStream spacing
+        // (`& cand . body_text`).
+        let out = joint(
+            &["let a: i32 = x;", "let b: u32 = y;"],
+            &[
+                "let a: i32 = x.wrapping_add(&cand.body_text);",
+                "let b: u32 = y.wrapping_add(&cand.body_text);",
+            ],
+        );
+        assert_eq!(
+            out,
+            Some((
+                "let P0: T0 = E0;".to_string(),
+                "let P0: T0 = E0.wrapping_add(&cand.body_text);".to_string()
             )),
             "got: {out:?}"
         );

@@ -22,6 +22,7 @@
 //! New module (D5: `literal.rs` owns trailing-arg call literals and is
 //! not grown; expression generalisation lives in `general_expr.rs`).
 
+use super::general_expr::GeneralExprSite;
 use super::unique_rule;
 use quote::ToTokens;
 use syn::visit::Visit;
@@ -206,6 +207,19 @@ pub(crate) fn try_literal_frame_sweep(
     Some(hunk)
 }
 
+/// WI-3 sites: init spans are line-relative (parsed from the full
+/// trimmed `let` line), so the lines ride as snippets.
+fn sites<'a>(lines: &[&'a str], exprs: &'a [syn::Expr]) -> Vec<GeneralExprSite<'a>> {
+    exprs
+        .iter()
+        .zip(lines.iter())
+        .map(|(e, l)| GeneralExprSite {
+            snippet: Some(l.trim()),
+            expr: e,
+        })
+        .collect()
+}
+
 /// True when the `let`-init column anti-unifies to an anchored general
 /// template proving N (WI-5 D10). The bare literal must not shadow it.
 fn anchored_let_init_proves(
@@ -232,9 +246,10 @@ fn anchored_let_init_proves(
         minus_inits.push(me);
         plus_inits.push(pe);
     }
-    let Some((minus_tpl, plus_tpl)) =
-        super::general_expr::antiunify_general_exprs(&minus_inits, &plus_inits)
-    else {
+    let Some((minus_tpl, plus_tpl)) = super::general_expr::antiunify_general_exprs(
+        &sites(minuses, &minus_inits),
+        &sites(pluses, &plus_inits),
+    ) else {
         return false;
     };
     if syn::parse_str::<syn::Lit>(minus_tpl.trim()).is_ok()

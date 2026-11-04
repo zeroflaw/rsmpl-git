@@ -489,11 +489,16 @@ pub(crate) fn try_call_arg_add_sweep(
     if minuses.len() < 2 {
         return Counted::Miss;
     }
+    use super::pat_template::site_spelling;
     use quote::ToTokens;
     let tok = |e: &syn::Expr| e.to_token_stream().to_string();
     let mut cal: Option<String> = None;
     let mut prefix: Option<usize> = None;
     let mut tail: Option<Vec<String>> = None;
+    // WI-3 first-site grown-arg nodes: the plus tail replays the first
+    // plus line's source bytes (span-sliced), never `TokenStream`
+    // spacing (`&cand.body_text`, not `& cand . body_text`).
+    let mut first_grown: Option<Vec<syn::Expr>> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         let Some(o_expr) = parse_call_expr(m) else {
             return Counted::Miss;
@@ -523,9 +528,13 @@ pub(crate) fn try_call_arg_add_sweep(
         {
             return Counted::Miss;
         }
-        let grown: Vec<String> = n_args[o_args.len()..].iter().map(tok).collect();
+        let grown_nodes: Vec<syn::Expr> = n_args[o_args.len()..].to_vec();
+        let grown: Vec<String> = grown_nodes.iter().map(tok).collect();
         if tail.as_ref().is_some_and(|t| *t != grown) {
             return Counted::Miss;
+        }
+        if first_grown.is_none() {
+            first_grown = Some(grown_nodes);
         }
         cal = Some(o_cal);
         prefix = Some(o_args.len());
@@ -534,6 +543,7 @@ pub(crate) fn try_call_arg_add_sweep(
     let (Some(cal), Some(k), Some(tail)) = (cal, prefix, tail) else {
         return Counted::Miss;
     };
+    let first_grown = first_grown.unwrap_or_default();
     // WI-17 slice 4: the shape matched, so a failing probe names its
     // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
     match crate::totality::call_verdict(file_old, &cal, k, minuses, changed) {
@@ -552,7 +562,17 @@ pub(crate) fn try_call_arg_add_sweep(
         vars.push(v);
     }
     let head = vars.join(", ");
-    let grown = tail.join(", ");
+    // WI-3: grown tails replay the first plus line's bytes. Spans from
+    // both `parse_call_expr` paths (stripped whole-line text, line
+    // `Stmt` parse) share the trimmed line's leading columns, so the
+    // first plus line slices every site's tail (uniform by the loop
+    // above); any irregular span keeps its `tok` spelling.
+    let grown = first_grown
+        .iter()
+        .zip(tail.iter())
+        .map(|(node, fb)| site_spelling(pluses[0], node, fb))
+        .collect::<Vec<_>>()
+        .join(", ");
     // WI-7b: same literal-callee rule as the delta sweep — an uppercase
     // same callee would otherwise infer as an `expr` hole and over-match.
     let lit = super::shape::literal_callee(&cal);
@@ -630,6 +650,31 @@ mod tests {
         assert!(out.contains("+ bar(E0)\n"), "got: {out}");
         let files = applied(&pre_map, &out);
         assert_eq!(files["f.rs"], "fn m() {\n    bar(1);\n}\n");
+    }
+
+    #[test]
+    fn wi3_arg_add_grown_tail_replays_verbatim_spacing() {
+        // WI-3 audit: a grown `&cand.body_text` tail replays the first
+        // plus line's source bytes, never TokenStream spacing
+        // (`& cand . body_text`). Before the fix this class failed the
+        // reprobe byte-compare and degraded to ordinary.
+        let pre = "fn m() {\n    foo(a);\n    foo(b);\n}\n";
+        let raw = section(
+            "f.rs",
+            "@@ -2,2 +2,2 @@\n-    foo(a);\n-    foo(b);\n+    foo(a, &cand.body_text);\n+    foo(b, &cand.body_text);\n",
+        );
+        let pre_map = pre_map(&[("f.rs", pre)]);
+        let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
+            .expect("arg-add sweep must fire");
+        assert!(out.contains("rule=r1\n"), "got: {out}");
+        assert!(out.contains("- foo(E0)\n"), "got: {out}");
+        assert!(out.contains("+ foo(E0, &cand.body_text)\n"), "got: {out}");
+        assert!(!out.contains("& cand"), "token spacing leaked: {out}");
+        let files = applied(&pre_map, &out);
+        assert_eq!(
+            files["f.rs"],
+            "fn m() {\n    foo(a, &cand.body_text);\n    foo(b, &cand.body_text);\n}\n"
+        );
     }
 
     #[test]

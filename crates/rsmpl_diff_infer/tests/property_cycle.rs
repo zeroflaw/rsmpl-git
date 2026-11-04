@@ -16,13 +16,11 @@
 //! verdict-honesty orphan recomputation, and the wide `tools/` run are
 //! later slices.
 //!
-//! Scope note (probed 2026-11-03): hetero general-expr sweeps whose
-//! args carry `&`/`field` subterms normalize spacing on emission
-//! (`&cand.body_text` → `& cand . body_text`) and break invariant (3).
-//! Filed as a DISCOVERED TASKS.md item (emission spacing fidelity);
-//! the slice-1 generator sticks to spacing-faithful shapes (plain
-//! int-arg calls, fn renames, control-header decoys, N=1 singles) so
-//! the harness itself stays green while the bug is owned elsewhere.
+//! Scope note: hetero general-expr sweeps whose templates carry
+//! `&`/`field` anchors replay source bytes verbatim (WI-3 span-slice
+//! law) — `&cand.body_text` stays `&cand.body_text`, never
+//! `& cand . body_text` — so these shapes generate, raise, and
+//! re-apply byte-identically like every other kind below.
 
 use std::collections::HashMap;
 
@@ -98,16 +96,21 @@ fn assert_state_lossless(
     report
 }
 
-/// Generate one (pre, post) pair from `rng`. All shapes are
-/// spacing-faithful by construction (see scope note above). Kinds:
+/// Generate one (pre, post) pair from `rng`. Kinds:
 /// 0 = fn rename `foo`→`bar` (def + call sites follow),
 /// 1 = call callee swap `foo`→`bar` across call sites only,
 /// 2 = control-header decoy (R1: for-loop headers match no engine
 /// shape — stays ordinary, still round-trips),
 /// 3 = N=1 fn rename (single call site; fires or stays ordinary under
-/// the precision guard — either posture round-trips).
+/// the precision guard — either posture round-trips),
+/// 4 = WI-3 let-init reference-anchor sweep (hetero bindings, uniform
+/// `&a.b` → `&a.c` init anchor — the template carries `&`/`.` and must
+/// replay source bytes),
+/// 5 = WI-3 binary field-anchor sweep (hetero bases ride `E0`, uniform
+/// `&cand.body_text` → `&cand.value_text` anchor delta replays source
+/// bytes on both sides).
 fn generate(rng: &mut Rng) -> (String, String) {
-    let kind = rng.below(4);
+    let kind = rng.below(6);
     let ncalls = 2 + rng.below(2);
     match kind {
         0 => {
@@ -146,11 +149,33 @@ fn generate(rng: &mut Rng) -> (String, String) {
             post.push_str("}\n");
             (pre, post)
         }
-        _ => {
+        _ if kind == 3 => {
             let mut pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n".to_string();
             let mut post = "fn bar(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n".to_string();
             pre.push_str("    let only = foo(1);\n}\n");
             post.push_str("    let only = bar(1);\n}\n");
+            (pre, post)
+        }
+        _ if kind == 4 => {
+            let mut pre = "fn m() {\n".to_string();
+            let mut post = "fn m() {\n".to_string();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i} = &a.b;\n"));
+                post.push_str(&format!("    let v{i} = &a.c;\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ => {
+            let mut pre = "fn m() {\n".to_string();
+            let mut post = "fn m() {\n".to_string();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i} = base{i} + &cand.body_text;\n"));
+                post.push_str(&format!("    let v{i} = base{i} + &cand.value_text;\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
             (pre, post)
         }
     }
@@ -215,6 +240,52 @@ fn property_call_sweep_fires_and_round_trips() {
         out.rsmpl
     );
     assert_state_lossless(&out.rsmpl, pre, post, 1002);
+}
+
+#[test]
+fn property_ref_anchor_sweep_fires_and_round_trips() {
+    // WI-3 historical firing shape (Generator B kind-4 family):
+    // hetero bindings, uniform `&a.b` → `&a.c` init anchor raises
+    // semantic with verbatim spacing and applies byte-exact.
+    let pre = "fn m() {\n    let v0 = &a.b;\n    let v1 = &a.b;\n}\n";
+    let post = "fn m() {\n    let v0 = &a.c;\n    let v1 = &a.c;\n}\n";
+    let raw = native_section("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        out.rsmpl.contains("rule="),
+        "ref-anchor sweep must raise semantic, got: {}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("- &a.b\n"),
+        "verbatim anchor, got: {}",
+        out.rsmpl
+    );
+    assert_state_lossless(&out.rsmpl, pre, post, 1004);
+}
+
+#[test]
+fn property_field_anchor_sweep_fires_and_round_trips() {
+    // WI-3 historical firing shape (Generator B kind-5 family):
+    // hetero bases ride `E0`, the uniform `&cand.body_text` →
+    // `&cand.value_text` anchor delta replays source bytes.
+    let pre = "fn m() {\n    let v0 = base0 + &cand.body_text;\n    let v1 = base1 + &cand.body_text;\n}\n";
+    let post = "fn m() {\n    let v0 = base0 + &cand.value_text;\n    let v1 = base1 + &cand.value_text;\n}\n";
+    let raw = native_section("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        out.rsmpl.contains("rule="),
+        "field-anchor sweep must raise semantic, got: {}",
+        out.rsmpl
+    );
+    assert!(
+        out.rsmpl.contains("- E0 + &cand.body_text\n"),
+        "verbatim anchor, got: {}",
+        out.rsmpl
+    );
+    assert_state_lossless(&out.rsmpl, pre, post, 1005);
 }
 
 #[test]
