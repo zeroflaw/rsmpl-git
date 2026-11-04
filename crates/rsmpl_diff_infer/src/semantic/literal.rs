@@ -3,6 +3,7 @@
 //! its cross-hunk section driver (T449: singleton `-U0` hunks in an
 //! unbalanced section group by literal class, peel precedent).
 
+use super::prov::Counted;
 use super::{call_parts, flat_ws, parse_call_expr, unique_rule};
 
 /// One hetero trailing-literal-delta class (T449): shared callee,
@@ -609,9 +610,9 @@ pub(crate) fn try_call_literal_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     use quote::ToTokens;
     let tok = |e: &syn::Expr| e.to_token_stream().to_string();
@@ -620,49 +621,61 @@ pub(crate) fn try_call_literal_sweep(
     let mut old_lit: Option<String> = None;
     let mut new_lit: Option<String> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o_cal, o_args) = call_parts(&parse_call_expr(m)?)?;
-        let (n_cal, n_args) = call_parts(&parse_call_expr(p)?)?;
+        let Some(m_expr) = parse_call_expr(m) else {
+            return Counted::Miss;
+        };
+        let Some((o_cal, o_args)) = call_parts(&m_expr) else {
+            return Counted::Miss;
+        };
+        let Some(p_expr) = parse_call_expr(p) else {
+            return Counted::Miss;
+        };
+        let Some((n_cal, n_args)) = call_parts(&p_expr) else {
+            return Counted::Miss;
+        };
         if o_cal != n_cal || o_args.len() != n_args.len() || o_args.is_empty() {
-            return None;
+            return Counted::Miss;
         }
         if cal.as_ref().is_some_and(|c| *c != o_cal) {
-            return None;
+            return Counted::Miss;
         }
         if prefix.is_some_and(|k| k + 1 != o_args.len()) {
-            return None;
+            return Counted::Miss;
         }
         if !o_args[..o_args.len() - 1]
             .iter()
             .zip(n_args[..n_args.len() - 1].iter())
             .all(|(a, b)| tok(a) == tok(b))
         {
-            return None;
+            return Counted::Miss;
         }
         let (o_last, n_last) = (
             tok(&o_args[o_args.len() - 1]),
             tok(&n_args[n_args.len() - 1]),
         );
         if old_lit.as_ref().is_some_and(|l| *l != o_last) {
-            return None;
+            return Counted::Miss;
         }
         if new_lit.as_ref().is_some_and(|l| *l != n_last) {
-            return None;
+            return Counted::Miss;
         }
         // Trailing macros stay ordinary (see `contains_macro_arg`):
         // TokenStream-normalized macro text is unmatchable inlining.
         if contains_macro_arg(&o_args[o_args.len() - 1])
             || contains_macro_arg(&n_args[n_args.len() - 1])
         {
-            return None;
+            return Counted::Miss;
         }
         cal = Some(o_cal);
         prefix = Some(o_args.len() - 1);
         old_lit = Some(o_last);
         new_lit = Some(n_last);
     }
-    let (cal, k, old_lit, new_lit) = (cal?, prefix?, old_lit?, new_lit?);
+    let (Some(cal), Some(k), Some(old_lit), Some(new_lit)) = (cal, prefix, old_lit, new_lit) else {
+        return Counted::Miss;
+    };
     if old_lit == new_lit {
-        return None;
+        return Counted::Miss;
     }
     // Hetero required (peel precedent): an all-identical class compresses
     // tighter as a verbatim hunk (no `# expr` directives, shorter rule
@@ -672,10 +685,24 @@ pub(crate) fn try_call_literal_sweep(
         .zip(pluses.iter())
         .all(|(m, p)| flat_ws(m) == flat_ws(minuses[0]) && flat_ws(p) == flat_ws(pluses[0]))
     {
-        return None;
+        return Counted::Miss;
     }
-    if !crate::totality::call_literal_holds(file_old, &cal, k + 1, &old_lit, minuses, changed) {
-        return None;
+    // WI-4 slice 2a: the shape matched, so a failing probe names its
+    // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+    match crate::totality_counted::call_literal_verdict(
+        file_old,
+        &cal,
+        k + 1,
+        &old_lit,
+        minuses,
+        changed,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{cal}_literal"));
     let mut hunk = crate::emission_header(path, &rule, changed);
@@ -696,7 +723,7 @@ pub(crate) fn try_call_literal_sweep(
         )
     };
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 #[cfg(test)]

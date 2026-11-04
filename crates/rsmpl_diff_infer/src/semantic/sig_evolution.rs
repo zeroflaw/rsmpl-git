@@ -18,6 +18,7 @@
 //! Totality is the engine-count check plus the scratch-apply
 //! byte-compare in every path.
 
+use super::prov::Counted;
 use super::unique_rule;
 use quote::ToTokens;
 
@@ -55,20 +56,20 @@ pub(crate) fn try_sig_evolution_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     // WI-19b: N=1 slot-evolution singles (uniform-by-construction) ride
     // the same exactly-1-evolving gate + engine-count totality under
     // the precision guard (callers). Disjoint from `try_item_rename`
     // (suffix-equal gate) and the slot sweep (rename-only gate). N=1
     // requires a pre-image (same wide-minus doctrine as the slot sweep).
     if minuses.is_empty() || minuses.len() != pluses.len() {
-        return None;
+        return Counted::Miss;
     }
     if minuses.len() == 1 && file_old.is_none() {
-        return None;
+        return Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return Counted::Miss;
     }
     // WI-19b: the all-identical veto is an N≥2 verbatim-territory rule;
     // at N=1 it is trivially true and must not fire.
@@ -76,65 +77,89 @@ pub(crate) fn try_sig_evolution_sweep(
         && minuses.iter().all(|m| *m == minuses[0])
         && pluses.iter().all(|p| *p == pluses[0])
     {
-        return None;
+        return Counted::Miss;
     }
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
     let all_col0 = minuses
         .iter()
         .all(|m| !m.is_empty() && !m.starts_with([' ', '\t']));
     if !all_indented && !all_col0 {
-        return None;
+        return Counted::Miss;
     }
     let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
     let plus_col0 = pluses
         .iter()
         .all(|p| !p.is_empty() && !p.starts_with([' ', '\t']));
     if all_indented != plus_indented || all_col0 != plus_col0 {
-        return None;
+        return Counted::Miss;
     }
     let mut minus_slots = Vec::with_capacity(minuses.len());
     let mut plus_slots = Vec::with_capacity(pluses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        minus_slots.push(parse_sig_slots(m)?);
-        plus_slots.push(parse_sig_slots(p)?);
+        let Some(__m) = parse_sig_slots(m) else {
+            return Counted::Miss;
+        };
+        let Some(__p) = parse_sig_slots(p) else {
+            return Counted::Miss;
+        };
+        minus_slots.push(__m);
+        plus_slots.push(__p);
     }
     let old_name = minus_slots[0].name.clone();
     let new_name = plus_slots[0].name.clone();
     for (m, p) in minus_slots.iter().zip(plus_slots.iter()) {
         if m.name != old_name || p.name != new_name {
-            return None;
+            return Counted::Miss;
         }
     }
-    let vis = classify_slot(
+    let vis = match classify_slot(
         slot_col(&minus_slots, |s| &s.vis),
         slot_col(&plus_slots, |s| &s.vis),
         false,
-    )?;
-    let qual = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let qual = match classify_slot(
         slot_col(&minus_slots, |s| &s.qual),
         slot_col(&plus_slots, |s| &s.qual),
         false,
-    )?;
-    let generics = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let generics = match classify_slot(
         slot_col(&minus_slots, |s| &s.generics),
         slot_col(&plus_slots, |s| &s.generics),
         false,
-    )?;
-    let params = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let params = match classify_slot(
         slot_col(&minus_slots, |s| &s.params),
         slot_col(&plus_slots, |s| &s.params),
         true,
-    )?;
-    let ret = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let ret = match classify_slot(
         slot_col(&minus_slots, |s| &s.ret),
         slot_col(&plus_slots, |s| &s.ret),
         false,
-    )?;
-    let where_ = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let where_ = match classify_slot(
         slot_col(&minus_slots, |s| &s.where_),
         slot_col(&plus_slots, |s| &s.where_),
         true,
-    )?;
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
     // WI-19b: N=1 owns vis/qual evolutions (single-token slots,
     // formatting-stable under rewrite) plus formatting-stable return
     // evolutions (WI-2 slice 3: `-> i32` → `-> i64` re-renders
@@ -147,11 +172,11 @@ pub(crate) fn try_sig_evolution_sweep(
     if minuses.len() == 1 {
         for c in [&params, &generics, &where_] {
             if matches!(c, SlotClass::Evolving { .. }) {
-                return None;
+                return Counted::Miss;
             }
         }
         if !ret_slot_stable(&ret) {
-            return None;
+            return Counted::Miss;
         }
     }
     // WI-14 slice 3: at N=1 non-empty preserved long slots keep the
@@ -193,14 +218,29 @@ pub(crate) fn try_sig_evolution_sweep(
         .iter()
         .any(|c| matches!(c, SlotClass::Evolving { .. }));
     if !any_evolving {
-        return None;
+        return Counted::Miss;
     }
-    let (vis_m, vis_p) = vis.plain(Emit::Wild)?;
-    let (qual_m, qual_p) = qual.plain(Emit::Wild)?;
-    let (gen_m, gen_p) = generics.plain(Emit::Wild)?;
+    let (vis_m, vis_p) = match vis.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let (qual_m, qual_p) = match qual.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let (gen_m, gen_p) = match generics.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
     let (params_m, params_p) = params.params();
-    let (ret_m, ret_p) = ret.ret()?;
-    let (where_m, where_p) = where_.plain(Emit::Wild)?;
+    let (ret_m, ret_p) = match ret.ret() {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let (where_m, where_p) = match where_.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
     // `V Q` pairing rule (probed): a lone `V`/`Q` is
     // inference-ambiguous (`{visibility, qualifier_list}` — needs an
     // explicit `# visibility V` to disambiguate), while concrete-vis +
@@ -256,10 +296,35 @@ pub(crate) fn try_sig_evolution_sweep(
         // apply. Emit one hunk per enclosing `impl` block with its
         // verbatim header line (slot.rs posture); each hunk clears its
         // own engine probe (twin headers veto to ordinary).
-        let pre = file_old?;
-        let groups = super::block_headers::group_sites_by_impl_block(file_old, changed)?;
+        // WI-4 slice 2a: block counts name `totality:` before the
+        // scratch-apply probe runs; a probe-only failure stays `Miss`.
+        let pre = match file_old {
+            Some(__v) => __v,
+            None => return Counted::Miss,
+        };
+        let groups = match super::block_headers::group_sites_by_impl_block(file_old, changed) {
+            Some(__v) => __v,
+            None => return Counted::Miss,
+        };
         let mut out = String::new();
         for g in &groups {
+            match crate::totality_counted::engine_verdict(
+                file_old,
+                crate::totality_counted::template_fn_block_counts(
+                    path,
+                    file_old,
+                    &minus_header,
+                    &g.header_line,
+                ),
+                g.sites.len(),
+            ) {
+                crate::totality_counted::FamilyVerdict::Holds => {}
+                crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                    return Counted::Totality { found, want };
+                }
+                crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+                crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+            }
             if !super::block_headers::probe_block_hunk(
                 path,
                 pre,
@@ -268,7 +333,7 @@ pub(crate) fn try_sig_evolution_sweep(
                 &plus_header,
                 g.sites.len(),
             ) {
-                return None;
+                return Counted::Miss;
             }
             let header = crate::semantic::item_emission_header(path, &rule, file_old, &g.sites);
             let header = if single {
@@ -283,10 +348,21 @@ pub(crate) fn try_sig_evolution_sweep(
                 &plus_header,
             ));
         }
-        return Some(out);
+        return Counted::Fire(out);
     }
-    if !crate::totality::template_fn_holds(path, file_old, &minus_header, None, minuses.len()) {
-        return None;
+    // WI-4 slice 2a: free-fn engine count names `totality:` like the
+    // block path above. No opaque arm by construction (gap-4).
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_fn_counts(path, file_old, &minus_header),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     // Item-shape emission (slot.rs posture): fn patterns match whole
     // multi-line items, so the range must cover every changed item —
@@ -298,7 +374,7 @@ pub(crate) fn try_sig_evolution_sweep(
     hunk.push_str(&format!(
         "- {minus_header}\n+ {plus_header}\n      ...\n  }}\n"
     ));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 /// One fn-header slot class.
 ///

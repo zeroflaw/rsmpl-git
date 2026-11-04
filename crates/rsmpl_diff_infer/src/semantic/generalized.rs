@@ -879,7 +879,7 @@ mod tests {
             &[1, 2],
             &mut Vec::new()
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]
@@ -988,7 +988,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 
@@ -1018,7 +1018,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 
@@ -1091,7 +1091,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
         let raw = section(
             "f.rs",

@@ -7903,15 +7903,23 @@ computable from the report alone), `totality:<found>:<want>`
 (site-count mismatch — WI-17 slice 4 wires the call family first
 (`call_sweep` / `call_arg_add` whole-section, per-hunk `call_sweep`
 single: the shape matched and the file-wide count `found` differs
-from the diff pair count `want`; WI-4 slice 1 wires the method family
-(`method_to_fn` / `method_to_method` whole-section), the let-add family
-(`let_sweep` type-add arm via the untyped-let count), and the type
-family (`type_sweep` via the engine self-rewrite count); remaining
-detectors still decline shape-or-count as `no-match` pending WI-4
-slice 2), `veto:<name>` (named veto: off-diff
-use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
-family when a macro/string twin covers a changed line, WI-4 slice 1
-extends the same arm to the method and let-add families —,
+ from the diff pair count `want`; WI-4 slice 1 wires the method family
+ (`method_to_fn` / `method_to_method` whole-section), the let-add family
+ (chain name `let_type_add` — the emitted name, no aliasing — via the
+ untyped-let count), and the type
+ family (`type_sweep` via the engine self-rewrite count); WI-4 slice 2a
+ wires the general-expr family (whole-line + `let`-init fallback via
+ the real-pair engine count), the method-literal family, the
+ call-literal family, the ref-strip family, and the sig-evolution
+ family (free-fn + per-block counts); every other detector still
+ declines shape-or-count as `no-match` pending WI-4 slice 2b),
+ `veto:<name>` (named veto: off-diff
+ use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
+ family when a macro/string twin covers a changed line, WI-4 slice 1
+ extends the same arm to the method and let-add families, WI-4 slice 2a
+ to the method-literal, call-literal, and ref-strip families (engine-probe
+ families carry no opaque arm by construction — the engine never matches
+ inside macros/strings, so hidden twins never count) —,
 ambiguous anti-unification, `reprobe-failed` — WI-1b: the infer
 reprobe floor (D18) degraded a semantic section whose scratch-apply
 or post-compare against the pre-image failed; emitted only by the
@@ -7935,10 +7943,10 @@ per-section: the pre-pass-only detectors (`move`, `item_intent`,
 section's `declined` list (`member_rename`, `assoc_rename`, and
 `trait_method_rename` also fire as per-section chain detectors and keep
 appearing there under their chain meaning). Every declined pre-pass
-stage records one patch-level entry in `pre_pass_declined`
-(`{detector, reason}` — WI-4 slice 1 records `no-match` per declined
-stage; firing stages record nothing; finer counted reasons per pre-pass
-are WI-4 slice 2) and one `declined: pre-pass <detector> <reason>`
+ stage records one patch-level entry in `pre_pass_declined`
+ (`{detector, reason}` — WI-4 slice 1 records `no-match` per declined
+ stage; firing stages record nothing; finer counted reasons per pre-pass
+ are WI-4 slice 2b) and one `declined: pre-pass <detector> <reason>`
 stderr line in text mode (JSON carries the same array under
 `pre_pass_declined`); partially-compressed sections (semantic plus ordinary
 remainder in one emitted file section) carry one remainder ordinary entry —
@@ -7946,7 +7954,12 @@ remainder in one emitted file section) carry one remainder ordinary entry —
 semantic prov sites for the emitted rules (run-scoped, so context-carrying bodies
 never over-claim remainder lines), `declined` is the section's chain-level list
 (deduped; inner subhunk/verbatim classification probes stay on a throwaway by
-design — the whole-hunk chain attempt already records per-family evidence).
+ design — the whole-hunk chain attempt already records per-family evidence).
+ Supersede law (WI-4 slice 2a): a whole-section counted decline
+ superseded by per-hunk fires stays hidden by design — semantic hunks
+ never carry `declined` (a firing section explains itself); mixed
+ sections keep the whole-section decline in the remainder entry via the
+ shared chain-level list.
 Sections nothing tried (headers-only, non-`.rs`)
 stay silent passthrough, as do pre-pass-emitted sections with no
 native hunk (already semantic). `version` is `5` — unified with `applyrs` via the

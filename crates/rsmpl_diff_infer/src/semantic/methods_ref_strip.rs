@@ -2,6 +2,7 @@
 //! N-site `&recv.method(args)` strip sweep plus its pair parser
 //! and span collector. No behavior change.
 
+use super::prov::Counted;
 use super::{count_occurrences, flat_ws, strip_one_terminator, unique_rule};
 
 /// N-site (N ≥ 2) `&`-receiver strip (T359): one `&recv.method(args)` per
@@ -15,26 +16,37 @@ pub(crate) fn try_ref_method_strip_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut method: Option<String> = None;
     let mut args: Option<Vec<String>> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (meth, argv) = parse_ref_strip_pair(m, p)?;
+        let Some((meth, argv)) = parse_ref_strip_pair(m, p) else {
+            return Counted::Miss;
+        };
         if method.as_ref().is_some_and(|c| *c != meth) {
-            return None;
+            return Counted::Miss;
         }
         if args.as_ref().is_some_and(|a| *a != argv) {
-            return None;
+            return Counted::Miss;
         }
         method = Some(meth);
         args = Some(argv);
     }
-    let (method, args) = (method?, args?);
-    if !crate::totality::strip_holds(file_old, &method, &args, minuses, changed) {
-        return None;
+    let (Some(method), Some(args)) = (method, args) else {
+        return Counted::Miss;
+    };
+    // WI-4 slice 2a: the shape matched, so a failing probe names its
+    // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+    match crate::totality_counted::strip_verdict(file_old, &method, &args, minuses, changed) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{method}_strip"));
     let argv = args.join(", ");
@@ -43,7 +55,7 @@ pub(crate) fn try_ref_method_strip_sweep(
     // binds `Old` (probed bogus binding); backticks pin the literal.
     let lit = super::shape::literal_callee(&method);
     hunk.push_str(&format!("- &Receiver.{lit}({argv})\n+ Receiver\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// Parse one `-`/`+` line pair as a `&`-receiver strip: the minus side

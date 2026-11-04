@@ -5,8 +5,8 @@
 //! this module's name so `super::` paths keep working.
 
 use super::{
-    guard_for, item_rename_vis, try_assoc_def_only, try_fn_slot_sweep, try_macro_rules_def_only,
-    try_member_def_only, try_sig_evolution_sweep, Guard,
+    guard_for, item_rename_vis, prov::Counted, try_assoc_def_only, try_fn_slot_sweep,
+    try_macro_rules_def_only, try_member_def_only, try_sig_evolution_sweep, Guard,
 };
 
 /// WI-19b precision singles beyond item-rename/definition-evolution:
@@ -32,7 +32,8 @@ pub(crate) fn try_precision_definition_single(
         debug_assert_eq!(guard_for("fn_slot_sweep"), Guard::Precision);
         return Some((sweep, "fn_slot_sweep"));
     }
-    if let Some(evo) = try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    if let Counted::Fire(evo) =
+        try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
     {
         debug_assert_eq!(guard_for("sig_evolution"), Guard::Precision);
         return Some((evo, "sig_evolution"));

@@ -488,59 +488,6 @@ pub(crate) fn method_literal_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
-/// N-site `&`-strip totality: `&recv.method(args)` with token-equal args
-/// occurs exactly `minuses.len()` times (turbofish/`&mut` excluded).
-pub(crate) fn strip_holds(
-    file_old: Option<&str>,
-    method: &str,
-    args: &[String],
-    minuses: &[&str],
-    changed: &[usize],
-) -> bool {
-    let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
-    };
-    let n = minuses.len();
-    struct S<'a> {
-        method: &'a str,
-        args: &'a [String],
-        count: usize,
-    }
-    impl<'ast> Visit<'ast> for S<'_> {
-        fn visit_expr(&mut self, node: &'ast syn::Expr) {
-            if let syn::Expr::Reference(r) = node {
-                if r.mutability.is_none() {
-                    if let syn::Expr::MethodCall(m) = r.expr.as_ref() {
-                        if m.turbofish.is_none()
-                            && m.method == self.method
-                            && m.args.len() == self.args.len()
-                        {
-                            let ok = m.args.iter().zip(self.args.iter()).all(|(a, b)| {
-                                super::semantic::flat_ws(&a.to_token_stream().to_string())
-                                    == super::semantic::flat_ws(b)
-                            });
-                            if ok {
-                                self.count += 1;
-                            }
-                        }
-                    }
-                }
-            }
-            syn::visit::visit_expr(self, node);
-        }
-    }
-    let mut s = S {
-        method,
-        args,
-        count: 0,
-    };
-    s.visit_file(&file);
-    if s.count != n {
-        return false;
-    }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
-}
-
 /// N-site slot totality: free `fn old` (file + inline mods) when
 /// `indented` is false, else `impl`-block methods named `old`. The
 /// whole-file count is a pre-gate only: per-block emissions each clear

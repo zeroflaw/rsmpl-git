@@ -60,7 +60,7 @@ pub(crate) fn run_pair_chain(
     // the rename-only slot sweep whose zero-delta classes it
     // generalizes (disjoint by construction: slot keeps rename-only,
     // this requires an evolving non-name slot).
-    if let Some(evo) = attempt(
+    if let Some(evo) = attempt_counted(
         declined,
         "sig_evolution",
         super::try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -178,14 +178,14 @@ pub(crate) fn run_pair_chain(
     ) {
         return Some((m2m, "method_to_method"));
     }
-    if let Some(same) = attempt(
+    if let Some(same) = attempt_counted(
         declined,
         "method_same_literal",
         super::try_method_same_literal_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((same, "method_same_literal"));
     }
-    if let Some(strip) = attempt(
+    if let Some(strip) = attempt_counted(
         declined,
         "ref_strip",
         super::try_ref_method_strip_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -263,7 +263,7 @@ pub(crate) fn run_pair_chain(
     // T448: same-callee same-arity trailing-literal delta (homo concrete
     // trailing pair, hetero leading bound as E-vars; different-trailing
     // same-arity sites never veto via tuple-keyed totality).
-    if let Some(lit) = attempt(
+    if let Some(lit) = attempt_counted(
         declined,
         "call_literal",
         super::try_call_literal_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -292,7 +292,7 @@ pub(crate) fn run_pair_chain(
     // with at most one hole) — after the call/method arg templates
     // (those own call shapes; this declines them), before the peel
     // sweep (which owns array-head shapes, never bare expressions).
-    if let Some(general) = attempt(
+    if let Some(general) = attempt_counted(
         declined,
         "general_expr",
         super::try_general_expr_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -327,7 +327,7 @@ pub(crate) fn run_pair_chain(
     // ascription delta), before the verbatim stage in the caller.
     if let Some(let_sweep) = attempt_counted(
         declined,
-        "let_sweep",
+        "let_type_add",
         super::try_let_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((let_sweep, "let_type_add"));

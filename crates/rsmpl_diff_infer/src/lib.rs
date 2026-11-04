@@ -30,6 +30,7 @@ pub(crate) mod diff_text;
 pub(crate) mod reprobe;
 pub mod semantic;
 pub(crate) mod totality;
+pub(crate) mod totality_counted;
 
 /// Native text helpers, re-exported at the crate root (D5 split) so
 /// `crate::b_side_path` and friends keep resolving with no call-site

@@ -547,34 +547,47 @@ pub(crate) fn try_method_same_literal_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut method: Option<String> = None;
     let mut old_args: Option<Vec<String>> = None;
     let mut new_args: Option<Vec<String>> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (meth, olds, news) = parse_method_same_literal_pair(m, p)?;
+        let Some((meth, olds, news)) = parse_method_same_literal_pair(m, p) else {
+            return Counted::Miss;
+        };
         if method.as_ref().is_some_and(|c| *c != meth) {
-            return None;
+            return Counted::Miss;
         }
         if old_args.as_ref().is_some_and(|a| *a != olds) {
-            return None;
+            return Counted::Miss;
         }
         if new_args.as_ref().is_some_and(|a| *a != news) {
-            return None;
+            return Counted::Miss;
         }
         method = Some(meth);
         old_args = Some(olds);
         new_args = Some(news);
     }
-    let (method, old_args, new_args) = (method?, old_args?, new_args?);
+    let (Some(method), Some(old_args), Some(new_args)) = (method, old_args, new_args) else {
+        return Counted::Miss;
+    };
     if old_args == new_args {
-        return None;
+        return Counted::Miss;
     }
-    if !crate::totality::method_literal_holds(file_old, &method, &old_args, minuses, changed) {
-        return None;
+    // WI-4 slice 2a: the shape matched, so a failing probe names its
+    // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+    match crate::totality_counted::method_literal_verdict(
+        file_old, &method, &old_args, minuses, changed,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{method}_literal"));
     let old = old_args.join(", ");
@@ -586,7 +599,7 @@ pub(crate) fn try_method_same_literal_sweep(
     hunk.push_str(&format!(
         "- Receiver.{lit}({old})\n+ Receiver.{lit}({new})\n"
     ));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N-site (N == 1) same-method same-args literal-delta single (WI-7

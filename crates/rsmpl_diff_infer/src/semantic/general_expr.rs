@@ -17,6 +17,7 @@
 //! New module (D5: `antiunify.rs` and `generalized.rs` both sit near the
 //! file-size gate; expression generalization is its own family).
 
+use super::prov::Counted;
 use super::shape;
 use super::{strip_one_terminator, unique_rule};
 use quote::ToTokens;
@@ -635,13 +636,13 @@ pub(crate) fn try_general_expr_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     // All-identical classes stay for the tighter verbatim sweep (T422).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return Counted::Miss;
     }
     // Whole-line first (tightest): every pair parses whole-line.
     let mut minus_exprs = Vec::with_capacity(minuses.len());
@@ -670,7 +671,7 @@ pub(crate) fn try_general_expr_sweep(
         for e in minus_exprs.iter().chain(plus_exprs.iter()) {
             let probe = shape::probe_expr(e);
             if probe.macros > 0 || probe.unsupported > 0 {
-                return None;
+                return Counted::Miss;
             }
         }
         let minus_sites: Vec<GeneralExprSite> = minus_exprs
@@ -689,36 +690,46 @@ pub(crate) fn try_general_expr_sweep(
                 expr: e,
             })
             .collect();
-        if let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_sites, &plus_sites) {
-            // Frame equality (WI-3): when a pair parsed through a frame
-            // (`fn`/closure/block/arm/branch rung), the frame text must
-            // be identical per pair — the template rewrites only the
-            // inner subterm, so a frame delta alongside (renamed `fn`,
-            // rebound closure param, changed arm pattern) vetoes instead
-            // of silently dropping the frame delta. Unframed lines pass
-            // trivially (the rendered subterm is the line itself).
-            for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
-                let pair = vec![(tok(&minus_exprs[i]), tok(&plus_exprs[i]))];
-                if !super::subline::frame_holds(m, p, &pair) {
-                    return None;
-                }
-            }
-            if is_anchored(&minus_tpl, &plus_tpl)
-                && crate::totality::template_pair_holds(
-                    path,
-                    file_old,
-                    &minus_tpl,
-                    &plus_tpl,
-                    minuses.len(),
-                )
-            {
-                let rule = unique_rule(used_rules, "general_expr");
-                let mut hunk = crate::emission_header(path, &rule, changed);
-                hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-                return Some(hunk);
+        let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_sites, &plus_sites) else {
+            return Counted::Miss;
+        };
+        // Frame equality (WI-3): when a pair parsed through a frame
+        // (`fn`/closure/block/arm/branch rung), the frame text must
+        // be identical per pair — the template rewrites only the
+        // inner subterm, so a frame delta alongside (renamed `fn`,
+        // rebound closure param, changed arm pattern) vetoes instead
+        // of silently dropping the frame delta. Unframed lines pass
+        // trivially (the rendered subterm is the line itself).
+        for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
+            let pair = vec![(tok(&minus_exprs[i]), tok(&plus_exprs[i]))];
+            if !super::subline::frame_holds(m, p, &pair) {
+                return Counted::Miss;
             }
         }
-        return None;
+        if !is_anchored(&minus_tpl, &plus_tpl) {
+            return Counted::Miss;
+        }
+        // WI-4 slice 2a: the shape matched, so a failing probe names
+        // its counts (`totality:`). No opaque arm by construction: the
+        // engine never matches inside macros/strings (gap-4 statement).
+        match crate::totality_counted::engine_verdict(
+            file_old,
+            crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+            minuses.len(),
+        ) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+        }
+        {
+            let rule = unique_rule(used_rules, "general_expr");
+            let mut hunk = crate::emission_header(path, &rule, changed);
+            hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
+            return Counted::Fire(hunk);
+        }
     }
     // WI-5 `let`-init subterm fallback: whole-line declined uniformly,
     // every pair carries its delta inside a `let` init. Anti-unify the
@@ -727,13 +738,19 @@ pub(crate) fn try_general_expr_sweep(
     let mut minus_inits = Vec::with_capacity(minuses.len());
     let mut plus_inits = Vec::with_capacity(pluses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        minus_inits.push(parse_let_init(m)?);
-        plus_inits.push(parse_let_init(p)?);
+        let Some(mi) = parse_let_init(m) else {
+            return Counted::Miss;
+        };
+        let Some(pi) = parse_let_init(p) else {
+            return Counted::Miss;
+        };
+        minus_inits.push(mi);
+        plus_inits.push(pi);
     }
     for e in minus_inits.iter().chain(plus_inits.iter()) {
         let probe = shape::probe_expr(e);
         if probe.macros > 0 || probe.unsupported > 0 {
-            return None;
+            return Counted::Miss;
         }
     }
     // WI-3 snippets: init spans are line-relative (parsed from the full
@@ -754,7 +771,9 @@ pub(crate) fn try_general_expr_sweep(
             expr: e,
         })
         .collect();
-    let (minus_tpl, plus_tpl) = antiunify_general_exprs(&minus_sites, &plus_sites)?;
+    let Some((minus_tpl, plus_tpl)) = antiunify_general_exprs(&minus_sites, &plus_sites) else {
+        return Counted::Miss;
+    };
     // Frame equality (WI-3): the `let` wrapper (pattern, type) rides
     // each site's own line — the template rewrites only the init, so a
     // wrapper delta alongside (renamed binding, added ascription)
@@ -763,19 +782,29 @@ pub(crate) fn try_general_expr_sweep(
     for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
         let pair = vec![(tok(&minus_inits[i]), tok(&plus_inits[i]))];
         if !super::subline::frame_holds(m, p, &pair) {
-            return None;
+            return Counted::Miss;
         }
     }
     if !is_anchored(&minus_tpl, &plus_tpl) {
-        return None;
+        return Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
-        return None;
+    // WI-4 slice 2a: counted decline like the whole-line arm above.
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, "general_expr");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// Single-pair anti-unification (WI-7 slice-4): one minus/plus `Expr`
@@ -1388,7 +1417,7 @@ mod tests {
         let pluses = ["    let a = m!(x + 2);", "    let b = m!(y + 2);"];
         assert!(
             super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2, 3], &mut used)
-                .is_none(),
+                .is_miss(),
             "macro init must veto"
         );
         let _ = (raw, pre_map);
@@ -1404,7 +1433,7 @@ mod tests {
         let pluses = ["    let a = x + 2;", "    y + 2;"];
         assert!(
             super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2, 3], &mut used)
-                .is_none(),
+                .is_miss(),
             "mixed let/non-let must veto general"
         );
     }
@@ -1420,7 +1449,7 @@ mod tests {
         let pluses = ["    let a = x + 2;"];
         assert!(
             super::try_general_expr_sweep(&minuses, &pluses, "f.rs", Some(pre), &[2], &mut used)
-                .is_none(),
+                .is_miss(),
             "single pair must never sweep (WI-7 owns N=1)"
         );
     }
@@ -1452,7 +1481,7 @@ mod tests {
                 &[1, 2, 3],
                 &mut used
             )
-            .is_none(),
+            .is_miss(),
             "fn header delta must veto"
         );
         // Uniform headers still sweep.
@@ -1470,7 +1499,7 @@ mod tests {
             &[1, 2, 3],
             &mut used,
         )
-        .expect("uniform frames must still sweep");
+        .unwrap_fire("uniform frames must still sweep");
         assert!(out.contains("- E0 > 0"), "got: {out}");
     }
 
@@ -1500,7 +1529,7 @@ mod tests {
                 &[2, 3, 4],
                 &mut used
             )
-            .is_none(),
+            .is_miss(),
             "wrapper delta must veto"
         );
     }

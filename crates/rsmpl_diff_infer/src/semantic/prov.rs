@@ -57,8 +57,9 @@ pub struct HunkProvenance {
 /// candidate priced out by the byte guard, with the three WI-7
 /// numbers), `totality:<a>:<b>` (site-count mismatch — WI-17 slice 4
 /// wires the call family first; WI-4 slice 1 wires method, let-add, and
-/// type; remaining detectors still decline
-/// shape-or-count as `no-match` pending WI-4 slice 2), `veto:<name>`
+/// type; WI-4 slice 2a adds general-expr, method-literal, call-literal,
+/// ref-strip, and sig-evolution; every other detector still declines
+/// shape-or-count as `no-match` pending WI-4 slice 2b), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
 /// anti-unification, joint-territory section gates),
 /// `precondition:<name>` (a stated shape premise failed, incl. the
@@ -190,11 +191,29 @@ pub(crate) fn declined_veto(declined: &mut Vec<HunkDeclined>, detector: &str, na
 /// `veto:opaque-hit` (opaque macro/string twin covering a changed line)
 /// instead of a bare `no-match`. `Miss` is every other decline (shape,
 /// arity, unparseable pre-image) — today's `None` mapping, unchanged.
+#[derive(Debug)]
 pub(crate) enum Counted<T> {
     Fire(T),
     Miss,
     Totality { found: usize, want: usize },
     Opaque,
+}
+
+impl<T: std::fmt::Debug> Counted<T> {
+    /// Test-only fire extractor: panics with `msg` on any decline arm.
+    /// Keeps counted-detector inline tests one line per fire site.
+    #[cfg(test)]
+    pub(crate) fn unwrap_fire(self, msg: &str) -> T {
+        match self {
+            Counted::Fire(v) => v,
+            other => panic!("{msg}: expected Fire, got {other:?}"),
+        }
+    }
+    /// Test-only miss predicate for counted-detector decline pins.
+    #[cfg(test)]
+    pub(crate) fn is_miss(&self) -> bool {
+        matches!(self, Counted::Miss)
+    }
 }
 
 /// WI-17 slice 4 chain attempt recorder for counted detectors: `Fire`
@@ -1437,11 +1456,9 @@ mod tests {
                 "{det} attempted by run_pair_chain but missing from CHAIN_DETECTORS"
             );
         }
-        // Registry holds the emitted names (whole-section
-        // `let_type_add` is recorded under the detector the call
-        // passes: `let_sweep` returns the `let_type_add` label at the
-        // `run_pair_chain` boundary, so the registry entry is the
-        // emitted `"let_type_add"`).
+        // Registry holds the emitted names (WI-4 slice 2a: the chain
+        // passes `"let_type_add"` — the emitted name — so attempt and
+        // registry agree with no aliasing).
         let mut seen = std::collections::HashSet::new();
         for det in CHAIN_DETECTORS {
             assert!(seen.insert(*det), "duplicate registry entry: {det}");
