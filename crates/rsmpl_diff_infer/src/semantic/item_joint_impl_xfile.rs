@@ -630,7 +630,14 @@ mod tests {
         )
         .expect("single-file triple must fire");
         assert_eq!(out.len(), 1, "got: {out:?}");
-        assert_eq!(out[0].matches("rule=r1").count(), 2, "got: {}", out[0]);
+        // WI-8 factored diet: the single-file arm states the rule once
+        // and the second hunk rides bare.
+        assert_eq!(out[0].matches("rule=r1").count(), 1, "got: {}", out[0]);
+        assert!(
+            out[0].contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {}",
+            out[0]
+        );
     }
 
     #[test]

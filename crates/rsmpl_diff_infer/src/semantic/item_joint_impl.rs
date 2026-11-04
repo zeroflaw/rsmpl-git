@@ -260,9 +260,10 @@ fn try_joint_impl_single_section(
     emission.push_str(&format!(
         "- {tr_prefix}trait {ot}\n+ {tr_prefix}trait {nt}\n"
     ));
-    emission.push_str(&format!("@@ -1,1 @@ rule={rule}\n"));
-    emission.push_str("# sweep\n");
-    emission.push_str("# follow=uses\n");
+    // WI-8 factored diet: the self-type hunk rides bare, inheriting the
+    // trait hunk's rule + directives (same section, same rule, identical
+    // directives).
+    emission.push_str("@@ -1,1 @@\n");
     emission.push_str(&format!(
         "- {ty_prefix}{ty_kind} {oy}\n+ {ty_prefix}{ty_kind} {ny}\n"
     ));
@@ -890,8 +891,14 @@ mod tests {
         assert!(out.contains("+ trait Labeled\n"), "got: {out}");
         assert!(out.contains("- struct Old\n"), "got: {out}");
         assert!(out.contains("+ struct New\n"), "got: {out}");
-        // One shared rule across both hunks, trait first.
-        assert_eq!(out.matches("rule=r1\n").count(), 2, "got: {out}");
+        // One shared rule across both hunks, trait first (WI-8
+        // factored diet: the head hunk states it, the self-type
+        // hunk rides bare and inherits it at parse).
+        assert_eq!(out.matches("rule=r1\n").count(), 1, "got: {out}");
+        assert!(
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {out}"
+        );
         assert!(
             out.find("- trait Printable").unwrap() < out.find("- struct Old").unwrap(),
             "got: {out}"
@@ -975,7 +982,13 @@ mod tests {
             "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl crate::Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl crate::Labeled for New {\n",
         );
         let out = fire(&[qualified], &qpre).expect("qualified triple must fire");
-        assert_eq!(out.matches("rule=r1\n").count(), 2, "got: {out}");
+        // WI-8 factored diet: one explicit rule head (trait hunk),
+        // the self-type hunk rides bare and inherits it at parse.
+        assert_eq!(out.matches("rule=r1\n").count(), 1, "got: {out}");
+        assert!(
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {out}"
+        );
         assert!(
             !out.contains("impl crate::Printable"),
             "headers rewritten, never stated, got: {out}"
@@ -997,7 +1010,13 @@ mod tests {
             "@@ -1,3 +1,3 @@\n-trait Printable {}\n-struct Old;\n-impl<T> Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl<T> Labeled for New {\n",
         );
         let out = fire(&[generic], &gpre).expect("generic triple must fire");
-        assert_eq!(out.matches("rule=r1\n").count(), 2, "got: {out}");
+        // WI-8 factored diet: one explicit rule head (trait hunk),
+        // the self-type hunk rides bare and inherits it at parse.
+        assert_eq!(out.matches("rule=r1\n").count(), 1, "got: {out}");
+        assert!(
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {out}"
+        );
         assert!(out.contains("- trait Printable\n"), "got: {out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
         let mut files = gpre.clone();
@@ -1138,7 +1157,13 @@ mod tests {
             "@@ -1,9 +1,9 @@\n-trait Printable {}\n-struct Old;\n-impl Printable for Old {\n+trait Labeled {}\n+struct New;\n+impl Labeled for New {\n }\n-fn f(x: Old) -> Old {\n+fn f(x: New) -> New {\n     x\n }\n-impl Printable for Other {\n+impl Labeled for Other {\n }\n",
         );
         let out = fire(&[native], &pre).expect("triple+extras must fire");
-        assert_eq!(out.matches("rule=r1\n").count(), 2, "got: {out}");
+        // WI-8 factored diet: one explicit rule head (trait hunk),
+        // the self-type hunk rides bare and inherits it at parse.
+        assert_eq!(out.matches("rule=r1\n").count(), 1, "got: {out}");
+        assert!(
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {out}"
+        );
         assert!(
             !out.contains("impl Printable"),
             "headers rewritten, never stated, got: {out}"

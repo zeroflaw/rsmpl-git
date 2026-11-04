@@ -252,7 +252,29 @@ fn emit_canonical(patch: &mut Patch) -> String {
     if let Some(v) = &patch.version {
         out.push_str(&format!("#{v}\n"));
     }
+    // WI-8 group renumbering: one input rule name keeps one output name
+    // patch-wide (first occurrence assigns `rN`, later hunks reuse it),
+    // so shared-rule compositions survive canonicalization as one rule.
+    // Anonymous hunks (`rule=` absent) have no identity to share and keep
+    // per-hunk numbers; shared `rename_*` names keep verbatim (WI-7b).
     let mut rule_seq = 0u32;
+    let mut assigned: HashMap<String, String> = HashMap::new();
+    let mut assign = |rule: Option<&str>| -> String {
+        match rule {
+            Some(name) if shared.contains(name) => name.to_string(),
+            Some(name) => assigned
+                .entry(name.to_string())
+                .or_insert_with(|| {
+                    rule_seq += 1;
+                    format!("r{rule_seq}")
+                })
+                .clone(),
+            None => {
+                rule_seq += 1;
+                format!("r{rule_seq}")
+            }
+        }
+    };
     for sec in &mut patch.files {
         // Hunks keep document order: insertion anchors at a range edge
         // apply in document order (SPEC 20.2), so range-sorting is not
@@ -267,18 +289,37 @@ fn emit_canonical(patch: &mut Patch) -> String {
             out.push_str(line);
             out.push('\n');
         }
+        // WI-8 factored diet: within one section, a run of RSmPL hunks
+        // sharing one output rule and identical effective directives
+        // states them once (first hunk full); later hunks of the run go
+        // bare (no `rule=`, no `#` lines) and inherit at parse. Only
+        // adjacent runs factor: a bare hunk inherits the section's most
+        // recent RSmPL hunk, so factoring across an intervening hunk
+        // would still parse but reads worse — the parser accepts the
+        // general form, the canonical form keeps runs tight.
+        let mut last: Option<(String, Vec<Directive>)> = None;
         for hunk in &sec.hunks {
             match hunk {
-                Hunk::Ordinary(o) => emit_ordinary(&mut out, o),
+                Hunk::Ordinary(o) => {
+                    emit_ordinary(&mut out, o);
+                    last = None;
+                }
                 Hunk::Rsmpl(r) => {
-                    if let Some(rule) = r.header.rule.as_deref() {
-                        if shared.contains(rule) {
-                            emit_rsmpl_named(&mut out, r, rule);
-                            continue;
+                    let name = assign(r.header.rule.as_deref());
+                    let factored = match &last {
+                        Some((prev_name, prev_dirs)) => {
+                            *prev_name == name && *prev_dirs == r.directives
                         }
+                        None => false,
+                    };
+                    if factored {
+                        emit_rsmpl_bare(&mut out, r);
+                    } else if shared.contains(name.as_str()) {
+                        emit_rsmpl_named(&mut out, r, &name);
+                    } else {
+                        emit_rsmpl_numbered(&mut out, r, &name);
                     }
-                    rule_seq += 1;
-                    emit_rsmpl(&mut out, r, rule_seq);
+                    last = Some((name, r.directives.clone()));
                 }
             }
         }
@@ -341,18 +382,22 @@ fn emit_ordinary(out: &mut String, o: &OrdinaryHunk) {
     }
 }
 
-fn emit_rsmpl(out: &mut String, r: &RsmplHunk, rule_seq: u32) {
+/// Canonical old-side range: with `# scope=file` the old range is a
+/// dummy (SPEC 17.3) — pin it to the canonical dummy, unless this is a
+/// zero-length insertion anchor, which ignores scope (SPEC 10.5).
+fn rsmpl_range(r: &RsmplHunk) -> (u32, u32) {
     let h = &r.header;
-    // With `# scope=file` the old range is a dummy (SPEC 17.3) — pin it
-    // to the canonical dummy, unless this is a zero-length insertion
-    // anchor, which ignores scope (SPEC 10.5).
-    let (start, len) = if r.scope() == Scope::File && h.old_len != 0 {
+    if r.scope() == Scope::File && h.old_len != 0 {
         (1, 1)
     } else {
         (h.old_start, h.old_len)
-    };
+    }
+}
+
+fn emit_rsmpl_numbered(out: &mut String, r: &RsmplHunk, name: &str) {
+    let (start, len) = rsmpl_range(r);
     // The RSmPL new side is ignored by the lowering (SPEC 10.4).
-    out.push_str(&format!("@@ -{start},{len} @@ rule=r{rule_seq}\n"));
+    out.push_str(&format!("@@ -{start},{len} @@ rule={name}\n"));
     for d in canonical_directives(r) {
         out.push_str(&d);
         out.push('\n');
@@ -366,17 +411,15 @@ fn emit_rsmpl(out: &mut String, r: &RsmplHunk, rule_seq: u32) {
 
 /// WI-7b: emit an RSmPL hunk under its preserved shared name.
 fn emit_rsmpl_named(out: &mut String, r: &RsmplHunk, rule: &str) {
-    let h = &r.header;
-    let (start, len) = if r.scope() == Scope::File && h.old_len != 0 {
-        (1, 1)
-    } else {
-        (h.old_start, h.old_len)
-    };
-    out.push_str(&format!("@@ -{start},{len} @@ rule={rule}\n"));
-    for d in canonical_directives(r) {
-        out.push_str(&d);
-        out.push('\n');
-    }
+    emit_rsmpl_numbered(out, r, rule);
+}
+
+/// WI-8 factored diet: a later hunk of a shared-rule run states no
+/// shared facts — bare elided header plus body; the parser inherits
+/// the section's most-recent RSmPL hunk's rule and directives.
+fn emit_rsmpl_bare(out: &mut String, r: &RsmplHunk) {
+    let (start, len) = rsmpl_range(r);
+    out.push_str(&format!("@@ -{start},{len} @@\n"));
     for line in &r.lines {
         out.push(line.prefix);
         out.push_str(&line.text);
@@ -919,5 +962,76 @@ mod tests {
             got.contains("@@ -2,4 @@ rule=r1\n# allow=many\n"),
             "got:\n{got}"
         );
+    }
+
+    #[test]
+    fn wi8_factored_and_unfactored_canonicalize_equal() {
+        // WI-8 acceptance: both spellings of one composition land on
+        // the same factored bytes, themselves a fixed point that
+        // re-parses.
+        let full = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n@@ -1,1 @@ rule=s\n# sweep\n- baz(E0)\n+ qux(E0)\n";
+        let bare = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n@@ -1,1 @@\n- baz(E0)\n+ qux(E0)\n";
+        let a = canon(full);
+        let b = canon(bare);
+        assert_eq!(a, b, "factored:\n{b}\nunfactored:\n{a}");
+        assert!(
+            a.contains("@@ -1,1 @@ rule=r1\n# sweep\n- foo(E0)\n+ bar(E0)\n@@ -1,1 @@\n- baz(E0)\n+ qux(E0)\n"),
+            "second hunk goes bare:\n{a}"
+        );
+        assert_eq!(a.matches("rule=").count(), 1, "got:\n{a}");
+        parse_patch(&a).expect("factored canonical must re-parse");
+        assert_eq!(a, canon(&a), "must be a fixed point");
+    }
+
+    #[test]
+    fn wi8_shared_unnamed_rule_keeps_one_name() {
+        // WI-8 group renumbering: two hunks under one input name share
+        // one output name (the old per-hunk split `r1,r2` is gone).
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n@@ -5,3 @@ rule=s\n# sweep\n- baz(E0)\n+ qux(E0)\n";
+        let got = canon(text);
+        assert_eq!(got.matches("rule=r1").count(), 1, "got:\n{got}");
+        assert!(
+            !got.contains("rule=r2"),
+            "shared rule must not split:\n{got}"
+        );
+    }
+
+    #[test]
+    fn wi8_different_directives_never_factor() {
+        // Same rule, different directives (the joint add shape:
+        // directive-free addition hunk + sweep+follow rename hunk) —
+        // both stay explicit.
+        let text = "diff --git src/lib.rs\n@@ -2,1 @@ rule=s\n  struct Old {\n+ y: u32,\n@@ -1,1 @@ rule=s\n# sweep\n# follow=uses\n- struct Old\n+ struct New\n";
+        let got = canon(text);
+        assert_eq!(got.matches("rule=r1").count(), 2, "got:\n{got}");
+        assert!(
+            got.contains("@@ -2,1 @@ rule=r1\n  struct Old {\n"),
+            "got:\n{got}"
+        );
+        assert_eq!(got, canon(&got), "must be a fixed point");
+    }
+
+    #[test]
+    fn wi8_factoring_is_per_section() {
+        // Same rule in two files: each section states its own head
+        // (never across files).
+        let text = "diff --git src/a.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\ndiff --git src/b.rs\n@@ -1,1 @@ rule=s\n# sweep\n- foo(E0)\n+ bar(E0)\n";
+        let got = canon(text);
+        assert_eq!(got.matches("rule=").count(), 2, "got:\n{got}");
+    }
+
+    #[test]
+    fn wi8_archived_long_form_still_parses() {
+        // Pre-WI-8 long forms (every hunk explicit) parse and land on
+        // the factored canonical — readability preserved, bytes dieted.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=rename_Old_to_New\n# sweep\n# follow=uses\n- trait Old\n+ trait New\n@@ -1,1 @@ rule=rename_Old_to_New\n# sweep\n# follow=uses\n- struct Old\n+ struct New\n";
+        let got = canon(text);
+        assert_eq!(
+            got.matches("rule=rename_Old_to_New").count(),
+            1,
+            "got:\n{got}"
+        );
+        assert!(got.contains("@@ -1,1 @@\n- struct Old\n"), "got:\n{got}");
+        assert_eq!(got, canon(&got), "must be a fixed point");
     }
 }

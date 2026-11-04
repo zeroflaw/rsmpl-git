@@ -856,11 +856,17 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
     } else if name == "120-fn-joint-arg-add-fires" {
         // WI-4b B1: rename+param-add with uniform arg-adding calls
         // raises to the shared-rule two-hunk composition (def hunk +
-        // call-template hunk, no follow); the re-apply is byte-identical
-        // (harness asserts).
+        // call-template hunk, no follow); WI-8 factored diet states the
+        // rule once and the call hunk rides bare (harness asserts the
+        // re-apply byte-identical).
+        assert_eq!(
+            semantic.matches("rule=r1").count(),
+            1,
+            "factored shared rule, got: {semantic}"
+        );
         assert!(
-            semantic.matches("rule=r1").count() >= 2,
-            "both hunks share one rule, got: {semantic}"
+            semantic.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {semantic}"
         );
         assert!(
             !semantic.contains("# follow=uses"),
@@ -883,11 +889,17 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
     } else if name == "121-fn-joint-attr-fires" {
         // WI-4b B2: rename+attr-add with callee-only calls raises to
         // the shared-rule two-hunk composition (def hunk carrying the
-        // attr line + call-template hunk); the re-apply is
-        // byte-identical (harness asserts).
+        // attr line + call-template hunk); WI-8 factored diet states the
+        // rule once and the call hunk rides bare (harness asserts the
+        // re-apply byte-identical).
+        assert_eq!(
+            semantic.matches("rule=r1").count(),
+            1,
+            "factored shared rule, got: {semantic}"
+        );
         assert!(
-            semantic.matches("rule=r1").count() >= 2,
-            "both hunks share one rule, got: {semantic}"
+            semantic.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got: {semantic}"
         );
         assert!(
             !semantic.contains("# follow=uses"),

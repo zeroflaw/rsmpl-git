@@ -95,7 +95,13 @@ pub fn parse_patch(text: &str) -> Result<Patch> {
                     ))
             })?;
             let target = section.target_path.clone();
-            let (hunk, next) = parse_hunk(&lines, idx, &target)?;
+            // WI-8 factored diet: the continuation inherits the
+            // section's most-recent RSmPL hunk (cloned; hunks are small).
+            let prev = section.hunks.iter().rev().find_map(|h| match h {
+                Hunk::Rsmpl(r) => Some(r.clone()),
+                _ => None,
+            });
+            let (hunk, next) = parse_hunk(&lines, idx, &target, prev.as_ref())?;
             section.hunks.push(hunk);
             idx = next;
             continue;
@@ -242,9 +248,14 @@ fn is_version_marker(line: &str) -> bool {
     t.starts_with("# gitrs=") || t.starts_with("#gitrs=")
 }
 
-fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
+fn parse_hunk(
+    lines: &[&str],
+    at: usize,
+    file: &str,
+    prev_rsmpl: Option<&RsmplHunk>,
+) -> Result<(Hunk, usize)> {
     let header_line = lines[at];
-    let header = parse_hunk_header(header_line).map_err(|e: StructuredError| {
+    let mut header = parse_hunk_header(header_line).map_err(|e: StructuredError| {
         ParseError::Structured(e.with_range(format!("line {}", at + 1)))
     })?;
     let mut idx = at + 1;
@@ -260,6 +271,25 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
         }
     }
     let is_rsmpl_candidate = !raw_directives.is_empty() || header.rule.is_some();
+    // WI-8 factored shared-rule diet (SPEC D.5): a bare elided header
+    // (`@@ -old,len @@`, no `rule=`, no `#` lines) following an RSmPL
+    // hunk in the same section continues that rule's run, inheriting
+    // the section's most-recent RSmPL hunk's rule and directives
+    // verbatim. The shape was a hard error before (ordinary hunks need
+    // both ranges), so no valid patch changes meaning; explicit hunks
+    // (any `rule=` or any `#` line) never inherit.
+    let factored = if !is_rsmpl_candidate && header.new_elided {
+        prev_rsmpl.map(|p| {
+            (
+                p.header.rule.clone(),
+                p.directives.clone(),
+                p.raw_directives.clone(),
+            )
+        })
+    } else {
+        None
+    };
+    let is_rsmpl_candidate = is_rsmpl_candidate || factored.is_some();
     // Validate backtick quoting early for RSmPL candidates (SPEC 24.1.5).
     if is_rsmpl_candidate {
         for d in &raw_directives {
@@ -275,8 +305,16 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
         // `parse_directives`. A `rule=`-only hunk carries zero
         // directives (diet form, SPEC WI-1); unknown/typo'd keys are
         // rejected there too, so omitting the lang line never silently
-        // accepts a typo.
-        let directives = parse_directives(&raw_directives)?;
+        // accepts a typo. A factored continuation (WI-8) reuses its
+        // run's rule and directives verbatim instead of parsing its
+        // (empty) block.
+        let (factored_rule, directives, raw_directives) = match factored {
+            Some((rule, dirs, raw)) => (rule, dirs, raw),
+            None => (None, parse_directives(&raw_directives)?, raw_directives),
+        };
+        if let Some(rule) = factored_rule {
+            header.rule = Some(rule);
+        }
         // Parse body lines until next hunk/file header or EOF/blank separator.
         let (body, next) = parse_body_lines(lines, idx, true)?;
         if body.is_empty() {
@@ -322,7 +360,7 @@ fn parse_hunk(lines: &[&str], at: usize, file: &str) -> Result<(Hunk, usize)> {
                 ),
             )
             .with_suggestion(
-                "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk",
+                "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk (a bare `@@ -old,len @@` after an RSmPL hunk continues that rule's factored run, SPEC D.5)",
             )
             .with_repair(serde_json::json!({
                 "action": "fix_header",
@@ -1410,5 +1448,84 @@ mod tests {
         let text = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,99 @@ rule=x\n# lang=rust\n- fn foo(...) {\n+ fn bar(...) {\n      ...\n  }\n";
         let p = parse_patch(text).unwrap();
         assert!(p.files[0].hunks[0].is_rsmpl());
+    }
+
+    #[test]
+    fn wi8_factored_continuation_inherits_rule_and_directives() {
+        // WI-8 diet: a bare elided header after an RSmPL hunk continues
+        // the run with the same rule and directives.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# sweep\n# expr E\n- foo(E)\n+ bar(E)\n@@ -1,1 @@\n- baz(E)\n+ qux(E)\n";
+        let p = parse_patch(text).unwrap();
+        assert_eq!(p.files[0].hunks.len(), 2);
+        for h in &p.files[0].hunks {
+            let Hunk::Rsmpl(r) = h else {
+                panic!("both hunks must be RSmPL, got: {h:?}");
+            };
+            assert_eq!(r.header.rule.as_deref(), Some("r1"));
+            assert_eq!(r.allow(), Allow::Many);
+            assert_eq!(r.scope(), Scope::File);
+            assert!(r.directives.iter().any(|d| matches!(
+                d,
+                Directive::MetaVar {
+                    kind: MetavarKind::Expr,
+                    ..
+                }
+            )));
+        }
+    }
+
+    #[test]
+    fn wi8_bare_first_hunk_still_errors() {
+        // No previous RSmPL hunk in the section: the old hard error
+        // stands (ordinary hunks need both ranges).
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@\n- foo\n+ bar\n";
+        let e = parse_patch(text).unwrap_err();
+        assert!(e.to_string().contains("RSMPL_PARSE_CONFLICT"), "got: {e}");
+    }
+
+    #[test]
+    fn wi8_bare_after_ordinary_only_still_errors() {
+        // An intervening ordinary hunk is not an RSmPL hunk: with no
+        // RSmPL hunk anywhere before, the bare header still errors.
+        let text =
+            "diff --git src/lib.rs\n@@ -1,1 +1,1 @@\n- foo\n+ bar\n@@ -1,1 @@\n- baz\n+ qux\n";
+        let e = parse_patch(text).unwrap_err();
+        assert!(e.to_string().contains("RSMPL_PARSE_CONFLICT"), "got: {e}");
+    }
+
+    #[test]
+    fn wi8_explicit_rule_never_inherits() {
+        // An explicit `rule=` hunk after a sweep keeps its own (default)
+        // directives — diet singles stay contained/one, never sweep.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- foo(E0)\n+ bar(E0)\n@@ -2,1 @@ rule=r1\n- baz(E0)\n+ qux(E0)\n";
+        let p = parse_patch(text).unwrap();
+        let Hunk::Rsmpl(second) = &p.files[0].hunks[1] else {
+            panic!("expected RSmPL");
+        };
+        assert_eq!(second.allow(), Allow::One);
+        assert_eq!(second.scope(), Scope::Contained);
+    }
+
+    #[test]
+    fn wi8_bare_inherits_across_ordinary_hunk() {
+        // Most-recent-RSmPL semantics: an ordinary hunk between two run
+        // hunks does not break inheritance.
+        let text = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- foo(E0)\n+ bar(E0)\n@@ -2,1 +2,1 @@\n- x\n+ y\n@@ -3,1 @@\n- baz(E0)\n+ qux(E0)\n";
+        let p = parse_patch(text).unwrap();
+        assert_eq!(p.files[0].hunks.len(), 3);
+        let Hunk::Rsmpl(third) = &p.files[0].hunks[2] else {
+            panic!("expected RSmPL");
+        };
+        assert_eq!(third.header.rule.as_deref(), Some("r1"));
+        assert_eq!(third.allow(), Allow::Many);
+    }
+
+    #[test]
+    fn wi8_bare_does_not_cross_files() {
+        // Factoring is per-section: a bare header opening a new file
+        // section still errors.
+        let text = "diff --git src/a.rs\n@@ -1,1 @@ rule=r1\n# sweep\n- foo(E0)\n+ bar(E0)\ndiff --git src/b.rs\n@@ -1,1 @@\n- baz(E0)\n+ qux(E0)\n";
+        let e = parse_patch(text).unwrap_err();
+        assert!(e.to_string().contains("RSMPL_PARSE_CONFLICT"), "got: {e}");
     }
 }

@@ -670,9 +670,16 @@ mod tests {
         )];
         let pre = pre_map(&[("src.rs", pre)]);
         let out = infer_semantic_with_pre_images(&sections, &pre).expect("B2 attr joint must fire");
+        // WI-8 factored diet: one explicit rule head, the call hunk
+        // rides bare and inherits it at parse.
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "factored shared rule, got:\n{out}"
+        );
         assert!(
-            out.matches("rule=r1").count() >= 2,
-            "both hunks share one rule, got:\n{out}"
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got:\n{out}"
         );
         assert!(
             !out.contains("# follow=uses"),
@@ -713,7 +720,17 @@ mod tests {
         )];
         let pre = pre_map(&[("src.rs", pre)]);
         let out = infer_semantic_with_pre_images(&sections, &pre).expect("B2 remove must fire");
-        assert!(out.matches("rule=r1").count() >= 2, "got:\n{out}");
+        // WI-8 factored diet: one explicit rule head, the call hunk
+        // rides bare and inherits it at parse.
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "factored shared rule, got:\n{out}"
+        );
+        assert!(
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got:\n{out}"
+        );
         assert!(
             out.contains("- #[must_use]\n"),
             "minus attr must raise, got:\n{out}"
@@ -776,9 +793,16 @@ mod tests {
         )];
         let pre = pre_map(&[("src.rs", pre)]);
         let out = infer_semantic_with_pre_images(&sections, &pre).expect("B1 arg-add must fire");
+        // WI-8 factored diet: one explicit rule head, the call hunk
+        // rides bare and inherits it at parse.
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "factored shared rule, got:\n{out}"
+        );
         assert!(
-            out.matches("rule=r1").count() >= 2,
-            "both hunks share one rule, got:\n{out}"
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got:\n{out}"
         );
         assert!(
             !out.contains("# follow=uses"),
@@ -833,9 +857,16 @@ mod tests {
             let pre = pre_map(&[("src.rs", pre_text)]);
             let out = infer_semantic_with_pre_images(&sections, &pre)
                 .unwrap_or_else(|| panic!("B1 arg-drop must fire for {body}"));
+            // WI-8 factored diet: one explicit rule head, the call
+            // hunk rides bare and inherits it at parse.
+            assert_eq!(
+                out.matches("rule=r1").count(),
+                1,
+                "factored shared rule for {body}, got:\n{out}"
+            );
             assert!(
-                out.matches("rule=r1").count() >= 2,
-                "both hunks share one rule for {body}, got:\n{out}"
+                out.contains("@@ -1,1 @@\n"),
+                "bare continuation hunk for {body}, got:\n{out}"
             );
             assert!(!out.contains("follow=uses"), "no follow in a joint");
             assert!(out.contains("- foo(E0, 0)"), "call template minus");
@@ -883,9 +914,16 @@ mod tests {
             let pre = pre_map(&[("src.rs", pre_text)]);
             let out = infer_semantic_with_pre_images(&sections, &pre)
                 .unwrap_or_else(|| panic!("B1 twin must fire for {body}"));
+            // WI-8 factored diet: one explicit rule head, the call
+            // hunk rides bare and inherits it at parse.
+            assert_eq!(
+                out.matches("rule=r1").count(),
+                1,
+                "factored shared rule for {body}, got:\n{out}"
+            );
             assert!(
-                out.matches("rule=r1").count() >= 2,
-                "shared rule for {body}, got:\n{out}"
+                out.contains("@@ -1,1 @@\n"),
+                "bare continuation hunk for {body}, got:\n{out}"
             );
             assert!(out.contains(minus_tpl), "template minus for {body}, got:\n{out}");
             assert!(out.contains(plus_tpl), "template plus for {body}, got:\n{out}");
@@ -905,9 +943,16 @@ mod tests {
         )];
         let pre = pre_map(&[("src.rs", one)]);
         let out = infer_semantic_with_pre_images(&sections, &pre).expect("B1 N=1 must fire");
+        // WI-8 factored diet: one explicit rule head, the call hunk
+        // rides bare and inherits it at parse.
+        assert_eq!(
+            out.matches("rule=r1").count(),
+            1,
+            "factored shared rule, got:\n{out}"
+        );
         assert!(
-            out.matches("rule=r1").count() >= 2,
-            "both hunks share one rule"
+            out.contains("@@ -1,1 @@\n"),
+            "bare continuation hunk, got:\n{out}"
         );
         assert!(!out.contains("follow=uses"), "no follow in a joint");
         assert!(out.contains("- foo(E0)"), "call template minus");
@@ -945,9 +990,16 @@ mod tests {
             let pre = pre_map(&[("src.rs", pre_text)]);
             let out = infer_semantic_with_pre_images(&sections, &pre)
                 .unwrap_or_else(|| panic!("B1+qual must fire for {body}"));
+            // WI-8 factored diet: one explicit rule head, the call
+            // hunk rides bare and inherits it at parse.
+            assert_eq!(
+                out.matches("rule=r1").count(),
+                1,
+                "factored shared rule for {body}, got:\n{out}"
+            );
             assert!(
-                out.matches("rule=r1").count() >= 2,
-                "both hunks share one rule for {body}, got:\n{out}"
+                out.contains("@@ -1,1 @@\n"),
+                "bare continuation hunk for {body}, got:\n{out}"
             );
             assert!(!out.contains("follow=uses"), "no follow in a joint");
             assert!(out.contains("- foo(E0)"), "call template minus");

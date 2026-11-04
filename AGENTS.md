@@ -24,9 +24,9 @@ side verbatim (`@@ -old,len +old,len @@`) stays compatible.
 
 Rules: every semantic hunk = `@@ -old,len @@` header with `rule=name` or at least one `#` directive line + `-`/`+`/context lines
 (directive-free renames use the terse form plus `rule=`; hunks that already carry other directives omit `# lang=rust`, SPEC 7.1). All `-old,len`
-ranges cite the ORIGINAL pre-patch file, never rebased by earlier hunks
-(SPEC 10). Ordinary Git hunks (no `#` directives) may mix in but must not
-overlap semantic ranges (SPEC 10.6, SPEC 11).
+ranges cite the ORIGINAL pre-patch file, never rebased by earlier hunks (SPEC 10). Ordinary Git hunks (no `#` directives) may mix in but must not
+overlap semantic ranges (SPEC 10.6, SPEC 11). Factored diet (D.5): later hunks of a shared-rule run go bare — `@@ -old,len @@` with no `rule=`/`#` lines,
+inheriting the section's most-recent RSmPL hunk (same file+rule+directives only; explicit hunks never inherit, never across files/rules).
 
 ## Directives you need
 

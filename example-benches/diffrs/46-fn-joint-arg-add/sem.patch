@@ -3,7 +3,6 @@ diff --git src.rs
 # sweep
 - fn foo(x: i32) { ... }
 + fn bar(x: i32, y: i32) { ... }
-@@ -1,1 @@ rule=r1
-# sweep
+@@ -1,1 @@
 - foo(E0)
 + bar(E0, 0)

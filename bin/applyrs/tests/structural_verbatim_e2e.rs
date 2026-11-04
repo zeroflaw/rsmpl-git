@@ -105,8 +105,9 @@ fn misplaced_directive_after_body_verbatim() {
 fn ordinary_hunk_elided_new_side_verbatim() {
     let patch = "diff --git a.rs\n@@ -1,1 @@\n fn main() {}\n";
     let reason = "ordinary hunk requires both -old,len +new,len ranges: @@ -1,1 @@";
+    // WI-8: the suggestion also points at the factored-run continuation.
     let suggestion =
-        "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk";
+        "write both ranges (e.g. `@@ -1,2 +1,2 @@`) or add `rule=` or a `#` directive line to make it an RSmPL hunk (a bare `@@ -old,len @@` after an RSmPL hunk continues that rule's factored run, SPEC D.5)";
     let content = "fn main() {}\n";
     let dir = init_repo();
     write(dir.path(), "a.rs", content);

@@ -59,30 +59,44 @@ pub(crate) fn def_hunk_text(rule: &str, fire: &Fire) -> String {
 /// The call-template hunk of a Joint-B emission (`None` for Joint-A,
 /// whose calls ride the follow). WI-4f emits it at the call file.
 pub(crate) fn call_hunk_text(rule: &str, fire: &Fire) -> Option<String> {
-    let (call_minus, call_plus) = match &fire.joint {
-        Joint::A | Joint::Body { .. } => return None,
-        Joint::B1 {
-            call_minus,
-            call_plus,
-        } => (call_minus, call_plus),
-        Joint::B2 {
-            call_minus,
-            call_plus,
-            ..
-        } => (call_minus, call_plus),
-    };
+    let (call_minus, call_plus) = call_pair(fire)?;
     Some(format!(
         "@@ -1,1 @@ rule={rule}\n# sweep\n- {call_minus}\n+ {call_plus}\n"
     ))
 }
 
+/// WI-8 factored diet: the single-file emission states the shared rule
+/// and `# sweep` on the def hunk while the call hunk rides bare (same
+/// section, same rule, identical directives). The cross-file rebuild
+/// (`fn_joint_ws`) keeps one hunk per section and stays explicit.
+pub(crate) fn call_hunk_text_factored(fire: &Fire) -> Option<String> {
+    let (call_minus, call_plus) = call_pair(fire)?;
+    Some(format!("@@ -1,1 @@\n- {call_minus}\n+ {call_plus}\n"))
+}
+
+fn call_pair(fire: &Fire) -> Option<(&str, &str)> {
+    match &fire.joint {
+        Joint::A | Joint::Body { .. } => None,
+        Joint::B1 {
+            call_minus,
+            call_plus,
+        } => Some((call_minus, call_plus)),
+        Joint::B2 {
+            call_minus,
+            call_plus,
+            ..
+        } => Some((call_minus, call_plus)),
+    }
+}
+
 /// Single-file joint emission: the def hunk plus — for Joint-B — the
-/// call-template hunk under the same rule, in one section.
+/// call-template hunk under the same rule, in one section (WI-8: the
+/// call hunk rides bare, inheriting the def hunk's rule + `# sweep`).
 pub(crate) fn emit(path: &str, rule: &str, fire: &Fire) -> String {
     let mut out = crate::git_header(path);
     out.push('\n');
     out.push_str(&def_hunk_text(rule, fire));
-    if let Some(call) = call_hunk_text(rule, fire) {
+    if let Some(call) = call_hunk_text_factored(fire) {
         out.push_str(&call);
     }
     out

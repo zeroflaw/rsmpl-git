@@ -10266,9 +10266,13 @@ Concretely (`rsmpl_patch::canonicalize`, parse → re-emit):
   order (insertion anchors at a range edge are order-sensitive,
   Section 20.2 — range-sorting is not application-safe). Ranges cite
   original pre-patch coordinates (Section 10).
-- Semantic rules renumbered `r1…` in canonical order (one global
-  counter, matching the `diffrs` emitter convention), except shared
-  `rename_*` names, which are preserved verbatim and consume no counter.
+- Semantic rules renumbered `r1…` in canonical order by rule identity
+  (WI-8: one input rule name keeps one output name patch-wide — first
+  occurrence assigns `rN`, later hunks of the run reuse it — matching
+  the `diffrs` shared-rule emitter convention), except shared
+  `rename_*` names, which are preserved verbatim and consume no
+  counter. Anonymous hunks (no `rule=`) have no identity to share and
+  keep per-hunk numbers.
 - Directives in fixed order: `# sweep` (fused exactly when effective
   `allow == many` and `scope == file`, else the explicit non-default
   `allow`/`scope` lines); `# optional`; `# repeat`; `# lang=rust`;
@@ -10283,6 +10287,28 @@ Concretely (`rsmpl_patch::canonicalize`, parse → re-emit):
   `@@ -1,1 @@` dummy (Section 17.3) except zero-length insertion
   anchors, which ignore scope (Section 10.5). Ordinary hunks keep
   both ranges; `@@ … @@` titles are dropped.
+- Factored shared-rule diet (WI-8): within one file section, a run of
+  RSmPL hunks sharing one `rule=` and identical effective directives
+  states them once — the first hunk carries `rule=` and the `#`
+  lines, later hunks write a bare elided header
+  `@@ -old_start,old_len @@` with no `rule=` and no `#` lines and
+  inherit the section's most-recent RSmPL hunk's rule and directives
+  at parse. Explicit hunks (any `rule=` or any `#` line) never
+  inherit, and factoring never crosses files or rules, so every
+  archived long form still parses. The canonical form is the factored
+  form; `diffrs` emits it for shared-rule compositions in one section
+  only:
+
+  ```rsmpl
+  diff --git src.rs
+  @@ -1,1 @@ rule=r1
+  # sweep
+  - foo(E0)
+  + bar(E0, 0)
+  @@ -1,1 @@
+  - baz(E0)
+  + qux(E0)
+  ```
 - File headers collapsed to single-path `diff --git <target>` when
   Section 6 allows it (rename/create/delete halves keep two paths);
   `index …` lines dropped (the lowering never reproduces them);
