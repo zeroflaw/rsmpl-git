@@ -3,6 +3,7 @@
 //! Split from `mod.rs` under the 2000-line gate (D5): pure move,
 //! no behavior change.
 
+use super::prov::Counted;
 use super::{ident_len, is_ident_char, item_emission_header, unique_rule};
 
 /// N-site (N ≥ 2) heterogeneous fn/method rename with a
@@ -26,7 +27,7 @@ pub(crate) fn try_fn_slot_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     // WI-19b: N=1 rename-only header singles ride the same totality
     // (`slot_holds` over the emitted minus header) under the precision
     // guard (callers). Disjoint from `try_item_rename`, which declines
@@ -35,13 +36,13 @@ pub(crate) fn try_fn_slot_sweep(
     // evidence without an occurrence count (a same-shape twin
     // elsewhere would be silently rewritten).
     if minuses.is_empty() || minuses.len() != pluses.len() {
-        return None;
+        return Counted::Miss;
     }
     if minuses.len() == 1 && file_old.is_none() {
-        return None;
+        return Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return Counted::Miss;
     }
     // WI-3 slice 2: N=1 trait-decl `;` single. A lone indented
     // `fn old(...);` → `fn new(...);` declaration inside a `trait`
@@ -58,67 +59,82 @@ pub(crate) fn try_fn_slot_sweep(
         if let Some(out) =
             try_trait_decl_single(minuses, pluses, path, file_old, changed, used_rules)
         {
-            return Some(out);
+            return Counted::Fire(out);
         }
         // WI-6 slice 2: lone one-line trait-default (`}`) single.
         if let Some(out) =
             try_trait_default_single(minuses, pluses, path, file_old, changed, used_rules)
         {
-            return Some(out);
+            return Counted::Fire(out);
         }
         // A `;`-terminated pair that the trait arm declines (free-fn
         // site, `;`/`{` mismatch, opaque twin, N=2) is never a `{`/`}`
         // fn shape either — decline fast without consuming a rule.
         if minuses[0].trim_end().ends_with(';') || pluses[0].trim_end().ends_with(';') {
-            return None;
+            return Counted::Miss;
         }
     }
     let mut old_name: Option<String> = None;
     let mut new_name: Option<String> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n) = fn_rename_pair(m, p)?;
+        let Some((o, n)) = fn_rename_pair(m, p) else {
+            return Counted::Miss;
+        };
         if old_name.as_ref().is_some_and(|c| *c != o) {
-            return None;
+            return Counted::Miss;
         }
         if new_name.as_ref().is_some_and(|c| *c != n) {
-            return None;
+            return Counted::Miss;
         }
         old_name = Some(o);
         new_name = Some(n);
     }
-    let (old_name, new_name) = (old_name?, new_name?);
+    let (old_name, new_name) = match (old_name, new_name) {
+        (Some(o), Some(n)) => (o, n),
+        _ => return Counted::Miss,
+    };
     if old_name == new_name {
-        return None;
+        return Counted::Miss;
     }
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
     let all_col0 = minuses
         .iter()
         .all(|m| !m.is_empty() && !m.starts_with([' ', '\t']));
     if !all_indented && !all_col0 {
-        return None;
+        return Counted::Miss;
     }
     let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
     let plus_col0 = pluses
         .iter()
         .all(|p| !p.is_empty() && !p.starts_with([' ', '\t']));
     if all_indented != plus_indented || all_col0 != plus_col0 {
-        return None;
+        return Counted::Miss;
     }
-    if !crate::totality::slot_holds(file_old, &old_name, minuses, all_indented, changed)
-        && !(minuses.len() == 1
-            && all_indented
-            && minuses[0].trim_end().ends_with('}')
-            && crate::totality::no_opaque_hits(file_old, minuses, changed))
-    {
-        // WI-6 slice 1: a lone one-line (`}`) single with an untouched
-        // same-name twin in another block fails the file-wide count,
-        // but the WI-4a filter names the block so the twin never
-        // matches — the per-emission scratch below proves the site
-        // set; only macro/string interiors still veto. Every other
-        // shape keeps the count (in particular a divergent class with
-        // a co-renamed twin stays ordinary — the `{` path below never
-        // takes this exception).
-        return None;
+    // WI-4 slice 2b-1: counted decline names `totality:`/`veto:`.
+    // WI-6 slice 1 exception: a lone one-line (`}`) single with an
+    // untouched same-name twin in another block fails the file-wide
+    // count, but the WI-4a filter names the block so the twin never
+    // matches — the per-emission scratch below proves the site set;
+    // only macro/string interiors still veto.
+    let slot_exception = minuses.len() == 1
+        && all_indented
+        && minuses[0].trim_end().ends_with('}')
+        && crate::totality::no_opaque_hits(file_old, minuses, changed);
+    if !slot_exception {
+        match crate::totality_counted::slot_verdict(
+            file_old,
+            &old_name,
+            all_indented,
+            minuses,
+            changed,
+        ) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+        }
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
     if all_indented {
@@ -127,8 +143,14 @@ pub(crate) fn try_fn_slot_sweep(
         // hunk per enclosing `impl` block with its verbatim header line;
         // all share the rule name (one intent, K hunks). Each hunk clears
         // its own engine probe (twin headers veto to ordinary).
-        let pre = file_old?;
-        let groups = super::block_headers::group_sites_by_impl_block(file_old, changed)?;
+        let pre = match file_old {
+            Some(__v) => __v,
+            None => return Counted::Miss,
+        };
+        let groups = match super::block_headers::group_sites_by_impl_block(file_old, changed) {
+            Some(__v) => __v,
+            None => return Counted::Miss,
+        };
         // WI-6 slice 1: a lone one-line (`}`-terminated) method single
         // takes the compact inline-body emission — filter header plus
         // one pair, no frame, no directives (a lone site needs no
@@ -140,9 +162,12 @@ pub(crate) fn try_fn_slot_sweep(
         // multi-line body at a one-line range; N3 contraction owns
         // their equality).
         if minuses.len() == 1 && minuses[0].trim_end().ends_with('}') {
-            let g = groups.first()?;
+            let g = match groups.first() {
+                Some(__v) => __v,
+                None => return Counted::Miss,
+            };
             if g.sites.len() != 1 || g.sites[0] != changed[0] {
-                return None;
+                return Counted::Miss;
             }
             let minus_fx = format!("V Q fn {old_name} G (...) W {{ ... }}");
             let plus_fx = format!("V Q fn {new_name} G (...) W {{ ... }}");
@@ -156,14 +181,34 @@ pub(crate) fn try_fn_slot_sweep(
                 g.header_line
             ));
             if !scratch_single_reproduces(pre, path, &out, changed, pluses) {
-                return None;
+                return Counted::Miss;
             }
-            return Some(out);
+            return Counted::Fire(out);
         }
         let minus_fn = format!("V Q fn {old_name} G (...) W {{");
         let plus_fn = format!("V Q fn {new_name} G (...) W {{");
         let mut out = String::new();
         for g in &groups {
+            // WI-4 slice 2b-1: per-group block counts name `totality:`;
+            // a probe-only failure stays `Miss` (slot.rs posture: the
+            // scratch emission is itself the proof).
+            match crate::totality_counted::engine_verdict(
+                file_old,
+                crate::totality_counted::template_fn_block_counts(
+                    path,
+                    file_old,
+                    &minus_fn,
+                    &g.header_line,
+                ),
+                g.sites.len(),
+            ) {
+                crate::totality_counted::FamilyVerdict::Holds => {}
+                crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                    return Counted::Totality { found, want };
+                }
+                crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+                crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+            }
             if !super::block_headers::probe_block_hunk(
                 path,
                 pre,
@@ -172,7 +217,7 @@ pub(crate) fn try_fn_slot_sweep(
                 &plus_fn,
                 g.sites.len(),
             ) {
-                return None;
+                return Counted::Miss;
             }
             out.push_str(&item_emission_header(path, &rule, file_old, &g.sites));
             out.push_str(&super::block_headers::block_hunk_body(
@@ -181,13 +226,13 @@ pub(crate) fn try_fn_slot_sweep(
                 &plus_fn,
             ));
         }
-        return Some(out);
+        return Counted::Fire(out);
     }
     let mut hunk = item_emission_header(path, &rule, file_old, changed);
     hunk.push_str(&format!(
         "- V Q fn {old_name} G (...) W {{\n+ V Q fn {new_name} G (...) W {{\n      ...\n  }}\n"
     ));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// WI-3 slice 2: lone trait-decl `;` rename as a compact filtered diet
@@ -688,7 +733,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("col0 one-line pair must parse");
+        .unwrap_fire("col0 one-line pair must parse");
         assert!(out.contains("fn old"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
         let mut files = pre_map(&[("f.rs", pre)]);
@@ -798,7 +843,7 @@ mod tests {
             &[2, 5],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         // Fixture-30 posture at pipeline level: a free-fn + inherent
         // namesake vetoes each per-hunk single, so the section stays
         // wholly ordinary.

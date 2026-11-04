@@ -48,7 +48,7 @@ pub(crate) fn run_pair_chain(
     ) {
         return Some((combined, "macro_rules_rename"));
     }
-    if let Some(slot) = attempt(
+    if let Some(slot) = attempt_counted(
         declined,
         "fn_slot_sweep",
         super::try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -72,7 +72,7 @@ pub(crate) fn run_pair_chain(
     // shared-name sibling (disjoint by construction: that one owns
     // uniform names, this one requires hetero preserved names),
     // before the trait-method detector (those own `;` decls).
-    if let Some(header) = attempt(
+    if let Some(header) = attempt_counted(
         declined,
         "header_evolution",
         super::try_header_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -194,28 +194,29 @@ pub(crate) fn run_pair_chain(
     }
     // WI-3: qualified-path, turbofish, and macro-rename sweeps — after
     // the method sweeps, before the bare-call sweep (tightest first).
-    if let Some(qual) = attempt(
+    // WI-4 slice 2b-1: counted declines.
+    if let Some(qual) = attempt_counted(
         declined,
         "qualified_call",
         super::try_qualified_call_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((qual, "qualified_call"));
     }
-    if let Some(turbo) = attempt(
+    if let Some(turbo) = attempt_counted(
         declined,
         "turbofish",
         super::try_turbofish_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((turbo, "turbofish"));
     }
-    if let Some(mac) = attempt(
+    if let Some(mac) = attempt_counted(
         declined,
         "macro_rename",
         super::try_macro_rename_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((mac, "macro_rename"));
     }
-    if let Some(uses) = attempt(
+    if let Some(uses) = attempt_counted(
         declined,
         "use_prefix",
         super::try_use_prefix_sweep(minuses, pluses, path, file_old, changed, used_rules),

@@ -7907,18 +7907,24 @@ single: the shape matched and the file-wide count `found` differs
  (`method_to_fn` / `method_to_method` whole-section), the let-add family
  (chain name `let_type_add` — the emitted name, no aliasing — via the
  untyped-let count), and the type
- family (`type_sweep` via the engine self-rewrite count); WI-4 slice 2a
- wires the general-expr family (whole-line + `let`-init fallback via
- the real-pair engine count), the method-literal family, the
- call-literal family, the ref-strip family, and the sig-evolution
- family (free-fn + per-block counts); every other detector still
- declines shape-or-count as `no-match` pending WI-4 slice 2b),
- `veto:<name>` (named veto: off-diff
- use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
- family when a macro/string twin covers a changed line, WI-4 slice 1
- extends the same arm to the method and let-add families, WI-4 slice 2a
- to the method-literal, call-literal, and ref-strip families (engine-probe
- families carry no opaque arm by construction — the engine never matches
+  family (`type_sweep` via the engine self-rewrite count); WI-4 slice 2a
+  wires the general-expr family (whole-line + `let`-init fallback via
+  the real-pair engine count), the method-literal family, the
+  call-literal family, the ref-strip family, and the sig-evolution
+  family (free-fn + per-block counts); WI-4 slice 2b-1 wires the
+  fn-slot family (free + per-block counts), the header-evolution
+  family (free + per-block counts), the qualified-call family, the
+  turbofish family (call + method), the use-prefix family, and the
+  macro-rename family (bare + qualified); every other detector still
+  declines shape-or-count as `no-match` pending WI-4 slice 2b-rest),
+  `veto:<name>` (named veto: off-diff
+  use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
+  family when a macro/string twin covers a changed line, WI-4 slice 1
+  extends the same arm to the method and let-add families, WI-4 slice 2a
+  to the method-literal, call-literal, and ref-strip families, WI-4
+  slice 2b-1 to the slot, qualified-call, turbofish, use-prefix, and
+  macro families (engine-probe
+  families carry no opaque arm by construction — the engine never matches
  inside macros/strings, so hidden twins never count) —,
 ambiguous anti-unification, `reprobe-failed` — WI-1b: the infer
 reprobe floor (D18) degraded a semantic section whose scratch-apply
@@ -7944,9 +7950,9 @@ section's `declined` list (`member_rename`, `assoc_rename`, and
 `trait_method_rename` also fire as per-section chain detectors and keep
 appearing there under their chain meaning). Every declined pre-pass
  stage records one patch-level entry in `pre_pass_declined`
- (`{detector, reason}` — WI-4 slice 1 records `no-match` per declined
- stage; firing stages record nothing; finer counted reasons per pre-pass
- are WI-4 slice 2b) and one `declined: pre-pass <detector> <reason>`
+  (`{detector, reason}` — WI-4 slice 1 records `no-match` per declined
+  stage; firing stages record nothing; finer counted reasons per pre-pass
+  are WI-4 slice 2b-rest) and one `declined: pre-pass <detector> <reason>`
 stderr line in text mode (JSON carries the same array under
 `pre_pass_declined`); partially-compressed sections (semantic plus ordinary
 remainder in one emitted file section) carry one remainder ordinary entry —

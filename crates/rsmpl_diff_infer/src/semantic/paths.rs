@@ -8,6 +8,7 @@
 //! token-equal value args. Chain order is after the method sweeps and
 //! before the bare-call sweep (tightest first, SPEC D.4).
 
+use super::prov::Counted;
 use super::{ident_len, parse_call_expr, unique_rule};
 use quote::ToTokens;
 
@@ -90,9 +91,9 @@ pub(crate) fn try_qualified_call_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut prefix: Option<QualPrefix> = None;
     let mut old_cal: Option<String> = None;
@@ -105,16 +106,16 @@ pub(crate) fn try_qualified_call_sweep(
             break;
         };
         if prefix.as_ref().is_some_and(|x| *x != delta.prefix) {
-            return None;
+            return Counted::Miss;
         }
         if old_cal.as_ref().is_some_and(|c| *c != delta.old) {
-            return None;
+            return Counted::Miss;
         }
         if new_cal.as_ref().is_some_and(|c| *c != delta.new) {
-            return None;
+            return Counted::Miss;
         }
         if arity.is_some_and(|x| x != delta.arity) {
-            return None;
+            return Counted::Miss;
         }
         prefix = Some(delta.prefix);
         old_cal = Some(delta.old);
@@ -122,22 +123,34 @@ pub(crate) fn try_qualified_call_sweep(
         arity = Some(delta.arity);
     }
     if whole_ok {
-        let (prefix, old_cal, new_cal, arity) = (prefix?, old_cal?, new_cal?, arity?);
+        let (prefix, old_cal, new_cal, arity) = match (prefix, old_cal, new_cal, arity) {
+            (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+            _ => return Counted::Miss,
+        };
         if old_cal == new_cal {
-            return None;
+            return Counted::Miss;
         }
         let old_path = qual_full(&prefix, &old_cal);
-        if !crate::totality::qualified_call_holds(file_old, &old_path, arity, minuses, changed) {
-            return None;
+        // WI-4 slice 2b-1: counted decline names `totality:`/`veto:`.
+        match crate::totality_counted::qualified_call_verdict(
+            file_old, &old_path, arity, minuses, changed,
+        ) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
         }
-        return Some(emit_qualified_sweep(
+        return Counted::Fire(emit_qualified_sweep(
             path, used_rules, &prefix, &old_cal, &new_cal, arity, changed,
         ));
     }
     // WI-4 sub-line fallback (mixed whole/sub lines veto;
-    // all-identical pairs defer to verbatim, T422).
+    // all-identical pairs defer to verbatim, T422). Stays `Miss` on
+    // decline this slice (2b-rest may count it).
     if super::subline::all_identical_pairs(minuses, pluses) {
-        return None;
+        return Counted::Miss;
     }
     let mut sub_pre: Option<QualPrefix> = None;
     let mut sub_old: Option<String> = None;
@@ -145,7 +158,9 @@ pub(crate) fn try_qualified_call_sweep(
     let mut sub_arity: Option<usize> = None;
     let mut total = 0usize;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let sites = super::subline::extract_qual_sites(m, p)?;
+        let Some(sites) = super::subline::extract_qual_sites(m, p) else {
+            return Counted::Miss;
+        };
         for s in &sites {
             let site_prefix = QualPrefix {
                 leading: s.prefix.0,
@@ -154,16 +169,16 @@ pub(crate) fn try_qualified_call_sweep(
                 segs: s.prefix.1.clone(),
             };
             if sub_pre.as_ref().is_some_and(|x| *x != site_prefix) {
-                return None;
+                return Counted::Miss;
             }
             if sub_old.as_ref().is_some_and(|c| *c != s.old_cal) {
-                return None;
+                return Counted::Miss;
             }
             if sub_new.as_ref().is_some_and(|c| *c != s.new_cal) {
-                return None;
+                return Counted::Miss;
             }
             if sub_arity.is_some_and(|x| x != s.arity) {
-                return None;
+                return Counted::Miss;
             }
             sub_pre = Some(site_prefix);
             sub_old = Some(s.old_cal.clone());
@@ -172,9 +187,12 @@ pub(crate) fn try_qualified_call_sweep(
             total += 1;
         }
     }
-    let (prefix, old_cal, new_cal, arity) = (sub_pre?, sub_old?, sub_new?, sub_arity?);
+    let (prefix, old_cal, new_cal, arity) = match (sub_pre, sub_old, sub_new, sub_arity) {
+        (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+        _ => return Counted::Miss,
+    };
     if old_cal == new_cal || total < 2 {
-        return None;
+        return Counted::Miss;
     }
     let old_path = qual_full(&prefix, &old_cal);
     if !crate::totality::template_expr_holds(
@@ -183,9 +201,9 @@ pub(crate) fn try_qualified_call_sweep(
         &format!("{old_path}({})", qual_args(arity)),
         total,
     ) {
-        return None;
+        return Counted::Miss;
     }
-    Some(emit_qualified_sweep(
+    Counted::Fire(emit_qualified_sweep(
         path, used_rules, &prefix, &old_cal, &new_cal, arity, changed,
     ))
 }
@@ -428,59 +446,6 @@ impl TurboShape {
             ),
         }
     }
-
-    /// Pre-image totality for the variant: exact callee + value arity +
-    /// turbo arity + concrete non-hole turbo texts. Non-turbofish twins
-    /// never match the emitted pattern (R3, probed) so they never count;
-    /// `&`-receivers count conservatively (the method pattern cannot
-    /// match them, so an extra `&` site vetoes — safe direction).
-    fn totality_holds(
-        &self,
-        file_old: Option<&str>,
-        val_arity: usize,
-        turbo_arity: usize,
-        concrete: &[(usize, String)],
-        minuses: &[&str],
-        changed: &[usize],
-    ) -> bool {
-        match self {
-            TurboShape::BareCall { leading, old, .. } => crate::totality::turbofish_call_holds(
-                file_old,
-                &render_qualified(*leading, std::slice::from_ref(old)),
-                val_arity,
-                turbo_arity,
-                concrete,
-                minuses,
-                changed,
-            ),
-            TurboShape::QualCall {
-                leading,
-                prefix,
-                old,
-                ..
-            } => {
-                let full = format!("{}::{old}", render_qualified(*leading, prefix));
-                crate::totality::turbofish_call_holds(
-                    file_old,
-                    &full,
-                    val_arity,
-                    turbo_arity,
-                    concrete,
-                    minuses,
-                    changed,
-                )
-            }
-            TurboShape::Method { old, .. } => crate::totality::turbofish_method_holds(
-                file_old,
-                old,
-                val_arity,
-                turbo_arity,
-                concrete,
-                minuses,
-                changed,
-            ),
-        }
-    }
 }
 
 /// N-site (N >= 2) turbofish-carrying rename, one uniform variant per
@@ -501,45 +466,53 @@ pub(crate) fn try_turbofish_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut shape: Option<TurboShape> = None;
     let mut turbo_arity: Option<usize> = None;
     let mut val_arity: Option<usize> = None;
     let mut turbos: Vec<(Vec<TurboArg>, Vec<TurboArg>)> = Vec::new();
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (s, o_t, n_t, a) = parse_turbofish_pair(m, p)?;
+        let Some((s, o_t, n_t, a)) = parse_turbofish_pair(m, p) else {
+            return Counted::Miss;
+        };
         if o_t.len() != n_t.len() {
-            return None;
+            return Counted::Miss;
         }
         if turbo_arity.is_some_and(|t| t != o_t.len()) {
-            return None;
+            return Counted::Miss;
         }
         if val_arity.is_some_and(|v| v != a) {
-            return None;
+            return Counted::Miss;
         }
         if shape.as_ref().is_some_and(|x| *x != s) {
-            return None;
+            return Counted::Miss;
         }
         // Per-site minus turbo token-equals plus turbo (no turbofish
         // delta in v1 — that is unexpressible template territory).
         if o_t.iter().zip(n_t.iter()).any(|(a, b)| a.text != b.text) {
-            return None;
+            return Counted::Miss;
         }
         shape = Some(s);
         turbo_arity = Some(o_t.len());
         val_arity = Some(a);
         turbos.push((o_t, n_t));
     }
-    let (shape, turbo_arity, val_arity) = (shape?, turbo_arity?, val_arity?);
+    let (shape, turbo_arity, val_arity) = match (shape, turbo_arity, val_arity) {
+        (Some(s), Some(t), Some(v)) => (s, t, v),
+        _ => return Counted::Miss,
+    };
     if turbo_arity == 0 {
-        return None;
+        return Counted::Miss;
     }
     // Across all 2N turbo lists, at most one position varies; a varying
     // position must be a type at every site (the `T` hole binds types).
     let mut hole: Option<usize> = None;
+    // WI-4 slice 2b-1: counted decline names `totality:`/`veto:`.
+    // (Sub-line turbofish has no fallback — the whole-line gate is the
+    // only evidence.)
     for (i, first_arg) in turbos[0].0.iter().enumerate() {
         let first = first_arg.text.clone();
         if turbos
@@ -547,10 +520,10 @@ pub(crate) fn try_turbofish_sweep(
             .any(|(o, n)| o[i].text != first || n[i].text != first)
         {
             if hole.is_some() {
-                return None;
+                return Counted::Miss;
             }
             if turbos.iter().any(|(o, n)| !o[i].is_type || !n[i].is_type) {
-                return None;
+                return Counted::Miss;
             }
             hole = Some(i);
         }
@@ -565,21 +538,58 @@ pub(crate) fn try_turbofish_sweep(
             concrete.push((i, first_arg.text.clone()));
         }
     }
-    if !shape.totality_holds(
-        file_old,
-        val_arity,
-        turbo_arity,
-        &concrete,
-        minuses,
-        changed,
-    ) {
-        return None;
+    let verdict = match &shape {
+        TurboShape::BareCall { leading, old, .. } => {
+            crate::totality_counted::turbofish_call_verdict(
+                file_old,
+                &render_qualified(*leading, std::slice::from_ref(old)),
+                val_arity,
+                turbo_arity,
+                &concrete,
+                minuses,
+                changed,
+            )
+        }
+        TurboShape::QualCall {
+            leading,
+            prefix,
+            old,
+            ..
+        } => {
+            let full = format!("{}::{old}", render_qualified(*leading, prefix));
+            crate::totality_counted::turbofish_call_verdict(
+                file_old,
+                &full,
+                val_arity,
+                turbo_arity,
+                &concrete,
+                minuses,
+                changed,
+            )
+        }
+        TurboShape::Method { old, .. } => crate::totality_counted::turbofish_method_verdict(
+            file_old,
+            old,
+            val_arity,
+            turbo_arity,
+            &concrete,
+            minuses,
+            changed,
+        ),
+    };
+    match verdict {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let (old_pat, new_pat, tag) = shape.render(&turbo_emit.join(", "), val_arity);
     let rule = unique_rule(used_rules, &format!("calls_{tag}"));
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {old_pat}\n+ {new_pat}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// Parse a `-`/`+` line pair as a turbofish-carrying rename; return

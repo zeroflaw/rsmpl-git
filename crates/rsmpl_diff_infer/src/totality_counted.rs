@@ -389,6 +389,389 @@ pub(crate) fn strip_verdict(
     FamilyVerdict::Holds
 }
 
+/// WI-4 slice 2b-1: slot verdict (mirrors `slot_holds`).
+pub(crate) fn slot_verdict(
+    file_old: Option<&str>,
+    old: &str,
+    indented: bool,
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    fn free_items(items: &[syn::Item], old: &str, out: &mut usize) {
+        for it in items {
+            match it {
+                syn::Item::Fn(f) if f.sig.ident == old => *out += 1,
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        free_items(inner, old, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn impl_items(items: &[syn::Item], old: &str, out: &mut usize) {
+        for it in items {
+            match it {
+                syn::Item::Impl(imp) => {
+                    for m in &imp.items {
+                        if let syn::ImplItem::Fn(f) = m {
+                            if f.sig.ident == old {
+                                *out += 1;
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        impl_items(inner, old, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut count = 0;
+    if indented {
+        impl_items(&file.items, old, &mut count);
+    } else {
+        free_items(&file.items, old, &mut count);
+    }
+    if count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
+/// WI-4 slice 2b-1: qualified-call verdict (mirrors
+/// `qualified_call_holds`).
+pub(crate) fn qualified_call_verdict(
+    file_old: Option<&str>,
+    old_path: &str,
+    arity: usize,
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    struct C<'a> {
+        old_path: &'a str,
+        arity: usize,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for C<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.path.segments.len() >= 2
+                        && p.path
+                            .segments
+                            .iter()
+                            .all(|s| matches!(s.arguments, syn::PathArguments::None))
+                        && call.args.len() == self.arity
+                        && crate::totality::render_full_path(p) == self.old_path
+                    {
+                        self.count += 1;
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut c = C {
+        old_path,
+        arity,
+        count: 0,
+    };
+    c.visit_file(&file);
+    if c.count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: c.count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
+/// WI-4 slice 2b-1: turbofish-call verdict (mirrors
+/// `turbofish_call_holds`).
+pub(crate) fn turbofish_call_verdict(
+    file_old: Option<&str>,
+    old_path: &str,
+    val_arity: usize,
+    turbo_arity: usize,
+    concrete: &[(usize, String)],
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    struct C<'a> {
+        old_path: &'a str,
+        val_arity: usize,
+        turbo_arity: usize,
+        concrete: &'a [(usize, String)],
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for C<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.qself.is_none()
+                        && call.args.len() == self.val_arity
+                        && crate::totality::render_full_path(p) == self.old_path
+                        && crate::totality::turbo_concrete_holds(p, self.turbo_arity, self.concrete)
+                    {
+                        self.count += 1;
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut c = C {
+        old_path,
+        val_arity,
+        turbo_arity,
+        concrete,
+        count: 0,
+    };
+    c.visit_file(&file);
+    if c.count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: c.count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
+/// WI-4 slice 2b-1: turbofish-method verdict (mirrors
+/// `turbofish_method_holds`).
+pub(crate) fn turbofish_method_verdict(
+    file_old: Option<&str>,
+    method: &str,
+    val_arity: usize,
+    turbo_arity: usize,
+    concrete: &[(usize, String)],
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    struct M<'a> {
+        method: &'a str,
+        val_arity: usize,
+        turbo_arity: usize,
+        concrete: &'a [(usize, String)],
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for M<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::MethodCall(m) = node {
+                if m.method == self.method
+                    && m.args.len() == self.val_arity
+                    && m.turbofish.as_ref().is_some_and(|t| {
+                        t.args.len() == self.turbo_arity
+                            && self.concrete.iter().all(|(i, want)| {
+                                t.args.iter().nth(*i).is_some_and(|a| {
+                                    crate::semantic::flat_ws(&a.to_token_stream().to_string())
+                                        == crate::semantic::flat_ws(want)
+                                })
+                            })
+                    })
+                {
+                    self.count += 1;
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut m = M {
+        method,
+        val_arity,
+        turbo_arity,
+        concrete,
+        count: 0,
+    };
+    m.visit_file(&file);
+    if m.count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: m.count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
+/// WI-4 slice 2b-1: use-prefix verdict (mirrors `use_holds`).
+pub(crate) fn use_verdict(
+    file_old: Option<&str>,
+    old_prefix: &[String],
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    fn collect<'a>(items: &'a [syn::Item], out: &mut Vec<&'a syn::UseTree>) {
+        for it in items {
+            match it {
+                syn::Item::Use(u) => out.push(&u.tree),
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        collect(inner, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn walk(tree: &syn::UseTree, minus: &[String], consumed: usize, out: &mut usize) {
+        match tree {
+            syn::UseTree::Path(p) => {
+                if consumed < minus.len() && p.ident == minus[consumed] {
+                    if consumed + 1 == minus.len() {
+                        *out += 1;
+                    } else {
+                        walk(&p.tree, minus, consumed + 1, out);
+                    }
+                }
+            }
+            syn::UseTree::Group(g) => {
+                for m in &g.items {
+                    walk(m, minus, consumed, out);
+                }
+            }
+            syn::UseTree::Name(nm) => {
+                if consumed + 1 == minus.len()
+                    && consumed < minus.len()
+                    && nm.ident == minus[consumed]
+                {
+                    *out += 1;
+                }
+            }
+            syn::UseTree::Rename(r) => {
+                if consumed + 1 == minus.len()
+                    && consumed < minus.len()
+                    && r.ident == minus[consumed]
+                {
+                    *out += 1;
+                }
+            }
+            syn::UseTree::Glob(_) => {}
+        }
+    }
+    let mut trees = Vec::new();
+    collect(&file.items, &mut trees);
+    let mut count = 0;
+    for t in trees {
+        walk(t, old_prefix, 0, &mut count);
+    }
+    if count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
+/// WI-4 slice 2b-1: macro-rename verdict (mirrors `macro_holds` /
+/// `qualified_macro_holds`; `qualified` selects the exact-path walk).
+pub(crate) fn macro_verdict(
+    file_old: Option<&str>,
+    old_path: &str,
+    qualified: bool,
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    struct M<'a> {
+        old_path: &'a str,
+        qualified: bool,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for M<'_> {
+        fn visit_macro(&mut self, node: &'ast syn::Macro) {
+            if self.qualified {
+                if node.path.leading_colon.is_none()
+                    && crate::totality::render_macro_path(node) == self.old_path
+                {
+                    self.count += 1;
+                }
+            } else if node.path.leading_colon.is_none()
+                && node.path.segments.len() == 1
+                && node.path.segments[0].ident == self.old_path
+                && matches!(node.path.segments[0].arguments, syn::PathArguments::None)
+            {
+                self.count += 1;
+            }
+            syn::visit::visit_macro(self, node);
+        }
+    }
+    let mut m = M {
+        old_path,
+        qualified,
+        count: 0,
+    };
+    m.visit_file(&file);
+    if m.count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: m.count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +884,135 @@ mod tests {
                 &[2, 3],
             ),
             FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+    }
+
+    #[test]
+    fn wi4_slice2b1_path_header_verdicts_name_counts() {
+        // Slot: 3 same-name free fns vs 2 claimed.
+        let slot_pre =
+            "fn old(x: i32) {\n    x\n}\nfn old(y: i32) {\n    y\n}\nfn old(z: i32) {\n    z\n}\n";
+        assert_eq!(
+            slot_verdict(Some(slot_pre), "old", false, &["m1", "m2"], &[1, 5]),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        assert_eq!(
+            slot_verdict(
+                Some("fn old(x: i32) {\n    x\n}\nfn old(y: i32) {\n    y\n}\n"),
+                "old",
+                false,
+                &["m1", "m2"],
+                &[1, 4]
+            ),
+            FamilyVerdict::Holds
+        );
+        assert_eq!(
+            slot_verdict(None, "old", false, &["m1", "m2"], &[1, 2]),
+            FamilyVerdict::Holds
+        );
+        // Qualified: 3 `crate::old` sites vs 2 claimed; opaque twin.
+        let qpre = "fn m() {\n    crate::old(1);\n    crate::old(2);\n    crate::old(3);\n}\n";
+        assert_eq!(
+            qualified_call_verdict(
+                Some(qpre),
+                "crate::old",
+                1,
+                &["    crate::old(1);", "    crate::old(2);"],
+                &[2, 3]
+            ),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        assert_eq!(
+            qualified_call_verdict(
+                Some("fn m() {\n    crate::old(1);\n    g(m!(crate::old(1)));\n    crate::old(1);\n}\n"),
+                "crate::old",
+                1,
+                &["    crate::old(1);", "    crate::old(1);"],
+                &[2, 3]
+            ),
+            FamilyVerdict::OpaqueHit
+        );
+        // Turbofish call: 3 `foo::<u8>` sites vs 2 claimed.
+        let tpre = "fn m() {\n    foo::<u8>(x);\n    foo::<u8>(y);\n    foo::<u8>(z);\n}\n";
+        assert_eq!(
+            turbofish_call_verdict(
+                Some(tpre),
+                "foo",
+                1,
+                1,
+                &[(0, "u8".to_string())],
+                &["    foo::<u8>(x);", "    foo::<u8>(y);"],
+                &[2, 3]
+            ),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        // Turbofish method: exact holds.
+        assert_eq!(
+            turbofish_method_verdict(
+                Some("fn m() {\n    r.old::<u8>(1);\n    r.old::<u8>(1);\n}\n"),
+                "old",
+                1,
+                1,
+                &[(0, "u8".to_string())],
+                &["    r.old::<u8>(1);", "    r.old::<u8>(1);"],
+                &[2, 3]
+            ),
+            FamilyVerdict::Holds
+        );
+        // Use-prefix: 3 same-prefix uses vs 2 claimed.
+        let upre = "use crate::old::A;\nuse crate::old::B;\nuse crate::old::C;\n";
+        assert_eq!(
+            use_verdict(
+                Some(upre),
+                &["crate".to_string(), "old".to_string()],
+                &["use crate::old::A;", "use crate::old::B;"],
+                &[1, 2]
+            ),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        assert_eq!(
+            use_verdict(
+                Some("use crate::old::A;\nuse crate::old::B;\n"),
+                &["crate".to_string(), "old".to_string()],
+                &["use crate::old::A;", "use crate::old::B;"],
+                &[1, 2]
+            ),
+            FamilyVerdict::Holds
+        );
+        // Macro: 3 `old_m!` sites vs 2 claimed; qualified holds.
+        assert_eq!(
+            macro_verdict(
+                Some("fn m() {\n    old_m!(a);\n    old_m!(b);\n    old_m!(c);\n}\n"),
+                "old_m",
+                false,
+                &["    old_m!(a);", "    old_m!(b);"],
+                &[2, 3]
+            ),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        assert_eq!(
+            macro_verdict(
+                Some("fn m() {\n    crate::old_m!(a);\n    crate::old_m!(b);\n}\n"),
+                "crate::old_m",
+                true,
+                &["    crate::old_m!(a);", "    crate::old_m!(b);"],
+                &[2, 3]
+            ),
+            FamilyVerdict::Holds
+        );
+        // Unproven on unparseable pre-image; Holds on None.
+        assert_eq!(
+            use_verdict(
+                Some("not rust {{{"),
+                &["crate".to_string(), "old".to_string()],
+                &["use crate::old::A;", "use crate::old::B;"],
+                &[1, 2]
+            ),
+            FamilyVerdict::Unproven
+        );
+        assert_eq!(
+            macro_verdict(None, "old_m", false, &["    old_m!(a);"], &[2]),
+            FamilyVerdict::Holds
         );
     }
 }

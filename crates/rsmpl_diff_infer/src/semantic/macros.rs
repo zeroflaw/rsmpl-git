@@ -15,6 +15,7 @@ use super::macro_parts::{
     parse_macro_expr, parse_macro_interior_pair, parse_macro_pair, parse_nested_macro_pair,
     scan_arg_idents, split_macro_path, split_top_spans, trim_range,
 };
+use super::prov::Counted;
 use super::unique_rule;
 
 /// N-site (N >= 2) macro-rename sweep: every pair parses as
@@ -32,41 +33,59 @@ pub(crate) fn try_macro_rename_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut old_path: Option<String> = None;
     let mut new_path: Option<String> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (o, n) = parse_macro_pair(m, p)?;
+        let Some((o, n)) = parse_macro_pair(m, p) else {
+            return Counted::Miss;
+        };
         if old_path.as_ref().is_some_and(|x| *x != o) {
-            return None;
+            return Counted::Miss;
         }
         if new_path.as_ref().is_some_and(|x| *x != n) {
-            return None;
+            return Counted::Miss;
         }
         old_path = Some(o);
         new_path = Some(n);
     }
-    let (old_path, new_path) = (old_path?, new_path?);
+    let (old_path, new_path) = match (old_path, new_path) {
+        (Some(o), Some(n)) => (o, n),
+        _ => return Counted::Miss,
+    };
     if old_path == new_path {
-        return None;
+        return Counted::Miss;
     }
     // Last-segment delta shared across the class; the prefix (possibly
     // empty for bare) must match segment-wise or the class is hetero.
-    let (o_pre, o_l) = split_macro_path(&old_path)?;
-    let (n_pre, n_l) = split_macro_path(&new_path)?;
+    let (o_pre, o_l) = match split_macro_path(&old_path) {
+        Some(v) => v,
+        None => return Counted::Miss,
+    };
+    let (n_pre, n_l) = match split_macro_path(&new_path) {
+        Some(v) => v,
+        None => return Counted::Miss,
+    };
     if o_pre != n_pre || o_l == n_l {
-        return None;
+        return Counted::Miss;
     }
     let (old_last, _) = (o_l, n_l);
-    if o_pre.is_empty() {
-        if !crate::totality::macro_holds(file_old, &old_last, minuses, changed) {
-            return None;
+    // WI-4 slice 2b-1: counted decline names `totality:`/`veto:`.
+    let verdict = if o_pre.is_empty() {
+        crate::totality_counted::macro_verdict(file_old, &old_last, false, minuses, changed)
+    } else {
+        crate::totality_counted::macro_verdict(file_old, &old_path, true, minuses, changed)
+    };
+    match verdict {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
         }
-    } else if !crate::totality::qualified_macro_holds(file_old, &old_path, minuses, changed) {
-        return None;
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let flat = |p: &str| p.replace("::", "_");
     let rule = unique_rule(
@@ -92,13 +111,13 @@ pub(crate) fn try_macro_rename_sweep(
             let mut hunk = crate::emission_header(path, &rule, changed);
             hunk.push_str("# macro=token_tree\n");
             hunk.push_str(&format!("- {holed_minus}\n+ {holed_plus}\n"));
-            return Some(hunk);
+            return Counted::Fire(hunk);
         }
     }
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str("# macro=token_tree\n");
     hunk.push_str(&format!("- {old_path}!(...)\n+ {new_path}!(...)\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N=1 macro-rename single (WI-3 slice 3): one `old!(body)` →

@@ -28,7 +28,9 @@ pub(crate) fn try_precision_definition_single(
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
         return None;
     }
-    if let Some(sweep) = try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules) {
+    if let Counted::Fire(sweep) =
+        try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    {
         debug_assert_eq!(guard_for("fn_slot_sweep"), Guard::Precision);
         return Some((sweep, "fn_slot_sweep"));
     }

@@ -3,6 +3,7 @@
 //! Split from `mod.rs` under the 2000-line gate (D5): pure move,
 //! no behavior change.
 
+use super::prov::Counted;
 use super::unique_rule;
 
 /// N-site (N ≥ 2) use-path prefix rename fan-out (T363, SPEC 14.9):
@@ -25,15 +26,21 @@ pub(crate) fn try_use_prefix_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut minus_paths: Vec<Vec<String>> = Vec::new();
     let mut plus_paths: Vec<Vec<String>> = Vec::new();
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        minus_paths.push(parse_use_path(m)?);
-        plus_paths.push(parse_use_path(p)?);
+        let Some(__m) = parse_use_path(m) else {
+            return Counted::Miss;
+        };
+        let Some(__p) = parse_use_path(p) else {
+            return Counted::Miss;
+        };
+        minus_paths.push(__m);
+        plus_paths.push(__p);
     }
     let old_prefix = common_prefix(&minus_paths);
     let new_prefix = common_prefix(&plus_paths);
@@ -41,25 +48,32 @@ pub(crate) fn try_use_prefix_sweep(
     // `use crate` matches too broadly to infer from N lines of
     // evidence), shared parent, renamed last segment.
     if old_prefix.len() != new_prefix.len() || old_prefix.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let k = old_prefix.len();
     if old_prefix[..k - 1] != new_prefix[..k - 1] {
-        return None;
+        return Counted::Miss;
     }
     if old_prefix[k - 1] == new_prefix[k - 1] {
-        return None;
+        return Counted::Miss;
     }
     for (m, p) in minus_paths.iter().zip(plus_paths.iter()) {
         if m.len() <= k || p.len() <= k {
-            return None;
+            return Counted::Miss;
         }
         if m[k..] != p[k..] {
-            return None;
+            return Counted::Miss;
         }
     }
-    if !crate::totality::use_holds(file_old, &old_prefix, minuses, changed) {
-        return None;
+    // WI-4 slice 2b-1: counted decline names `totality:`/`veto:`
+    // instead of a bare `no-match`.
+    match crate::totality_counted::use_verdict(file_old, &old_prefix, minuses, changed) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(
         used_rules,
@@ -71,7 +85,7 @@ pub(crate) fn try_use_prefix_sweep(
         old_prefix.join("::"),
         new_prefix.join("::")
     ));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N=1 use-path prefix single (WI-3 slice 1): one `use P_old::Tail`

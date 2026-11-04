@@ -25,6 +25,7 @@ use super::block_headers;
 use super::generalized::{
     build_sig_header, classify_slot, parse_sig_slots, slot_col, vq_pair, Emit, SlotClass,
 };
+use super::prov::Counted;
 use super::unique_rule;
 
 /// N-site (N ≥ 2) header slot-only evolution sweep. See module docs.
@@ -35,77 +36,101 @@ pub(crate) fn try_header_evolution_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     // WI-19b: N=1 name-preserving evolutions belong to
     // `try_sig_evolution_sweep` (concrete-name emission, tighter
     // totality); this detector keeps its hetero-names class (N≥2).
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
     let all_col0 = minuses
         .iter()
         .all(|m| !m.is_empty() && !m.starts_with([' ', '\t']));
     if !all_indented && !all_col0 {
-        return None;
+        return Counted::Miss;
     }
     let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
     let plus_col0 = pluses
         .iter()
         .all(|p| !p.is_empty() && !p.starts_with([' ', '\t']));
     if all_indented != plus_indented || all_col0 != plus_col0 {
-        return None;
+        return Counted::Miss;
     }
     let mut minus_slots = Vec::with_capacity(minuses.len());
     let mut plus_slots = Vec::with_capacity(pluses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        minus_slots.push(parse_sig_slots(m)?);
-        plus_slots.push(parse_sig_slots(p)?);
+        let Some(__m) = parse_sig_slots(m) else {
+            return Counted::Miss;
+        };
+        let Some(__p) = parse_sig_slots(p) else {
+            return Counted::Miss;
+        };
+        minus_slots.push(__m);
+        plus_slots.push(__p);
     }
     // Names preserved per site, hetero across sites (the sibling owns
     // shared-name classes; a name delta anywhere is not evolution).
     let mut names: Vec<&str> = Vec::with_capacity(minus_slots.len());
     for (m, p) in minus_slots.iter().zip(plus_slots.iter()) {
         if m.name != p.name {
-            return None;
+            return Counted::Miss;
         }
         names.push(m.name.as_str());
     }
     names.sort();
     names.dedup();
     if names.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
-    let vis = classify_slot(
+    let vis = match classify_slot(
         slot_col(&minus_slots, |s| &s.vis),
         slot_col(&plus_slots, |s| &s.vis),
         false,
-    )?;
-    let qual = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let qual = match classify_slot(
         slot_col(&minus_slots, |s| &s.qual),
         slot_col(&plus_slots, |s| &s.qual),
         false,
-    )?;
-    let generics = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let generics = match classify_slot(
         slot_col(&minus_slots, |s| &s.generics),
         slot_col(&plus_slots, |s| &s.generics),
         false,
-    )?;
-    let params = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let params = match classify_slot(
         slot_col(&minus_slots, |s| &s.params),
         slot_col(&plus_slots, |s| &s.params),
         true,
-    )?;
-    let ret = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let ret = match classify_slot(
         slot_col(&minus_slots, |s| &s.ret),
         slot_col(&plus_slots, |s| &s.ret),
         false,
-    )?;
-    let where_ = classify_slot(
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let where_ = match classify_slot(
         slot_col(&minus_slots, |s| &s.where_),
         slot_col(&plus_slots, |s| &s.where_),
         true,
-    )?;
+    ) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
     // Exactly one evolving non-name slot: zero is nothing to raise,
     // two or more stay ordinary (never half-claimed under one rule).
     let evolving = [&vis, &qual, &generics, &params, &ret, &where_]
@@ -113,20 +138,35 @@ pub(crate) fn try_header_evolution_sweep(
         .filter(|c| matches!(c, SlotClass::Evolving { .. }))
         .count();
     if evolving != 1 {
-        return None;
+        return Counted::Miss;
     }
     // Trait-context `pub` is illegal Rust — vis deltas over trait
     // members decline even though the sibling emission paths would
     // structurally exclude most of them already.
     if matches!(vis, SlotClass::Evolving { .. }) && any_site_in_trait_block(file_old, changed) {
-        return None;
+        return Counted::Miss;
     }
-    let (vis_m, vis_p) = vis.plain(Emit::Wild)?;
-    let (qual_m, qual_p) = qual.plain(Emit::Wild)?;
-    let (gen_m, gen_p) = generics.plain(Emit::Wild)?;
+    let (vis_m, vis_p) = match vis.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let (qual_m, qual_p) = match qual.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let (gen_m, gen_p) = match generics.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
     let (params_m, params_p) = params.params();
-    let (ret_m, ret_p) = ret.ret()?;
-    let (where_m, where_p) = where_.plain(Emit::Wild)?;
+    let (ret_m, ret_p) = match ret.ret() {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
+    let (where_m, where_p) = match where_.plain(Emit::Wild) {
+        Some(__v) => __v,
+        None => return Counted::Miss,
+    };
     let (vis_m, qual_m) = vq_pair(vis_m, qual_m);
     let (vis_p, qual_p) = vq_pair(vis_p, qual_p);
     let (ret_m, where_m) = if ret_m.is_some() && matches!(where_m, Emit::Wild) {
@@ -158,14 +198,39 @@ pub(crate) fn try_header_evolution_sweep(
         where_p.text("W").as_deref(),
     );
     if minus_header == plus_header {
-        return None;
+        return Counted::Miss;
     }
     let rule = unique_rule(used_rules, "header_evolution");
     if all_indented {
-        let pre = file_old?;
-        let groups = block_headers::group_sites_by_impl_block(file_old, changed)?;
+        let pre = match file_old {
+            Some(__v) => __v,
+            None => return Counted::Miss,
+        };
+        let groups = match block_headers::group_sites_by_impl_block(file_old, changed) {
+            Some(__v) => __v,
+            None => return Counted::Miss,
+        };
         let mut out = String::new();
         for g in &groups {
+            // WI-4 slice 2b-1: per-group block counts name `totality:`;
+            // a probe-only failure stays `Miss`.
+            match crate::totality_counted::engine_verdict(
+                file_old,
+                crate::totality_counted::template_fn_block_counts(
+                    path,
+                    file_old,
+                    &minus_header,
+                    &g.header_line,
+                ),
+                g.sites.len(),
+            ) {
+                crate::totality_counted::FamilyVerdict::Holds => {}
+                crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                    return Counted::Totality { found, want };
+                }
+                crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+                crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
+            }
             if !block_headers::probe_block_hunk(
                 path,
                 pre,
@@ -174,7 +239,7 @@ pub(crate) fn try_header_evolution_sweep(
                 &plus_header,
                 g.sites.len(),
             ) {
-                return None;
+                return Counted::Miss;
             }
             out.push_str(&crate::semantic::item_emission_header(
                 path, &rule, file_old, &g.sites,
@@ -185,16 +250,27 @@ pub(crate) fn try_header_evolution_sweep(
                 &plus_header,
             ));
         }
-        return Some(out);
+        return Counted::Fire(out);
     }
-    if !crate::totality::template_fn_holds(path, file_old, &minus_header, None, minuses.len()) {
-        return None;
+    // WI-4 slice 2b-1: free-fn engine count names `totality:` like the
+    // block path above. No opaque arm by construction.
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_fn_counts(path, file_old, &minus_header),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let mut hunk = crate::semantic::item_emission_header(path, &rule, file_old, changed);
     hunk.push_str(&format!(
         "- {minus_header}\n+ {plus_header}\n      ...\n  }}\n"
     ));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// True when any changed 1-based site lies inside a `trait` block
@@ -293,25 +369,28 @@ mod tests {
             "fn alpha(first_argument: FirstLongTypeArgument) {\n    first_argument\n}\nfn beta(second_argument: SecondLongTypeArgument) {\n    second_argument\n}\nfn gamma(third_argument: ThirdLongTypeArgument) {\n    third_argument\n}\nfn delta(fourth_argument: FourthLongTypeArgument) {\n    fourth_argument\n}\nfn extra(fifth_argument: FifthLongTypeArgument) {\n    fifth_argument\n}\n",
         )]);
         let mut used = Vec::new();
-        assert!(super::try_header_evolution_sweep(
-            &[
-                "fn alpha(first_argument: FirstLongTypeArgument) {",
-                "fn beta(second_argument: SecondLongTypeArgument) {",
-                "fn gamma(third_argument: ThirdLongTypeArgument) {",
-                "fn delta(fourth_argument: FourthLongTypeArgument) {"
-            ],
-            &[
-                "pub fn alpha(first_argument: FirstLongTypeArgument) {",
-                "pub fn beta(second_argument: SecondLongTypeArgument) {",
-                "pub fn gamma(third_argument: ThirdLongTypeArgument) {",
-                "pub fn delta(fourth_argument: FourthLongTypeArgument) {"
-            ],
-            "f.rs",
-            Some(&pre["f.rs"]),
-            &[1, 4, 7, 10],
-            &mut used,
-        )
-        .is_none());
+        // WI-4 slice 2b-1: the twin veto now names `totality:5:4`.
+        assert!(matches!(
+            super::try_header_evolution_sweep(
+                &[
+                    "fn alpha(first_argument: FirstLongTypeArgument) {",
+                    "fn beta(second_argument: SecondLongTypeArgument) {",
+                    "fn gamma(third_argument: ThirdLongTypeArgument) {",
+                    "fn delta(fourth_argument: FourthLongTypeArgument) {"
+                ],
+                &[
+                    "pub fn alpha(first_argument: FirstLongTypeArgument) {",
+                    "pub fn beta(second_argument: SecondLongTypeArgument) {",
+                    "pub fn gamma(third_argument: ThirdLongTypeArgument) {",
+                    "pub fn delta(fourth_argument: FourthLongTypeArgument) {"
+                ],
+                "f.rs",
+                Some(&pre["f.rs"]),
+                &[1, 4, 7, 10],
+                &mut used,
+            ),
+            super::super::prov::Counted::Totality { found: 5, want: 4 }
+        ));
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("per-hunk sig singles must fire");
         let files = validated_live(&out, &pre);
@@ -385,7 +464,7 @@ mod tests {
             &[1, 4],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("per-hunk sig singles must fire");
         let files = validated_live(&out, &pre);
@@ -431,7 +510,7 @@ mod tests {
             &[1, 4, 7, 10],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("per-hunk sig singles must fire");
         let files = validated_live(&out, &pre);
@@ -626,7 +705,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 }

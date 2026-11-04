@@ -21,7 +21,7 @@ use syn::spanned::Spanned;
 use syn::visit::Visit;
 
 /// Parse the pre-image once; `None` = no entry (caller allows).
-fn parse_pre(file_old: Option<&str>) -> Option<syn::File> {
+pub(crate) fn parse_pre(file_old: Option<&str>) -> Option<syn::File> {
     file_old.and_then(|t| syn::parse_str::<syn::File>(t).ok())
 }
 
@@ -81,7 +81,7 @@ pub(crate) fn changed_old_lines(chunk: &str) -> Vec<usize> {
 /// flat-ws `needles` inside a macro body or string value veto only when
 /// the container's span covers a changed old-side line (see
 /// `covers_changed`).
-fn opaque_hit_lines(file: &syn::File, needles: &[String], changed: &[usize]) -> bool {
+pub(crate) fn opaque_hit_lines(file: &syn::File, needles: &[String], changed: &[usize]) -> bool {
     struct Scan<'a> {
         needles: &'a [String],
         changed: &'a [usize],
@@ -125,7 +125,7 @@ fn opaque_hit_lines(file: &syn::File, needles: &[String], changed: &[usize]) -> 
 
 /// Stripped flat-ws needles from diff minus lines (one terminator off —
 /// macro tokens carry none; `{`-terminated slot headers pass through).
-fn needles_of(minuses: &[&str]) -> Vec<String> {
+pub(crate) fn needles_of(minuses: &[&str]) -> Vec<String> {
     minuses
         .iter()
         .filter_map(|m| {
@@ -493,63 +493,6 @@ pub(crate) fn method_literal_holds(
 /// whole-file count is a pre-gate only: per-block emissions each clear
 /// their own engine probe (`probe_block_hunk`), which also enforces the
 /// WI-4a header filter. Trait-block methods are excluded.
-pub(crate) fn slot_holds(
-    file_old: Option<&str>,
-    old: &str,
-    minuses: &[&str],
-    indented: bool,
-    changed: &[usize],
-) -> bool {
-    let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
-    };
-    let n = minuses.len();
-    fn free_items(items: &[syn::Item], old: &str, out: &mut usize) {
-        for it in items {
-            match it {
-                syn::Item::Fn(f) if f.sig.ident == old => *out += 1,
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        free_items(inner, old, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    fn impl_items(items: &[syn::Item], old: &str, out: &mut usize) {
-        for it in items {
-            match it {
-                syn::Item::Impl(imp) => {
-                    for m in &imp.items {
-                        if let syn::ImplItem::Fn(f) = m {
-                            if f.sig.ident == old {
-                                *out += 1;
-                            }
-                        }
-                    }
-                }
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        impl_items(inner, old, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut count = 0;
-    if indented {
-        impl_items(&file.items, old, &mut count);
-    } else {
-        free_items(&file.items, old, &mut count);
-    }
-    if count != n {
-        return false;
-    }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
-}
-
 /// WI-6 slice 1: opaque-interior veto without the file-wide count. A
 /// lone filtered method single names its block via the WI-4a filter,
 /// so same-name methods in other blocks are outside the match domain
@@ -882,6 +825,10 @@ pub(crate) fn template_expr_holds(
 /// whole-file matches, so a same-name fn outside the emitted range
 /// vetoes even a ranged emission that would not touch it (same
 /// posture as `slot_holds`).
+/// WI-4 slice 2b-1: thin wrapper kept for the test pin — single
+/// implementation lives behind `template_fn_counts` /
+/// `template_fn_block_counts` (gap-4 cleanup).
+#[allow(dead_code)]
 pub(crate) fn template_fn_holds(
     path: &str,
     file_old: Option<&str>,
@@ -889,33 +836,24 @@ pub(crate) fn template_fn_holds(
     header: Option<&str>,
     n: usize,
 ) -> bool {
+    // WI-4 slice 2b-1 cleanup (gap 4): single implementation behind the
+    // two counted probes — the `Some` arm previously duplicated the
+    // `block_hunk_body` prescription inline. Same probe, one spelling.
     if n == 0 || minus_header.contains('\n') {
         return false;
     }
     let Some(pre) = file_old else {
         return true;
     };
-    let body = match header {
-        Some(h) => format!(
-            "  {h}\n      ...\n-     {minus_header}\n+     {minus_header}\n          ...\n      }}\n  }}\n"
-        ),
-        None => format!("- {minus_header}\n+ {minus_header}\n      ...\n  }}\n"),
-    };
-    // WI-2c: self-rewrite counting device — `# optional` exempts the
-    // sweep change gate (verdicts unchanged).
-    let probe = format!(
-        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n{body}",
-        crate::git_header(path)
-    );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return false;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return false;
-    };
-    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+    match header {
+        Some(h) => {
+            crate::totality_counted::template_fn_block_counts(path, Some(pre), minus_header, h)
+                == Some(n)
+        }
+        None => {
+            crate::totality_counted::template_fn_counts(path, Some(pre), minus_header) == Some(n)
+        }
+    }
 }
 
 /// N-site use-prefix totality: file + inline-mod `use` spans whose
@@ -993,69 +931,13 @@ pub(crate) fn use_holds(
 }
 
 /// N-site qualified-call totality (WI-3): full path `old_path` with
-/// `arity` value args occurs exactly `minuses.len()` times. Only
-/// generic-free paths count (the emitted pattern carries no turbofish,
-/// and a bare-without-turbofish pattern never matches a turbofish site
-/// — R3 parity, probed). Exact-path matching is probed: a bare twin
-/// never matches a qualified pattern and vice versa.
-pub(crate) fn qualified_call_holds(
-    file_old: Option<&str>,
-    old_path: &str,
-    arity: usize,
-    minuses: &[&str],
-    changed: &[usize],
-) -> bool {
-    let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
-    };
-    let n = minuses.len();
-    struct C<'a> {
-        old_path: &'a str,
-        arity: usize,
-        count: usize,
-    }
-    impl<'ast> Visit<'ast> for C<'_> {
-        fn visit_expr(&mut self, node: &'ast syn::Expr) {
-            if let syn::Expr::Call(call) = node {
-                if let syn::Expr::Path(p) = call.func.as_ref() {
-                    // WI-7d: the full render (qself + leading + segs)
-                    // decides — a bare twin, an opposite-leading twin,
-                    // or a differing-qself twin never equals the
-                    // emitted path and never counts (probed parity).
-                    if p.path.segments.len() >= 2
-                        && p.path
-                            .segments
-                            .iter()
-                            .all(|s| matches!(s.arguments, syn::PathArguments::None))
-                        && call.args.len() == self.arity
-                        && render_full_path(p) == self.old_path
-                    {
-                        self.count += 1;
-                    }
-                }
-            }
-            syn::visit::visit_expr(self, node);
-        }
-    }
-    let mut c = C {
-        old_path,
-        arity,
-        count: 0,
-    };
-    c.visit_file(&file);
-    if c.count != n {
-        return false;
-    }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
-}
-
 /// Canonical full-path render for totality counting: optional `qself`
 /// qualifier plus the post-qualifier segments (`<T as Tr>::a::b` — the
 /// trait path lives inside the qualifier, never doubled), with leading
 /// `::` when qualifier-free — the same spelling the
 /// qualified/turbofish detectors emit, so detector and counter agree
 /// by construction (WI-7d).
-fn render_full_path(p: &syn::ExprPath) -> String {
+pub(crate) fn render_full_path(p: &syn::ExprPath) -> String {
     let mut out = String::new();
     let mut skip = 0usize;
     if let (Some(q), pos) = super::semantic::qualifier_of(p) {
@@ -1076,69 +958,11 @@ fn render_full_path(p: &syn::ExprPath) -> String {
     out
 }
 
-/// N-site turbofish-call totality (WI-3): full path `old_path` with
-/// `val_arity` value args and a last-segment turbofish of `turbo_arity`
-/// args whose `concrete` positions (index, flat-ws text) match occurs
-/// exactly `minuses.len()` times. Non-turbofish twins never match the
-/// emitted `::<...>` pattern (R3, probed) so they never count;
-/// colon2-spelling is ignored (a bare-`<>` twin counts — erring toward
-/// veto). Prefix segments must be generic-free (the emission spells
-/// them concrete).
-pub(crate) fn turbofish_call_holds(
-    file_old: Option<&str>,
-    old_path: &str,
-    val_arity: usize,
-    turbo_arity: usize,
-    concrete: &[(usize, String)],
-    minuses: &[&str],
-    changed: &[usize],
-) -> bool {
-    let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
-    };
-    let n = minuses.len();
-    struct C<'a> {
-        old_path: &'a str,
-        val_arity: usize,
-        turbo_arity: usize,
-        concrete: &'a [(usize, String)],
-        count: usize,
-    }
-    impl<'ast> Visit<'ast> for C<'_> {
-        fn visit_expr(&mut self, node: &'ast syn::Expr) {
-            if let syn::Expr::Call(call) = node {
-                if let syn::Expr::Path(p) = call.func.as_ref() {
-                    if p.qself.is_none()
-                        && call.args.len() == self.val_arity
-                        && render_full_path(p) == self.old_path
-                        && turbo_concrete_holds(p, self.turbo_arity, self.concrete)
-                    {
-                        self.count += 1;
-                    }
-                }
-            }
-            syn::visit::visit_expr(self, node);
-        }
-    }
-    let mut c = C {
-        old_path,
-        val_arity,
-        turbo_arity,
-        concrete,
-        count: 0,
-    };
-    c.visit_file(&file);
-    if c.count != n {
-        return false;
-    }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
-}
-
 /// The last-segment turbofish of a call path carries `turbo_arity` args
 /// with every `concrete` position flat-equal (prefix segments
 /// generic-free — the emission spells them concrete). Colon2-insensitive
 /// (counts bare-`<>` spellings too — veto-safe).
-fn turbo_concrete_holds(
+pub(crate) fn turbo_concrete_holds(
     p: &syn::ExprPath,
     turbo_arity: usize,
     concrete: &[(usize, String)],
@@ -1164,67 +988,6 @@ fn turbo_concrete_holds(
                 == super::semantic::flat_ws(want)
         })
     })
-}
-
-/// N-site turbofish-method totality (WI-3): method `method` with
-/// `val_arity` value args and a `turbo_arity`-arg turbofish whose
-/// `concrete` positions match occurs exactly `minuses.len()` times.
-/// All receivers counted (incl `&`-wrapped — conservative, mirroring
-/// `method_holds`: the pattern cannot match them, so an extra `&` site
-/// vetoes).
-pub(crate) fn turbofish_method_holds(
-    file_old: Option<&str>,
-    method: &str,
-    val_arity: usize,
-    turbo_arity: usize,
-    concrete: &[(usize, String)],
-    minuses: &[&str],
-    changed: &[usize],
-) -> bool {
-    let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
-    };
-    let n = minuses.len();
-    struct M<'a> {
-        method: &'a str,
-        val_arity: usize,
-        turbo_arity: usize,
-        concrete: &'a [(usize, String)],
-        count: usize,
-    }
-    impl<'ast> Visit<'ast> for M<'_> {
-        fn visit_expr(&mut self, node: &'ast syn::Expr) {
-            if let syn::Expr::MethodCall(m) = node {
-                if m.method == self.method
-                    && m.args.len() == self.val_arity
-                    && m.turbofish.as_ref().is_some_and(|t| {
-                        t.args.len() == self.turbo_arity
-                            && self.concrete.iter().all(|(i, want)| {
-                                t.args.iter().nth(*i).is_some_and(|a| {
-                                    super::semantic::flat_ws(&a.to_token_stream().to_string())
-                                        == super::semantic::flat_ws(want)
-                                })
-                            })
-                    })
-                {
-                    self.count += 1;
-                }
-            }
-            syn::visit::visit_expr(self, node);
-        }
-    }
-    let mut m = M {
-        method,
-        val_arity,
-        turbo_arity,
-        concrete,
-        count: 0,
-    };
-    m.visit_file(&file);
-    if m.count != n {
-        return false;
-    }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
 /// N-site macro-rename totality (WI-3): single-segment macro invocations
@@ -1302,7 +1065,7 @@ pub(crate) fn qualified_macro_holds(
 }
 
 /// Render a `syn::Macro` invocation path (`prefix::name` or bare).
-fn render_macro_path(node: &syn::Macro) -> String {
+pub(crate) fn render_macro_path(node: &syn::Macro) -> String {
     node.path
         .segments
         .iter()

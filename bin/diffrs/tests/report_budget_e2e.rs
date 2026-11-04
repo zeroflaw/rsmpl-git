@@ -801,6 +801,87 @@ fn wi4_slice2a_method_literal_names_totality_end_to_end() {
     );
 }
 #[test]
+fn wi4_slice2b1_use_prefix_names_totality_end_to_end() {
+    // WI-4 slice 2b-1: a 2-pair use-prefix rename over 3 same-prefix
+    // uses stays wholly ordinary (per-hunk singles veto on the twin),
+    // and the trial names (`use_prefix` / `totality:3:2`) with text
+    // parity.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "use crate::old::A;\nuse crate::old::B;\nuse crate::old::C;\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "use crate::new::A;\nuse crate::new::B;\nuse crate::old::C;\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "stays ordinary, got: {v}");
+    let declined = hunks[0]["declined"].as_array().unwrap();
+    assert!(
+        declined
+            .iter()
+            .any(|d| d["detector"] == serde_json::json!("use_prefix")
+                && d["reason"] == serde_json::json!("totality:3:2")),
+        "counted decline named, got: {declined:?}"
+    );
+    let text_out = run(dir.path(), &[]);
+    assert!(
+        String::from_utf8_lossy(&text_out.stderr)
+            .lines()
+            .any(|l| l == "declined: src/f.rs use_prefix totality:3:2"),
+        "text parity, got: {}",
+        String::from_utf8_lossy(&text_out.stderr)
+    );
+}
+#[test]
+fn wi4_slice2b1_macro_rename_names_totality_end_to_end() {
+    // WI-4 slice 2b-1: a 2-pair macro rename over 3 same-name
+    // invocations stays wholly ordinary (per-hunk singles veto on the
+    // twin), and the trial names (`macro_rename` / `totality:3:2`).
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    old_m!(a);\n    old_m!(b);\n    old_m!(c);\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    new_m!(a);\n    new_m!(b);\n    old_m!(c);\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "stays ordinary, got: {v}");
+    let declined = hunks[0]["declined"].as_array().unwrap();
+    assert!(
+        declined
+            .iter()
+            .any(|d| d["detector"] == serde_json::json!("macro_rename")
+                && d["reason"] == serde_json::json!("totality:3:2")),
+        "counted decline named, got: {declined:?}"
+    );
+}
+#[test]
 fn wi4_slice2a_superseded_whole_section_decline_stays_hidden() {
     // WI-4 slice 2a gap-2 supersede law: a whole-section counted
     // decline (`let_type_add` / `totality:3:2`) superseded by per-hunk
