@@ -10,9 +10,10 @@
 //! single → impl-header → attr-replace → use-prefix → macro-rename.
 
 use super::prov::{
-    declined_guard_with_numbers, push_section_prov, reheader_rename, HunkDeclined, HunkProvenance,
+    attempt, attempt_counted, declined_guard_with_numbers, push_section_prov, reheader_rename,
+    HunkDeclined, HunkProvenance,
 };
-use super::{attempt, guard_for, Guard};
+use super::{guard_for, Guard};
 
 /// One shared guard/push decision for every N=1 arm below (the
 /// module-header promise: one formula in `guard.rs`, never
@@ -147,7 +148,7 @@ pub(crate) fn try_whole_single_section(
     // single above. Strict T375 would price every lone RHS edit
     // above its ordinary hunk; the guard prices the proof instead.
     let evo_checkpoint = used_rules.len();
-    if let Some((evo, detector)) = attempt(
+    if let Some((evo, detector)) = attempt_counted(
         declined,
         "definition_evolution",
         super::try_definition_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -189,7 +190,7 @@ pub(crate) fn try_whole_single_section(
     // per-hunk fallback (four-guard method-run price + per-emission
     // header excess); single mixed hunks ride the subhunk partition.
     let prec_checkpoint = used_rules.len();
-    if let Some((prec, detector)) = attempt(
+    if let Some((prec, detector)) = attempt_counted(
         declined,
         "precision_definition_single",
         super::try_precision_definition_single(
@@ -227,7 +228,7 @@ pub(crate) fn try_whole_single_section(
     // (same posture as the three shapes above; the scratch-apply
     // probe inside is the totality, orphans at apply are evidence).
     let impl_checkpoint = used_rules.len();
-    if let Some((imp, detector)) = attempt(
+    if let Some((imp, detector)) = attempt_counted(
         declined,
         "impl_header_single",
         super::try_impl_header_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -265,7 +266,7 @@ pub(crate) fn try_whole_single_section(
     // (prelude included) is what fits the concrete header inside
     // the guard.
     let attr_checkpoint = used_rules.len();
-    if let Some((attr, detector)) = attempt(
+    if let Some((attr, detector)) = attempt_counted(
         declined,
         "attr_replace_single",
         super::try_attr_replace_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -296,7 +297,7 @@ pub(crate) fn try_whole_single_section(
     // the N >= 2 sweep — only this n=1 arm prices proof over
     // bytes (the call/type single precedent).
     let use_checkpoint = used_rules.len();
-    if let Some(single) = attempt(
+    if let Some(single) = attempt_counted(
         declined,
         "use_prefix",
         super::try_use_prefix_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -326,7 +327,7 @@ pub(crate) fn try_whole_single_section(
     // `macro_rename` stays Strict for the N >= 2 sweep — only
     // this n=1 arm prices proof over bytes.
     let macro_checkpoint = used_rules.len();
-    if let Some(single) = attempt(
+    if let Some(single) = attempt_counted(
         declined,
         "macro_rename",
         super::try_macro_rename_single(minuses, pluses, path, file_old, changed, used_rules),

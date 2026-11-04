@@ -38,7 +38,7 @@ pub(crate) fn compress_balanced_pair_body(
     // singles stay ordinary (T375) except whole-arg permutation (WI-6
     // slice 2 posture).
     if minuses.len() == 1 {
-        if let Some((evo, detector)) = attempt(
+        if let Some((evo, detector)) = attempt_counted(
             declined,
             "definition_evolution",
             super::try_definition_evolution_sweep(
@@ -86,7 +86,7 @@ pub(crate) fn compress_balanced_pair_body(
         // WI-7 slice-2: whole-line method-to-method single under the
         // precision guard (uniqueness proved by `method_holds` at n=1,
         // `guard_for("method_to_method")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_to_method",
             super::try_method_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -108,7 +108,7 @@ pub(crate) fn compress_balanced_pair_body(
         // WI-7 slice-3: whole-line method-to-function single under the
         // precision guard (uniqueness proved by `method_holds` at n=1,
         // `guard_for("method_to_fn")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_to_fn",
             super::try_method_to_fn_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -131,7 +131,7 @@ pub(crate) fn compress_balanced_pair_body(
         // (slice-5) general-expression singles under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("general_expr")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "general_expr",
             super::try_general_expr_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -157,7 +157,7 @@ pub(crate) fn compress_balanced_pair_body(
         // multis). Sits right after the general-expr single: a bare
         // type is tighter than any holed wrap of the same site, and the
         // wrap arms below decline type positions by construction.
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "type_sweep",
             super::try_type_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -180,7 +180,7 @@ pub(crate) fn compress_balanced_pair_body(
         // precision guard (uniqueness proved by `use_holds` at n=1
         // plus the T361 byte-compare inside; `guard_for("use_prefix")`
         // stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "use_prefix",
             super::try_use_prefix_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -203,7 +203,7 @@ pub(crate) fn compress_balanced_pair_body(
         // precision guard (uniqueness proved by `macro_holds` /
         // `qualified_macro_holds` at n=1 plus the T361 byte-compare
         // inside; `guard_for("macro_rename")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "macro_rename",
             super::try_macro_rename_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -226,7 +226,7 @@ pub(crate) fn compress_balanced_pair_body(
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("call_arg_template")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "call_arg_template",
             super::try_call_arg_template_single(
@@ -251,7 +251,7 @@ pub(crate) fn compress_balanced_pair_body(
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("method_arg_template")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_arg_template",
             super::try_method_arg_template_single(
@@ -275,19 +275,19 @@ pub(crate) fn compress_balanced_pair_body(
         // WI-7 slice-10: whole-line bare-call perm single (whole-line
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
-        // `guard_for("call_arg_template")` stays Strict for multis).
-        if let Some(single) = attempt(
+        // `guard_for("call_perm")` stays Strict for multis).
+        if let Some(single) = attempt_counted(
             declined,
-            "call_arg_template",
+            "call_perm",
             super::try_call_perm_single(minuses, pluses, path, file_old, changed, used_rules),
         ) {
             let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
             if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
-                return Some((body.to_string(), "call_arg_template"));
+                return Some((body.to_string(), "call_perm"));
             }
             declined_guard_with_numbers(
                 declined,
-                "call_arg_template",
+                "call_perm",
                 "precision",
                 body.len(),
                 hunk_len,
@@ -299,7 +299,7 @@ pub(crate) fn compress_balanced_pair_body(
         // `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `template_pair_holds` at n=1,
         // `guard_for("method_arg_template")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_arg_template",
             super::try_method_perm_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -322,7 +322,7 @@ pub(crate) fn compress_balanced_pair_body(
         // + `let`-init via the shared T449 entry) under the precision
         // guard (uniqueness proved by `call_literal_holds` at n=1,
         // `guard_for("call_literal")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "call_literal",
             super::try_call_literal_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -346,7 +346,7 @@ pub(crate) fn compress_balanced_pair_body(
         // the precision guard (uniqueness proved by
         // `method_literal_holds` at n=1 over the exact old-args tuple,
         // `guard_for("method_same_literal")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_same_literal",
             super::try_method_same_literal_single(
@@ -372,7 +372,7 @@ pub(crate) fn compress_balanced_pair_body(
         // uniqueness proved by `template_expr_holds` at n=1 plus the
         // T361 byte-compare, `guard_for("call_sweep")` stays Strict for
         // multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "call_sweep",
             super::try_subline_call_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -396,7 +396,7 @@ pub(crate) fn compress_balanced_pair_body(
         // them; uniqueness proved by `template_expr_holds` at n=1 plus
         // the T361 byte-compare, `guard_for("method_to_method")` stays
         // Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_to_method",
             super::try_subline_method_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -420,7 +420,7 @@ pub(crate) fn compress_balanced_pair_body(
         // them; uniqueness proved by `template_expr_holds` at n=1 plus
         // the T361 byte-compare, `guard_for("method_to_fn")` stays
         // Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_to_fn",
             super::try_subline_method_fn_single(
@@ -446,7 +446,7 @@ pub(crate) fn compress_balanced_pair_body(
         // uniqueness proved by `template_pair_holds` at n=1 plus the
         // T361 byte-compare, `guard_for("call_arg_template")` stays
         // Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "call_arg_template",
             super::try_subline_perm_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -470,7 +470,7 @@ pub(crate) fn compress_balanced_pair_body(
         // uniqueness proved by `template_pair_holds` at n=1 plus the
         // T361 byte-compare, `guard_for("method_arg_template")` stays
         // Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_arg_template",
             super::try_subline_method_perm_single(
@@ -496,7 +496,7 @@ pub(crate) fn compress_balanced_pair_body(
         // here — slices 4-5 own them; uniqueness proved by
         // `template_pair_holds` at n=1 plus the T361 byte-compare,
         // `guard_for("general_expr")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "general_expr",
             super::try_subline_general_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -525,7 +525,7 @@ pub(crate) fn compress_balanced_pair_body(
         // general arm above declines wraps by construction (Call /
         // MethodCall subterms are never general sites), and the literal
         // arms keep every pair the wrap core declines.
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_arg_template",
             super::try_subline_method_wrap_single(
@@ -557,7 +557,7 @@ pub(crate) fn compress_balanced_pair_body(
         // wraps by construction (Call / MethodCall subterms are never
         // general sites), and the literal arms keep every pair the wrap
         // core declines.
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "call_arg_template",
             super::try_subline_bare_wrap_single(
@@ -583,7 +583,7 @@ pub(crate) fn compress_balanced_pair_body(
         // decline here — slice-12 owns them; uniqueness proved by
         // `call_literal_holds` at n=1 plus the T361 byte-compare,
         // `guard_for("call_literal")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "call_literal",
             super::try_subline_literal_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -608,7 +608,7 @@ pub(crate) fn compress_balanced_pair_body(
         // `method_literal_holds` at n=1 over the exact old-args tuple
         // plus the T361 byte-compare,
         // `guard_for("method_same_literal")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "method_same_literal",
             super::try_subline_method_literal_single(
@@ -633,7 +633,7 @@ pub(crate) fn compress_balanced_pair_body(
         // under the precision guard (uniqueness proved by
         // `template_repeat_holds` at n=1 plus the T361 byte-compare with
         // `# repeat`; `guard_for("repeat_fold")` stays Strict for multis).
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "repeat_fold",
             super::try_repeat_fold_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -660,7 +660,7 @@ pub(crate) fn compress_balanced_pair_body(
         // last in the singles block: holed templates beat the literal
         // verbatim floor where both prove the same site set (D10), and
         // every tighter holed winner above keeps priority.
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "let_template",
             super::try_typed_wrap_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -679,7 +679,7 @@ pub(crate) fn compress_balanced_pair_body(
             );
             used_rules.truncate(checkpoint);
         }
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "let_template",
             super::try_untyped_wrap_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -698,7 +698,7 @@ pub(crate) fn compress_balanced_pair_body(
             );
             used_rules.truncate(checkpoint);
         }
-        if let Some(single) = attempt(
+        if let Some(single) = attempt_counted(
             declined,
             "let_template",
             super::try_pat_swap_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -733,7 +733,7 @@ pub(crate) fn compress_balanced_pair_body(
         )
         .map(|f| (f, "item_rename"))
         .or_else(|| {
-            attempt(
+            attempt_counted(
                 declined,
                 "precision_definition_single",
                 super::try_precision_definition_single(
@@ -742,7 +742,7 @@ pub(crate) fn compress_balanced_pair_body(
             )
         })
         .or_else(|| {
-            attempt(
+            attempt_counted(
                 declined,
                 "impl_header_single",
                 super::try_impl_header_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -751,10 +751,10 @@ pub(crate) fn compress_balanced_pair_body(
         .or_else(|| {
             attempt_counted(
                 declined,
-                "call_arg_template",
+                "call_perm",
                 super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules),
             )
-            .map(|f| (f, "call_arg_template"))
+            .map(|f| (f, "call_perm"))
         })
     } else {
         super::chain::run_pair_chain(

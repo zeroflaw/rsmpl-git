@@ -31,14 +31,16 @@ pub(crate) fn try_trait_method_rename(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // WI-23: two-phase classification. Def pairs parse as fn headers
     // with a uniform ident delta; non-def pairs are candidate anchored
     // call sites gated cheaply here (ident-boundary share) with the
@@ -50,10 +52,10 @@ pub(crate) fn try_trait_method_rename(
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         if let Some((o, n, term)) = trait_rename_pair(m, p) {
             if old_name.as_ref().is_some_and(|c| *c != o) {
-                return None;
+                return super::prov::Counted::Miss;
             }
             if new_name.as_ref().is_some_and(|c| *c != n) {
-                return None;
+                return super::prov::Counted::Miss;
             }
             old_name = Some(o);
             new_name = Some(n);
@@ -64,9 +66,11 @@ pub(crate) fn try_trait_method_rename(
             is_def.push(false);
         }
     }
-    let (old_name, new_name) = (old_name?, new_name?);
+    let (Some(old_name), Some(new_name)) = (old_name, new_name) else {
+        return super::prov::Counted::Miss;
+    };
     if old_name == new_name {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Candidate calls must share the ident delta (ident-boundary,
     // never substring); the scratch probe below proves anchoring.
@@ -75,17 +79,17 @@ pub(crate) fn try_trait_method_rename(
             continue;
         }
         if m.trim() == p.trim() {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if !contains_ident(m, &old_name) || !contains_ident(p, &new_name) {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     let has_calls = is_def.iter().any(|d| !d);
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
     let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
     if !all_indented || !plus_indented {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Side classification over def pairs only: every def line must sit
     // in a trait block or an impl block (macro bodies, strings, and
@@ -102,17 +106,17 @@ pub(crate) fn try_trait_method_rename(
         } else if in_impl_block(pre, site) {
             impl_lines.push(site);
         } else {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     if trait_lines.is_empty() || impl_lines.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // WI-22 (D9): inherent `impl S` defs are different items from trait
     // decls — never share the intent, decline to ordinary.
     for &site in &impl_lines {
         if site_in_inherent_impl(pre, site) {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // WI-22b (D9): trait tails must match — `trait T` decl + `impl U for S`
@@ -122,17 +126,34 @@ pub(crate) fn try_trait_method_rename(
         use std::collections::HashSet;
         let mut names: HashSet<String> = HashSet::new();
         for &site in &trait_lines {
-            names.insert(trait_ident_for_site(pre, site)?);
+            match trait_ident_for_site(pre, site) {
+                Some(n) => {
+                    names.insert(n);
+                }
+                None => return super::prov::Counted::Miss,
+            }
         }
         for &site in &impl_lines {
-            names.insert(impl_trait_ident_for_site(pre, site)?);
+            match impl_trait_ident_for_site(pre, site) {
+                Some(n) => {
+                    names.insert(n);
+                }
+                None => return super::prov::Counted::Miss,
+            }
         }
         if names.len() != 1 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
-    let trait_groups = super::block_headers::group_sites_by_trait_block(file_old, &trait_lines)?;
-    let impl_groups = super::block_headers::group_sites_by_impl_block(file_old, &impl_lines)?;
+    let Some(trait_groups) =
+        super::block_headers::group_sites_by_trait_block(file_old, &trait_lines)
+    else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(impl_groups) = super::block_headers::group_sites_by_impl_block(file_old, &impl_lines)
+    else {
+        return super::prov::Counted::Miss;
+    };
     // Pair index per site line (whole-section and per-hunk callers
     // pair lines and `changed` in the same order).
     let mut term_of: std::collections::HashMap<usize, char> = std::collections::HashMap::new();
@@ -158,14 +179,19 @@ pub(crate) fn try_trait_method_rename(
     if let Some(first_trait) = trait_groups.first() {
         let mut term = None;
         for s in &first_trait.sites {
-            let t = term_of.get(s)?;
+            let Some(t) = term_of.get(s) else {
+                return super::prov::Counted::Miss;
+            };
             if term.is_some_and(|c| c != *t) {
-                return None;
+                return super::prov::Counted::Miss;
             }
             term = Some(*t);
         }
-        let minus_fn = format!("V Q fn {old_name} G (...) W {}", term?);
-        let plus_fn = format!("V Q fn {new_name} G (...) W {}", term?);
+        let Some(term) = term else {
+            return super::prov::Counted::Miss;
+        };
+        let minus_fn = format!("V Q fn {old_name} G (...) W {term}");
+        let plus_fn = format!("V Q fn {new_name} G (...) W {term}");
         if super::block_headers::probe_block_hunk(
             path,
             pre,
@@ -188,12 +214,21 @@ pub(crate) fn try_trait_method_rename(
                 &plus_fn,
             ));
             if scratch_single_reproduces(pre, path, &single, changed, minuses, pluses) {
-                return Some(single);
+                return super::prov::Counted::Fire(single);
             }
             // WI-23: calls have no block hunk; a failed call-inclusive
             // scratch must stay ordinary, never a def-only partial.
+            // A twin minus-line elsewhere names its counts.
             if has_calls {
-                return None;
+                match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+                    crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                        return super::prov::Counted::Totality { found, want };
+                    }
+                    crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                        return super::prov::Counted::Opaque;
+                    }
+                    _ => return super::prov::Counted::Miss,
+                }
             }
         }
     }
@@ -203,14 +238,19 @@ pub(crate) fn try_trait_method_rename(
         // method of this name; mixed would be unstatable in one pair).
         let mut term = None;
         for s in sites {
-            let t = term_of.get(s)?;
+            let Some(t) = term_of.get(s) else {
+                return super::prov::Counted::Miss;
+            };
             if term.is_some_and(|c| c != *t) {
-                return None;
+                return super::prov::Counted::Miss;
             }
             term = Some(*t);
         }
-        let minus_fn = format!("V Q fn {old_name} G (...) W {}", term?);
-        let plus_fn = format!("V Q fn {new_name} G (...) W {}", term?);
+        let Some(term) = term else {
+            return super::prov::Counted::Miss;
+        };
+        let minus_fn = format!("V Q fn {old_name} G (...) W {term}");
+        let plus_fn = format!("V Q fn {new_name} G (...) W {term}");
         if !super::block_headers::probe_block_hunk(
             path,
             pre,
@@ -219,14 +259,22 @@ pub(crate) fn try_trait_method_rename(
             &plus_fn,
             sites.len(),
         ) {
-            return None;
+            match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+                crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                    return super::prov::Counted::Totality { found, want };
+                }
+                crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                    return super::prov::Counted::Opaque;
+                }
+                _ => return super::prov::Counted::Miss,
+            }
         }
         out.push_str(&item_emission_header(path, &rule, file_old, sites));
         out.push_str(&super::block_headers::block_hunk_body(
             header, &minus_fn, &plus_fn,
         ));
     }
-    Some(out)
+    super::prov::Counted::Fire(out)
 }
 /// WI-6: inherent-method rename + anchored calls (SPEC D.4).
 ///
@@ -246,14 +294,16 @@ pub(crate) fn try_inherent_method_rename(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Two-phase classification shared with the trait half: def pairs
     // parse as fn headers with a uniform ident delta; non-def pairs
     // are candidate anchored call sites gated cheaply here.
@@ -264,10 +314,10 @@ pub(crate) fn try_inherent_method_rename(
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         if let Some((o, n, term)) = trait_rename_pair(m, p) {
             if old_name.as_ref().is_some_and(|c| *c != o) {
-                return None;
+                return super::prov::Counted::Miss;
             }
             if new_name.as_ref().is_some_and(|c| *c != n) {
-                return None;
+                return super::prov::Counted::Miss;
             }
             old_name = Some(o);
             new_name = Some(n);
@@ -278,30 +328,32 @@ pub(crate) fn try_inherent_method_rename(
             is_def.push(false);
         }
     }
-    let (old_name, new_name) = (old_name?, new_name?);
+    let (Some(old_name), Some(new_name)) = (old_name, new_name) else {
+        return super::prov::Counted::Miss;
+    };
     if old_name == new_name {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
         if is_def[i] {
             continue;
         }
         if m.trim() == p.trim() {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if !contains_ident(m, &old_name) || !contains_ident(p, &new_name) {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // Def-only classes stay with the slot sweep (today's definition
     // hunk alone); the follow needs at least one call to ride.
     if is_def.iter().all(|d| *d) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let all_indented = minuses.iter().all(|m| m.starts_with([' ', '\t']));
     let plus_indented = pluses.iter().all(|p| p.starts_with([' ', '\t']));
     if !all_indented || !plus_indented {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Every def line must sit in an inherent `impl` block; trait blocks
     // and `impl <T> for _` blocks veto (different items, D9). All defs
@@ -313,19 +365,23 @@ pub(crate) fn try_inherent_method_rename(
             continue;
         }
         if in_trait_block(pre, site) || !site_in_inherent_impl(pre, site) {
-            return None;
+            return super::prov::Counted::Miss;
         }
-        let self_ty = inherent_self_ident_for_site(pre, site)?;
+        let Some(self_ty) = inherent_self_ident_for_site(pre, site) else {
+            return super::prov::Counted::Miss;
+        };
         if domain.as_ref().is_some_and(|d| *d != self_ty) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         domain = Some(self_ty);
         def_lines.push(site);
     }
     if def_lines.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let _domain = domain?;
+    let Some(_domain) = domain else {
+        return super::prov::Counted::Miss;
+    };
     // Inherent definitions are bodies (`{`); a `;` pair in an inherent
     // block is unparseable Rust (the file would not parse above), and a
     // mixed class is never one intent. Single-line `}` defs arrive
@@ -335,26 +391,36 @@ pub(crate) fn try_inherent_method_rename(
     for (i, &site) in changed.iter().enumerate() {
         if let Some(t) = terms[i] {
             if t != '{' {
-                return None;
+                return super::prov::Counted::Miss;
             }
             term_of.insert(site, t);
         }
     }
-    let impl_groups = super::block_headers::group_sites_by_impl_block(file_old, &def_lines)?;
+    let Some(impl_groups) = super::block_headers::group_sites_by_impl_block(file_old, &def_lines)
+    else {
+        return super::prov::Counted::Miss;
+    };
     // All def groups share the domain by the per-site check; the
     // document-first group owns the emitted hunk, the follow claims
     // the rest (the scratch probe proves it).
-    let first = impl_groups.first()?;
+    let Some(first) = impl_groups.first() else {
+        return super::prov::Counted::Miss;
+    };
     let mut term = None;
     for s in &first.sites {
-        let t = term_of.get(s)?;
+        let Some(t) = term_of.get(s) else {
+            return super::prov::Counted::Miss;
+        };
         if term.is_some_and(|c| c != *t) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         term = Some(*t);
     }
-    let minus_fn = format!("V Q fn {old_name} G (...) W {}", term?);
-    let plus_fn = format!("V Q fn {new_name} G (...) W {}", term?);
+    let Some(term) = term else {
+        return super::prov::Counted::Miss;
+    };
+    let minus_fn = format!("V Q fn {old_name} G (...) W {term}");
+    let plus_fn = format!("V Q fn {new_name} G (...) W {term}");
     if !super::block_headers::probe_block_hunk(
         path,
         pre,
@@ -363,7 +429,15 @@ pub(crate) fn try_inherent_method_rename(
         &plus_fn,
         first.sites.len(),
     ) {
-        return None;
+        match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            _ => return super::prov::Counted::Miss,
+        }
     }
     let rule = unique_rule(used_rules, &format!("rename_{old_name}_to_{new_name}"));
     let mut single = String::new();
@@ -375,9 +449,15 @@ pub(crate) fn try_inherent_method_rename(
         &plus_fn,
     ));
     if scratch_single_reproduces(pre, path, &single, changed, minuses, pluses) {
-        return Some(single);
+        return super::prov::Counted::Fire(single);
     }
-    None
+    match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            super::prov::Counted::Totality { found, want }
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => super::prov::Counted::Opaque,
+        _ => super::prov::Counted::Miss,
+    }
 }
 
 /// Self-type last ident of the smallest enclosing inherent `impl`
@@ -703,7 +783,12 @@ mod tests {
     const PRE: &str =
         "trait T {\n    fn old(&self);\n}\nstruct S;\nimpl T for S {\n    fn old(&self) {\n    }\n}\n";
 
-    fn run(minuses: &[&str], pluses: &[&str], pre: &str, changed: &[usize]) -> Option<String> {
+    fn run(
+        minuses: &[&str],
+        pluses: &[&str],
+        pre: &str,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         let mut used = Vec::new();
         try_trait_method_rename(minuses, pluses, "f.rs", Some(pre), changed, &mut used)
     }
@@ -713,7 +798,7 @@ mod tests {
         pluses: &[&str],
         pre: &str,
         changed: &[usize],
-    ) -> Option<String> {
+    ) -> crate::semantic::prov::Counted<String> {
         let mut used = Vec::new();
         try_inherent_method_rename(minuses, pluses, "f.rs", Some(pre), changed, &mut used)
     }
@@ -747,7 +832,7 @@ mod tests {
             PRE,
             &[2, 6],
         )
-        .expect("trait+impl rename must compress");
+        .unwrap_fire("trait+impl rename must compress");
         // WI-3: single trait follow hunk owns the impl definition.
         assert_eq!(out.matches("rule=r1").count(), 1, "out:\n{out}");
         assert!(out.contains("trait T {"), "out:\n{out}");
@@ -786,7 +871,7 @@ mod tests {
                 pre,
                 &[2, 6],
             )
-            .is_none(),
+            .is_miss(),
             "trait+inherent mix must stay ordinary"
         );
     }
@@ -804,7 +889,7 @@ mod tests {
                 pre,
                 &[2, 6],
             )
-            .is_none(),
+            .is_miss(),
             "trait-name mismatch must stay ordinary"
         );
     }
@@ -820,7 +905,7 @@ mod tests {
             pre,
             &[2, 6],
         )
-        .expect("qualified same-trait tail must compress");
+        .unwrap_fire("qualified same-trait tail must compress");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         rsmpl_patch::parse_patch(&out).expect("emission must parse");
     }
@@ -835,7 +920,7 @@ mod tests {
                 pre,
                 &[2, 5],
             )
-            .is_none(),
+            .is_miss(),
             "decl-only classes stay ordinary by design"
         );
     }
@@ -850,7 +935,7 @@ mod tests {
                 pre,
                 &[4, 7],
             )
-            .is_none(),
+            .is_miss(),
             "impl-only classes stay with the slot sweep"
         );
     }
@@ -864,7 +949,7 @@ mod tests {
                 PRE,
                 &[2, 6],
             )
-            .is_none(),
+            .is_miss(),
             "per-site suffixes must be preserved within each pair"
         );
     }
@@ -879,7 +964,7 @@ mod tests {
                 pre,
                 &[2, 4],
             )
-            .is_none(),
+            .is_miss(),
             "mixed indent / non-method sites never claim"
         );
     }
@@ -892,7 +977,7 @@ mod tests {
             PRE,
             &[2, 6],
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]
@@ -953,7 +1038,7 @@ mod tests {
             pre,
             &[2, 6],
         )
-        .expect("single-line impl def must compress");
+        .unwrap_fire("single-line impl def must compress");
         assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         assert!(out.contains("trait T {"), "out:\n{out}");
@@ -982,7 +1067,7 @@ mod tests {
             pre,
             &[2, 6],
         )
-        .expect("non-empty single-line body must compress");
+        .unwrap_fire("non-empty single-line body must compress");
         roundtrip(
             pre,
             &out,
@@ -1003,7 +1088,7 @@ mod tests {
                 twins,
                 &[2, 9],
             )
-            .is_none(),
+            .is_miss(),
             "untouched twin vetoes via the per-hunk probe"
         );
     }
@@ -1013,14 +1098,14 @@ mod tests {
         // WI-19b: N=1 needs both a trait and an impl side to share one
         // intent; a lone line is never this detector's shape (slot or
         // a future single-impl detector owns it).
-        assert!(run(&["    fn old(&self);"], &["    fn new(&self);"], PRE, &[2],).is_none());
+        assert!(run(&["    fn old(&self);"], &["    fn new(&self);"], PRE, &[2],).is_miss());
         assert!(run(
             &["    fn old(&self) {"],
             &["    fn new(&self) {"],
             PRE,
             &[6],
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]
@@ -1035,7 +1120,7 @@ mod tests {
                 twins,
                 &[2, 9],
             )
-            .is_none(),
+            .is_miss(),
             "untouched twin vetoes via the per-hunk probe"
         );
     }
@@ -1051,7 +1136,7 @@ mod tests {
             pre,
             &[2, 6, 10],
         )
-        .expect("defs+calls must compress to one follow hunk");
+        .unwrap_fire("defs+calls must compress to one follow hunk");
         assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         assert!(!out.contains("impl T for S {"), "out:\n{out}");
@@ -1084,7 +1169,7 @@ mod tests {
                 pre,
                 &[2, 6, 11],
             )
-            .is_none(),
+            .is_miss(),
             "unproven receivers never ride the follow"
         );
     }
@@ -1100,7 +1185,7 @@ mod tests {
                 pre,
                 &[2, 6, 14],
             )
-            .is_none(),
+            .is_miss(),
             "shadowed receivers never ride the follow"
         );
     }
@@ -1113,7 +1198,7 @@ mod tests {
             pre,
             &[2, 6, 10],
         )
-        .expect("S::old tails must ride the follow");
+        .unwrap_fire("S::old tails must ride the follow");
         assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).unwrap();
@@ -1143,7 +1228,7 @@ mod tests {
             pre,
             &[2, 6, 10],
         )
-        .expect("qself tails must ride the follow");
+        .unwrap_fire("qself tails must ride the follow");
         assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).unwrap();
@@ -1166,7 +1251,7 @@ mod tests {
                 pre,
                 &[2, 6, 12],
             )
-            .is_none(),
+            .is_miss(),
             "unrelated X::old tails never ride the follow"
         );
     }
@@ -1187,7 +1272,7 @@ mod tests {
             pre,
             &[2, 9, 4],
         )
-        .expect("Self::old tails must ride the follow");
+        .unwrap_fire("Self::old tails must ride the follow");
         assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).unwrap();
@@ -1218,7 +1303,7 @@ mod tests {
             I_PRE,
             &[3, 7],
         )
-        .expect("inherent def+call must compress");
+        .unwrap_fire("inherent def+call must compress");
         assert_eq!(out.matches("rule=").count(), 1, "out:\n{out}");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         assert!(out.contains("impl S {"), "out:\n{out}");
@@ -1344,7 +1429,7 @@ mod tests {
             pre,
             &[3, 6],
         )
-        .expect("single-line inherent def+call must compress");
+        .unwrap_fire("single-line inherent def+call must compress");
         assert!(out.contains("# follow=uses"), "out:\n{out}");
         assert!(out.contains("impl S {"), "out:\n{out}");
         roundtrip(
@@ -1365,7 +1450,7 @@ mod tests {
                 I_PRE,
                 &[3],
             )
-            .is_none(),
+            .is_miss(),
             "def-only classes stay with the slot sweep"
         );
     }
@@ -1380,7 +1465,7 @@ mod tests {
                 pre,
                 &[3, 8],
             )
-            .is_none(),
+            .is_miss(),
             "unproven receivers never ride the follow"
         );
     }
@@ -1395,7 +1480,7 @@ mod tests {
                 pre,
                 &[3, 12],
             )
-            .is_none(),
+            .is_miss(),
             "shadowed receivers never ride the follow"
         );
     }
@@ -1410,7 +1495,7 @@ mod tests {
                 pre,
                 &[3, 8],
             )
-            .is_none(),
+            .is_miss(),
             "two self types are two intents, never one follow"
         );
     }
@@ -1429,7 +1514,7 @@ mod tests {
                 pre,
                 &[2, 6],
             )
-            .is_none(),
+            .is_miss(),
             "trait+inherent mix stays ordinary"
         );
     }
@@ -1445,7 +1530,7 @@ mod tests {
                 pre,
                 &[3, 7],
             )
-            .is_none(),
+            .is_miss(),
             "trait-impl defs never join an inherent intent"
         );
     }

@@ -30,13 +30,15 @@ pub(crate) fn try_subline_general_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line-owned pairs belong to the slices-4–5 singles — decline
     // here even when they vetoed (whole-line and `let`-init entries).
     if let (Some(m), Some(p)) = (
@@ -44,7 +46,7 @@ pub(crate) fn try_subline_general_single(
         super::general_expr::parse_line_expr(pluses[0]),
     ) {
         if super::general_expr::antiunify_general_expr_single(&m, &p).is_some() {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     if let (Some(m), Some(p)) = (
@@ -52,17 +54,22 @@ pub(crate) fn try_subline_general_single(
         super::general_expr::parse_let_init(pluses[0]),
     ) {
         if super::general_expr::antiunify_general_expr_single(&m, &p).is_some() {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
-    let sites = super::subline::extract_general_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_general_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Zero-hole/two-delta/identical/variant-mismatch/`Await` vetoes
     // ride free via the shared single-pair core.
-    let (minus_tpl, plus_tpl) =
-        super::general_expr::antiunify_general_expr_single(&sites[0].minus, &sites[0].plus)?;
+    let Some((minus_tpl, plus_tpl)) =
+        super::general_expr::antiunify_general_expr_single(&sites[0].minus, &sites[0].plus)
+    else {
+        return super::prov::Counted::Miss;
+    };
     // Anchored gate, file-wide uniqueness at n=1, byte-compare
     // pre-reservation, and the allow-one emission share the slice-4
     // tail (no mirrored emission).
@@ -217,15 +224,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(alpha + 1);\n    bar(alpha + 1);\n}\n";
         assert!(
-            super::try_subline_general_single(
-                &["    foo(alpha + 1);"],
-                &["    foo(alpha + 2);"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_general_single(
+                    &["    foo(alpha + 1);"],
+                    &["    foo(alpha + 2);"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed sub-line twin must veto at the core"
         );
         let raw = section(
@@ -267,7 +276,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -285,7 +294,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "let-init whole-line pair must decline"
         );
     }
@@ -304,7 +313,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -320,7 +329,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -339,7 +348,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "non-general delta must decline"
         );
     }
@@ -357,7 +366,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "macro subterm must veto"
         );
     }

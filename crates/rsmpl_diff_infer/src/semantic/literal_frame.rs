@@ -157,33 +157,36 @@ pub(crate) fn try_literal_frame_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // All-identical classes stay for the tighter verbatim sweep (T422).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut uniform: Option<(LitKind, String, String)> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let m_lits = parse_line_lits(m)?;
-        let p_lits = parse_line_lits(p)?;
-        let (kind, old, new) = pair_delta(&m_lits, &p_lits)?;
+        let (Some(m_lits), Some(p_lits)) = (parse_line_lits(m), parse_line_lits(p)) else {
+            return super::prov::Counted::Miss;
+        };
+        let Some((kind, old, new)) = pair_delta(&m_lits, &p_lits) else {
+            return super::prov::Counted::Miss;
+        };
         if old == new {
-            return None;
+            return super::prov::Counted::Miss;
         }
         // Exactly-once gate: the old literal occurs exactly once among
         // this minus line's literals, so one template application
         // reproduces the plus line exactly (`f("old","old")` →
         // `f("old","new")` would rewrite both and stays ordinary).
         if m_lits.iter().filter(|(_, t)| *t == old).count() != 1 {
-            return None;
+            return super::prov::Counted::Miss;
         }
         match &uniform {
             Some((k, o, n)) => {
                 if *k != kind || *o != old || *n != new {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
             }
             None => uniform = Some((kind, old, new)),
@@ -195,16 +198,31 @@ pub(crate) fn try_literal_frame_sweep(
     // claims it. Whole-line literal sites never parse as `let` inits
     // with a general template, so they keep the bare emission.
     if anchored_let_init_proves(minuses, pluses, path, file_old) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (_, old_tok, new_tok) = uniform?;
-    if !crate::totality::template_pair_holds(path, file_old, &old_tok, &new_tok, minuses.len()) {
-        return None;
+    let Some((_, old_tok, new_tok)) = uniform else {
+        return super::prov::Counted::Miss;
+    };
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &old_tok, &new_tok),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(used_rules, "literal_frame");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {old_tok}\n+ {new_tok}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-3 sites: init spans are line-relative (parsed from the full
@@ -611,7 +629,7 @@ mod chain_tests {
                 &[2, 3, 4],
                 &mut used
             )
-            .is_none(),
+            .is_miss(),
             "anchored let-init class must veto the bare literal"
         );
         // End to end: the same section raises as the anchored form.

@@ -49,37 +49,49 @@ pub(crate) fn try_definition_evolution_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<(String, &'static str)> {
+) -> super::prov::Counted<(String, &'static str)> {
     if minuses.len() != pluses.len() || minuses.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Classify the first pair; every other pair must share the class,
     // identity, and exact RHS delta (never half-claimed).
-    let first = classify_pair(minuses[0], pluses[0])?;
+    let Some(first) = classify_pair(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     for (m, p) in minuses.iter().zip(pluses.iter()).skip(1) {
         match classify_pair(m, p) {
             Some(k) if k == first => {}
-            _ => return None,
+            _ => return super::prov::Counted::Miss,
         }
     }
     // Container recovery for member shapes (exactly-one-carrier rule);
     // alias/const need no container.
     let container: Option<String> = match &first {
-        EvoKind::Field { field } => Some(struct_of_field(pre, field, changed[0])?),
-        EvoKind::Variant { variant, .. } => Some(enum_of_variant(pre, variant, changed[0])?),
+        EvoKind::Field { field } => Some(match struct_of_field(pre, field, changed[0]) {
+            Some(v) => v,
+            None => return super::prov::Counted::Miss,
+        }),
+        EvoKind::Variant { variant, .. } => Some(match enum_of_variant(pre, variant, changed[0]) {
+            Some(v) => v,
+            None => return super::prov::Counted::Miss,
+        }),
         EvoKind::Alias { .. } | EvoKind::Const { .. } => None,
     };
     // Pre-image line alignment: each changed line must hold its minus
     // (trailing `,`/`;` tolerated — patterns omit member commas).
     let pre_lines: Vec<&str> = pre.lines().collect();
     for (i, &site) in changed.iter().enumerate() {
-        let pre_line = pre_lines.get(site.saturating_sub(1))?;
+        let Some(pre_line) = pre_lines.get(site.saturating_sub(1)) else {
+            return super::prov::Counted::Miss;
+        };
         if norm_line(pre_line) != norm_line(minuses[i]) {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // N ≥ 2 member evolutions must share the container (one hunk
@@ -97,7 +109,7 @@ pub(crate) fn try_definition_evolution_sweep(
                     _ => true,
                 };
                 if !ok {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
             }
         }
@@ -121,7 +133,9 @@ pub(crate) fn try_definition_evolution_sweep(
             ));
         }
         EvoKind::Field { .. } => {
-            let c = container.clone()?;
+            let Some(c) = container.clone() else {
+                return super::prov::Counted::Miss;
+            };
             out.push_str(&format!("  struct {c} {{\n"));
             out.push_str(&format!(
                 "- {}\n+ {}\n",
@@ -130,7 +144,9 @@ pub(crate) fn try_definition_evolution_sweep(
             ));
         }
         EvoKind::Variant { .. } => {
-            let c = container.clone()?;
+            let Some(c) = container.clone() else {
+                return super::prov::Counted::Miss;
+            };
             out.push_str(&format!("  enum {c} {{\n"));
             out.push_str(&format!(
                 "- {}\n+ {}\n",
@@ -141,9 +157,17 @@ pub(crate) fn try_definition_evolution_sweep(
     }
     if !scratch_reproduces(pre, path, &out, &pre_lines, changed, pluses) {
         used_rules.truncate(checkpoint);
-        return None;
+        match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            _ => return super::prov::Counted::Miss,
+        }
     }
-    Some((out, "definition_evolution"))
+    super::prov::Counted::Fire((out, "definition_evolution"))
 }
 
 /// One classified evolution pair: shape class + identity + concrete
@@ -810,7 +834,7 @@ mod tests {
             &[2],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 }

@@ -34,14 +34,16 @@ pub(crate) fn try_member_rename(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Exactly one definition pair: field first (colon shape), else
     // variant (bare ident). A second def pair stays ordinary (the
     // engine would veto the ambiguity — raising never splits it).
@@ -50,51 +52,56 @@ pub(crate) fn try_member_rename(
     for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
         if let Some(def) = parse_field_pair(m, p) {
             if def_idx.is_some() {
-                return None;
+                return super::prov::Counted::Miss;
             }
             def_idx = Some(i);
             def_kind = Some(MemberDef::Field(def));
         } else if let Some((old, new)) = parse_variant_pair(m, p) {
             if def_idx.is_some() {
-                return None;
+                return super::prov::Counted::Miss;
             }
             def_idx = Some(i);
             def_kind = Some(MemberDef::Variant { old, new });
         }
     }
-    let def_idx = def_idx?;
-    let def = def_kind?;
+    let (Some(def_idx), Some(def)) = (def_idx, def_kind) else {
+        return super::prov::Counted::Miss;
+    };
     // Use-site gate per non-def pair: the minus names `old`, the plus
     // names `new` (ident-boundary, never substring), and the pair is
     // not itself a second definition. The scratch probe below is
     // authoritative; this only rejects cheap non-shares.
     let (old, new) = def.idents();
     if old == new || old.is_empty() || new.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
         if i == def_idx {
             continue;
         }
         if m.trim() == p.trim() {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if !contains_ident(m, &old) || !contains_ident(p, &new) {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // Container from the pre-image at the def site, with the shadow
     // census: a second same-named member anywhere vetoes (the authored
     // follow would veto loud — raising stays ordinary instead).
-    let container = match &def {
-        MemberDef::Field(f) => struct_of_field(pre, &f.old, changed[def_idx])?,
-        MemberDef::Variant { old, .. } => enum_of_variant(pre, old, changed[def_idx])?,
+    let Some(container) = (match &def {
+        MemberDef::Field(f) => struct_of_field(pre, &f.old, changed[def_idx]),
+        MemberDef::Variant { old, .. } => enum_of_variant(pre, old, changed[def_idx]),
+    }) else {
+        return super::prov::Counted::Miss;
     };
     // Pre-image minus alignment (stripped trailing `,` tolerated on
     // the def pair): the probe below re-verifies the post side.
     let pre_lines: Vec<&str> = pre.lines().collect();
     for (i, &site) in changed.iter().enumerate() {
-        let pre_line = pre_lines.get(site.saturating_sub(1))?;
+        let Some(pre_line) = pre_lines.get(site.saturating_sub(1)) else {
+            return super::prov::Counted::Miss;
+        };
         let want = minuses[i].trim();
         let got = pre_line.trim();
         if got != want {
@@ -104,20 +111,30 @@ pub(crate) fn try_member_rename(
                 || got != format!("{want},").as_str()
                     && got.trim_end_matches(',').trim() != want.trim_end_matches(',').trim()
             {
-                return None;
+                return super::prov::Counted::Miss;
             }
         }
     }
     let def_site = changed[def_idx];
     // Scratch-apply probe with line equality (template-probe totality):
     // the authored emission must reproduce exactly the native plus
-    // lines at the changed sites and touch nothing else.
+    // lines at the changed sites and touch nothing else. A probe
+    // failure with a twin minus-line elsewhere names its counts;
+    // any other probe failure is shape, not count.
     let probe = emit(path, "probe", Some(pre), def_site, &container, &def);
     if !scratch_reproduces(pre, path, &probe, &pre_lines, changed, pluses) {
-        return None;
+        match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            _ => return super::prov::Counted::Miss,
+        }
     }
     let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
-    Some(emit(path, &rule, Some(pre), def_site, &container, &def))
+    super::prov::Counted::Fire(emit(path, &rule, Some(pre), def_site, &container, &def))
 }
 
 /// WI-15b whole-patch member-intent pre-pass: one member definition pair

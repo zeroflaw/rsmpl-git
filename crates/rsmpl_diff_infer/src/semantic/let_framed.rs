@@ -33,9 +33,9 @@ pub(crate) fn try_framed_let_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for rung in [
         super::frame::fn_frame_stmt_inner,
@@ -64,14 +64,26 @@ pub(crate) fn try_framed_let_sweep(
         }
         let inner_m: Vec<&str> = inner_minuses.iter().map(String::as_str).collect();
         let inner_p: Vec<&str> = inner_pluses.iter().map(String::as_str).collect();
-        let ty = antiunify_let_type_add(&inner_m, &inner_p)?;
-        if !crate::totality::let_untyped_holds(file_old, minuses, changed) {
-            return None;
+        let ty = match antiunify_let_type_add(&inner_m, &inner_p) {
+            Some(t) => t,
+            None => continue,
+        };
+        match crate::totality::let_untyped_verdict(file_old, minuses, changed) {
+            crate::totality::LetUntypedVerdict::Holds => {}
+            crate::totality::LetUntypedVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality::LetUntypedVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            crate::totality::LetUntypedVerdict::Unproven => {
+                return super::prov::Counted::Miss;
+            }
         }
-        return Some(emit_let_type_add(path, &ty, changed, used_rules));
+        return super::prov::Counted::Fire(emit_let_type_add(path, &ty, changed, used_rules));
     }
     // No single rung owns every pair (mixed-rung sections included).
-    None
+    super::prov::Counted::Miss
 }
 
 /// Shared emission for both `try_let_sweep` arms: the bare diet pair

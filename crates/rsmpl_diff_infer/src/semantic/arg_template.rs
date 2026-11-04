@@ -369,7 +369,7 @@ pub(crate) fn try_call_arg_template_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> super::prov::Counted<String> {
+) -> crate::semantic::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
         return super::prov::Counted::Miss;
     }
@@ -502,7 +502,7 @@ pub(crate) fn try_method_arg_template_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> super::prov::Counted<String> {
+) -> crate::semantic::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
         return super::prov::Counted::Miss;
     }
@@ -770,19 +770,25 @@ pub(crate) fn try_call_arg_template_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> crate::semantic::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
-    let (o_cal, n_cal, o_args, n_args) = parse_bare_pair(minuses[0], pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((o_cal, n_cal, o_args, n_args)) = parse_bare_pair(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     // Callee deltas stay with the slice-1 single.
     if o_cal != n_cal {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (m_tpl, p_tpl) = antiunify_call_args_single(&o_args, &n_args)?;
+    let Some((m_tpl, p_tpl)) = antiunify_call_args_single(&o_args, &n_args) else {
+        return super::prov::Counted::Miss;
+    };
     // WI-7b: uppercase same callee rides backticks (literal), else it
     // infers as an `expr` hole and over-matches.
     let lit = super::shape::literal_callee(&o_cal);
@@ -798,10 +804,23 @@ pub(crate) fn try_call_arg_template_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -812,13 +831,13 @@ pub(crate) fn try_call_arg_template_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "call_arg_template");
     // Allow-one: directive-free ranged hunk (slices-1-5 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-7: method-arg-template wrap single (N=1) under
@@ -846,21 +865,29 @@ pub(crate) fn try_method_arg_template_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> crate::semantic::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
-    let (o_recv, o_method, o_args) = parse_method_line(minuses[0])?;
-    let (n_recv, n_method, n_args) = parse_method_line(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((o_recv, o_method, o_args)) = parse_method_line(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((n_recv, n_method, n_args)) = parse_method_line(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     // Receiver deltas stay with the m2f single; method deltas stay with
     // the slice-2 single.
     if o_recv != n_recv || o_method != n_method {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (m_tpl, p_tpl) = antiunify_call_args_single(&o_args, &n_args)?;
+    let Some((m_tpl, p_tpl)) = antiunify_call_args_single(&o_args, &n_args) else {
+        return super::prov::Counted::Miss;
+    };
     // WI-7b: uppercase method rides backticks (literal), else it infers
     // as an `expr` hole and over-matches.
     let lit = super::shape::literal_callee(&o_method);
@@ -875,21 +902,34 @@ pub(crate) fn try_method_arg_template_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_tpl, &plus_tpl, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_tpl, &plus_tpl),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "method_arg_template");
     // Allow-one: directive-free ranged hunk (slices-1-6 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 #[cfg(test)]
@@ -1001,7 +1041,12 @@ mod tests {
         assert_eq!(super::count_hole("E1, E0", "E0"), 1);
     }
 
-    fn single(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn single(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_call_arg_template_single(
             &[minus],
             &[plus],
@@ -1097,7 +1142,7 @@ mod tests {
         // matches the minus pattern and never vetoes.
         let pre = "fn m() {\n    use_it(x);\n    use_it(x, y);\n}\n";
         assert!(
-            single("    use_it(x);", "    use_it(x.clone());", Some(pre), &[2]).is_some(),
+            single("    use_it(x);", "    use_it(x.clone());", Some(pre), &[2]).is_fire(),
             "different-arity twin must not veto"
         );
     }
@@ -1106,7 +1151,7 @@ mod tests {
     fn wi7_arg_template_single_no_pre_image_vetoes() {
         // No whole-file evidence -> no guessing (D3).
         assert!(
-            single("    use_it(x);", "    use_it(x.clone());", None, &[2]).is_none(),
+            single("    use_it(x);", "    use_it(x.clone());", None, &[2]).is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1122,7 +1167,7 @@ mod tests {
                 Some("fn m() {\n    check(a, 1);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "concrete delta must veto"
         );
     }
@@ -1138,7 +1183,7 @@ mod tests {
                 Some("fn m() {\n    f(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "two wraps must veto"
         );
     }
@@ -1154,7 +1199,7 @@ mod tests {
                 Some("fn m() {\n    swap(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "perm must veto"
         );
     }
@@ -1169,7 +1214,7 @@ mod tests {
                 Some("fn m() {\n    foo(1);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "callee delta must decline here"
         );
     }
@@ -1185,7 +1230,7 @@ mod tests {
                 Some("fn m() {\n    use_it(a) + other(b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "sub-line wrap must decline"
         );
     }
@@ -1199,7 +1244,7 @@ mod tests {
             Some("fn m() {\n    f(x);\n}\n"),
             &[2],
         )
-        .expect("reference wrap single must fire");
+        .unwrap_fire("reference wrap single must fire");
         assert!(out.contains("- f(E0)\n"), "got: {out}");
         assert!(out.contains("+ f(&E0)\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -1218,7 +1263,7 @@ mod tests {
                 Some("fn m() {\n    f(m!(x));\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -1310,7 +1355,7 @@ mod tests {
             Some("fn m() {\n    use_it(x);\n}\n"),
             &[2],
         )
-        .expect("flipped binary wrap single must fire");
+        .unwrap_fire("flipped binary wrap single must fire");
         assert!(out.contains("- use_it(E0)\n"), "got: {out}");
         assert!(out.contains("+ use_it(1 + E0)\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -1326,7 +1371,7 @@ mod tests {
             Some("fn m() {\n    let a = use_it(x);\n}\n"),
             &[2],
         )
-        .expect("let-init binary wrap single must fire");
+        .unwrap_fire("let-init binary wrap single must fire");
         assert!(out.contains("- use_it(E0)\n"), "got: {out}");
         assert!(out.contains("+ use_it(E0 + 1)\n"), "got: {out}");
         let pre_map = pre_map(&[("f.rs", "fn m() {\n    let a = use_it(x);\n}\n")]);
@@ -1354,13 +1399,15 @@ mod tests {
     #[test]
     fn wi8_binary_wrap_single_twin_vetoes() {
         assert!(
-            single(
-                "    use_it(x);",
-                "    use_it(x + 1);",
-                Some("fn m() {\n    use_it(x);\n    use_it(y);\n}\n"),
-                &[2]
-            )
-            .is_none(),
+            matches!(
+                single(
+                    "    use_it(x);",
+                    "    use_it(x + 1);",
+                    Some("fn m() {\n    use_it(x);\n    use_it(y);\n}\n"),
+                    &[2]
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin must veto"
         );
     }
@@ -1369,7 +1416,7 @@ mod tests {
     fn wi8_bare_wrap_single_no_pre_image_vetoes() {
         // No whole-file evidence -> no guessing (D3, shared gate).
         assert!(
-            single("    use_it(x);", "    use_it(f(x));", None, &[2]).is_none(),
+            single("    use_it(x);", "    use_it(f(x));", None, &[2]).is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1385,7 +1432,7 @@ mod tests {
                 Some("fn m() {\n    f(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "two holes must veto"
         );
     }
@@ -1401,7 +1448,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "zero-hole wrapper must veto"
         );
     }
@@ -1417,7 +1464,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "double-hole binary must veto"
         );
     }
@@ -1433,7 +1480,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "concrete binary must veto"
         );
     }
@@ -1449,7 +1496,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro interior must veto"
         );
     }
@@ -1486,7 +1533,7 @@ mod tests {
             Some("fn m() {\n    r.use_it(x);\n}\n"),
             &[2],
         )
-        .expect("method-entry binary wrap single must fire");
+        .unwrap_fire("method-entry binary wrap single must fire");
         assert!(out.contains("- Receiver.use_it(E0)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.use_it(E0 + 1)\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -1497,18 +1544,25 @@ mod tests {
     #[test]
     fn wi8_method_entry_bare_wrap_single_twin_vetoes() {
         assert!(
-            msingle(
-                "    r.use_it(x);",
-                "    r.use_it(f(x));",
-                Some("fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n"),
-                &[2]
-            )
-            .is_none(),
+            matches!(
+                msingle(
+                    "    r.use_it(x);",
+                    "    r.use_it(f(x));",
+                    Some("fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n"),
+                    &[2]
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin must veto"
         );
     }
 
-    fn msingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn msingle(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_method_arg_template_single(
             &[minus],
             &[plus],
@@ -1613,7 +1667,7 @@ mod tests {
                 Some(pre),
                 &[2]
             )
-            .is_some(),
+            .is_fire(),
             "different-arity twin must not veto"
         );
     }
@@ -1622,7 +1676,7 @@ mod tests {
     fn wi7_method_arg_template_single_no_pre_image_vetoes() {
         // No whole-file evidence -> no guessing (D3).
         assert!(
-            msingle("    r.use_it(x);", "    r.use_it(x.clone());", None, &[2]).is_none(),
+            msingle("    r.use_it(x);", "    r.use_it(x.clone());", None, &[2]).is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1637,7 +1691,7 @@ mod tests {
                 Some("fn m() {\n    r.use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "receiver delta must decline"
         );
     }
@@ -1652,7 +1706,7 @@ mod tests {
                 Some("fn m() {\n    r.use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "method delta must decline here"
         );
     }
@@ -1668,7 +1722,7 @@ mod tests {
                 Some("fn m() {\n    r.check(a, 1);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "concrete delta must veto"
         );
     }
@@ -1684,7 +1738,7 @@ mod tests {
                 Some("fn m() {\n    r.f(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "two wraps must veto"
         );
     }
@@ -1700,7 +1754,7 @@ mod tests {
                 Some("fn m() {\n    r.swap(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "perm must veto"
         );
     }
@@ -1716,7 +1770,7 @@ mod tests {
                 Some("fn m() {\n    r.use_it(a) + other(b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "sub-line wrap must decline"
         );
     }
@@ -1730,7 +1784,7 @@ mod tests {
             Some("fn m() {\n    r.f(x);\n}\n"),
             &[2],
         )
-        .expect("reference wrap single must fire");
+        .unwrap_fire("reference wrap single must fire");
         assert!(out.contains("- Receiver.f(E0)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.f(&E0)\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -1749,7 +1803,7 @@ mod tests {
                 Some("fn m() {\n    r.f(m!(x));\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -1795,7 +1849,7 @@ mod tests {
             Some("fn m() {\n    let a = use_it(x);\n}\n"),
             &[2],
         )
-        .expect("let-init method inner wrap single must fire");
+        .unwrap_fire("let-init method inner wrap single must fire");
         assert!(out.contains("- use_it(E0)\n"), "got: {out}");
         assert!(out.contains("+ use_it(r.foo(E0))\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -1812,7 +1866,7 @@ mod tests {
             Some("fn m() {\n    use_it(x);\n}\n"),
             &[2],
         )
-        .expect("second-arg method inner wrap single must fire");
+        .unwrap_fire("second-arg method inner wrap single must fire");
         assert!(out.contains("- use_it(E0)\n"), "got: {out}");
         assert!(out.contains("+ use_it(r.foo(1, E0))\n"), "got: {out}");
         let pre_map = pre_map(&[("f.rs", "fn m() {\n    use_it(x);\n}\n")]);
@@ -1849,7 +1903,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "two holes must veto"
         );
     }
@@ -1864,7 +1918,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "receiver+arg double match must veto"
         );
     }
@@ -1879,7 +1933,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "zero-hole method wrapper must veto"
         );
     }
@@ -1894,7 +1948,7 @@ mod tests {
                 Some("fn m() {\n    use_it(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro interior must veto"
         );
     }
@@ -1924,13 +1978,15 @@ mod tests {
     #[test]
     fn wi9_method_entry_inner_wrap_single_twin_vetoes() {
         assert!(
-            msingle(
-                "    r.use_it(x);",
-                "    r.use_it(q.foo(x));",
-                Some("fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n"),
-                &[2]
-            )
-            .is_none(),
+            matches!(
+                msingle(
+                    "    r.use_it(x);",
+                    "    r.use_it(q.foo(x));",
+                    Some("fn m() {\n    r.use_it(x);\n    q.use_it(y);\n}\n"),
+                    &[2]
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin must veto"
         );
     }

@@ -82,7 +82,7 @@ pub(crate) fn try_partition_section(
             &changed[i..i + 1],
             used_rules,
         ) {
-            Some((full, _)) => {
+            super::prov::Counted::Fire((full, _)) => {
                 let Some((_, body)) = full.split_once('\n') else {
                     used_rules.truncate(checkpoint);
                     return None;
@@ -90,7 +90,7 @@ pub(crate) fn try_partition_section(
                 bodies.push(body.to_string());
                 sweep_check.push(false);
             }
-            None => {
+            _ => {
                 used_rules.truncate(checkpoint);
                 return None;
             }

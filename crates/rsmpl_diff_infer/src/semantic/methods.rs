@@ -365,19 +365,29 @@ pub(crate) fn try_method_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    file_old?;
-    let (old_method, new_method, arity) = parse_method_to_method_pair(minuses[0], pluses[0])?;
+    let Some(_pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((old_method, new_method, arity)) = parse_method_to_method_pair(minuses[0], pluses[0])
+    else {
+        return super::prov::Counted::Miss;
+    };
     if old_method == new_method {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
-        return None;
+    match crate::totality::method_verdict(file_old, &old_method, arity, minuses, changed) {
+        crate::totality::MethodVerdict::Holds => {}
+        crate::totality::MethodVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality::MethodVerdict::OpaqueHit => return super::prov::Counted::Opaque,
+        crate::totality::MethodVerdict::Unproven => return super::prov::Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
     let mut vars = Vec::with_capacity(arity);
@@ -392,7 +402,7 @@ pub(crate) fn try_method_single(
     hunk.push_str(&format!(
         "- Receiver.{old_lit}({args})\n+ Receiver.{new_lit}({args})\n"
     ));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-3: whole-line method-to-function single (N=1) under
@@ -412,16 +422,25 @@ pub(crate) fn try_method_to_fn_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    file_old?;
-    let (old_method, new_func, arity) = parse_method_to_fn_pair(minuses[0], pluses[0])?;
-    if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
-        return None;
+    let Some(_pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((old_method, new_func, arity)) = parse_method_to_fn_pair(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    match crate::totality::method_verdict(file_old, &old_method, arity, minuses, changed) {
+        crate::totality::MethodVerdict::Holds => {}
+        crate::totality::MethodVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality::MethodVerdict::OpaqueHit => return super::prov::Counted::Opaque,
+        crate::totality::MethodVerdict::Unproven => return super::prov::Counted::Miss,
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
     let mut vars = Vec::with_capacity(arity);
@@ -441,7 +460,7 @@ pub(crate) fn try_method_to_fn_single(
         old = super::shape::literal_callee(&old_method),
         new = super::shape::literal_callee(&new_func),
     ));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// Shared emission for the whole-line and sub-line method→method paths
@@ -630,31 +649,37 @@ pub(crate) fn try_method_same_literal_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
-    let (o_recv, o_method, o_args) = parse_method_line(minuses[0])?;
-    let (n_recv, n_method, n_args) = parse_method_line(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((o_recv, o_method, o_args)) = parse_method_line(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((n_recv, n_method, n_args)) = parse_method_line(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     // Method deltas stay with the slice-2 single, receiver deltas with
     // the m2f/general shapes.
     if o_recv != n_recv || o_method != n_method || o_args.len() != n_args.len() || o_args.is_empty()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for arg in o_args.iter().chain(n_args.iter()) {
         let probe = super::shape::probe_expr(arg);
         if probe.macros > 0 || probe.unsupported > 0 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     let old_toks: Vec<String> = o_args.iter().map(tok).collect();
     let new_toks: Vec<String> = n_args.iter().map(tok).collect();
     if old_toks == new_toks {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Shared tail (slice-21): totality + backtick + re-parse +
     // byte-compare + allow-one live in `method_subline` so the sub-line
@@ -1473,15 +1498,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    a.old_method(1);\n    b.old_method(9);\n}\n";
         assert!(
-            super::try_method_single(
-                &["    a.old_method(1);"],
-                &["    a.new_method(1);"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_method_single(
+                    &["    a.old_method(1);"],
+                    &["    a.new_method(1);"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -1524,7 +1551,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1576,15 +1603,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    a.old(1);\n    b.old(9);\n}\n";
         assert!(
-            super::try_method_to_fn_single(
-                &["    a.old(1);"],
-                &["    new_fn(a, 1);"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_method_to_fn_single(
+                    &["    a.old(1);"],
+                    &["    new_fn(a, 1);"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section("f.rs", "@@ -2 +2 @@\n-    a.old(1);\n+    new_fn(a, 1);\n");
@@ -1622,7 +1651,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1657,7 +1686,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .expect("uppercase m2f single must fire");
+        .unwrap_fire("uppercase m2f single must fire");
         assert!(out.contains("- Receiver.`Old`(E0)\n"), "got: {out}");
         assert!(out.contains("+ `New`(Receiver, E0)\n"), "got: {out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("emitted patch must parse");
@@ -1666,7 +1695,12 @@ mod tests {
         assert_eq!(files["f.rs"], "fn m() {\n    New(a, first);\n}\n");
     }
 
-    fn msingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn msingle(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_method_same_literal_single(
             &[minus],
             &[plus],
@@ -1772,7 +1806,7 @@ mod tests {
             Some("fn m() {\n    agents_with_long_name_here.set(false);\n}\n"),
             &[2],
         )
-        .expect("arity-one method literal single must fire");
+        .unwrap_fire("arity-one method literal single must fire");
         assert!(out.contains("- Receiver.set(false)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.set(\"100644\")\n"), "got: {out}");
     }
@@ -1780,15 +1814,17 @@ mod tests {
     #[test]
     fn wi13_method_literal_single_twin_vetoes() {
         assert!(
-            msingle(
-                "    recv.configure(a, false);",
-                "    recv.configure(a, \"100644\");",
-                Some(
-                    "fn m() {\n    recv.configure(a, false);\n    other.configure(a, false);\n}\n"
+            matches!(
+                msingle(
+                    "    recv.configure(a, false);",
+                    "    recv.configure(a, \"100644\");",
+                    Some(
+                        "fn m() {\n    recv.configure(a, false);\n    other.configure(a, false);\n}\n"
+                    ),
+                    &[2]
+                )
+                , crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
                 ),
-                &[2]
-            )
-            .is_none(),
             "same-method same-args twin must veto"
         );
     }
@@ -1803,7 +1839,7 @@ mod tests {
             Some("fn m() {\n    recv.configure(a, false);\n    recv.configure(b, true);\n}\n"),
             &[2],
         )
-        .expect("different-args twin must not veto");
+        .unwrap_fire("different-args twin must not veto");
         assert!(out.contains("- Receiver.configure(a, false)"), "got: {out}");
     }
 
@@ -1816,7 +1852,7 @@ mod tests {
                 Some("fn m() {\n    recv.old_method(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "method delta must decline here"
         );
         assert!(
@@ -1826,7 +1862,7 @@ mod tests {
                 Some("fn m() {\n    old_recv.configure(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "receiver delta must decline here"
         );
     }
@@ -1840,7 +1876,7 @@ mod tests {
                 None,
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
         assert!(
@@ -1850,7 +1886,7 @@ mod tests {
                 Some("fn m() {\n    recv.configure(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "identity must veto"
         );
         assert!(
@@ -1860,7 +1896,7 @@ mod tests {
                 Some("fn m() {\n    recv.configure(m!(x), false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -1873,7 +1909,7 @@ mod tests {
             Some("fn m() {\n    recv.OldMethod(first);\n}\n"),
             &[2],
         )
-        .expect("uppercase method literal single must fire");
+        .unwrap_fire("uppercase method literal single must fire");
         assert!(
             out.contains("- Receiver.`OldMethod`(first)\n"),
             "got: {out}"

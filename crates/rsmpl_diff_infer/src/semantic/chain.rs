@@ -41,7 +41,7 @@ pub(crate) fn run_pair_chain(
     // `# follow=uses` when the scratch probe proves the site set, else
     // the WI-7b two-hunk verbatim fallback) — before the slot sweep, which owns
     // homogeneous header classes and never claims a `macro_rules!` line.
-    if let Some(combined) = attempt(
+    if let Some(combined) = attempt_counted(
         declined,
         "macro_rules_rename",
         super::try_macro_rules_rename(minuses, pluses, path, file_old, changed, used_rules),
@@ -96,7 +96,7 @@ pub(crate) fn run_pair_chain(
     // over hetero items, N-hole emission) — immediately after its slot
     // sibling (those own header shapes; this owns pure-attr lines, which
     // no earlier detector parses).
-    if let Some(attr) = attempt(
+    if let Some(attr) = attempt_counted(
         declined,
         "attr_sweep",
         super::try_attr_replace_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -108,7 +108,7 @@ pub(crate) fn run_pair_chain(
     // construction) — immediately after sig-evolution, before the
     // method sweeps (those own same-name call shapes, never header
     // pairs).
-    if let Some(tm) = attempt(
+    if let Some(tm) = attempt_counted(
         declined,
         "trait_method_rename",
         super::try_trait_method_rename(minuses, pluses, path, file_old, changed, used_rules),
@@ -119,7 +119,7 @@ pub(crate) fn run_pair_chain(
     // stay with the slot sweep above; unproven call sets stay
     // ordinary). Disjoint from the trait half (that one requires a
     // trait side; this one requires none).
-    if let Some(im) = attempt(
+    if let Some(im) = attempt_counted(
         declined,
         "inherent_method_rename",
         super::try_inherent_method_rename(minuses, pluses, path, file_old, changed, used_rules),
@@ -131,7 +131,7 @@ pub(crate) fn run_pair_chain(
     // scratch-apply line-equality probe). Disjoint from the trait
     // detector (those own `;`/`{` fn headers; this owns `:`/bare-ident
     // pairs) — immediately after it, before the method sweeps.
-    if let Some(member) = attempt(
+    if let Some(member) = attempt_counted(
         declined,
         "member_rename",
         super::try_member_rename(minuses, pluses, path, file_old, changed, used_rules),
@@ -145,7 +145,7 @@ pub(crate) fn run_pair_chain(
     // blocks or without a `type`/`const` head; this requires both)
     // and from definition evolution (those own same-name RHS
     // deltas; this requires a name delta).
-    if let Some(assoc) = attempt(
+    if let Some(assoc) = attempt_counted(
         declined,
         "assoc_rename",
         super::try_assoc_rename(minuses, pluses, path, file_old, changed, used_rules),
@@ -157,7 +157,7 @@ pub(crate) fn run_pair_chain(
     // member rename (those own ident deltas; this owns same-identity
     // RHS deltas), before the method sweeps (those own call shapes,
     // never `:`/payload/alias lines).
-    if let Some((evo, _)) = attempt(
+    if let Some((evo, _)) = attempt_counted(
         declined,
         "definition_evolution",
         super::try_definition_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -245,10 +245,10 @@ pub(crate) fn run_pair_chain(
     // `call_arg_template` below).
     if let Some(perm) = attempt_counted(
         declined,
-        "call_arg_template",
+        "call_perm",
         super::try_call_perm_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
-        return Some((perm, "call_arg_template"));
+        return Some((perm, "call_perm"));
     }
     // T447: same-callee trailing-arg addition (homo concrete tails
     // compress; hetero tails like 09d3446's `symlink` vs `false`
@@ -305,7 +305,7 @@ pub(crate) fn run_pair_chain(
     // emission + whole-file totality) — after the whole-line general
     // sweep (those own whole-line expressions; this owns control
     // fragments no earlier detector parses), before the peel sweep.
-    if let Some(control) = attempt(
+    if let Some(control) = attempt_counted(
         declined,
         "control_template",
         super::try_control_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -315,7 +315,7 @@ pub(crate) fn run_pair_chain(
     // T441: hetero-arg array-head-peel call migration
     // (`f(D, &[H, M, T…])` → `g(D, M, &[T…])` per-tail-arity groups);
     // all-identical classes stay for the tighter verbatim sweep below.
-    if let Some(peel) = attempt(
+    if let Some(peel) = attempt_counted(
         declined,
         "call_peel",
         super::try_call_peel_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -349,7 +349,7 @@ pub(crate) fn run_pair_chain(
     // the type sweep (that owns per-site-preserved-init classes; this
     // owns per-site init deltas), before the verbatim stage. Disjoint
     // from both let slices by construction.
-    if let Some(joint) = attempt(
+    if let Some(joint) = attempt_counted(
         declined,
         "let_template",
         super::try_let_template_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -363,14 +363,14 @@ pub(crate) fn run_pair_chain(
     // `let (P1, P0) = E0;`). After the typed template (those own
     // ascribed classes; this declines any ascribed side), before the
     // sequence sweep (which owns multi-line windows, never singles).
-    if let Some(untyped) = attempt(
+    if let Some(untyped) = attempt_counted(
         declined,
         "let_template",
         super::try_untyped_let_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((untyped, "let_template"));
     }
-    if let Some(swap) = attempt(
+    if let Some(swap) = attempt_counted(
         declined,
         "let_template",
         super::try_pat_swap_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -382,7 +382,7 @@ pub(crate) fn run_pair_chain(
     // sweeps (those own whole-class templates; this owns multi-line
     // windows the singles cannot express), before the fold (which owns
     // call-spine strips, never statement windows).
-    if let Some(seq) = attempt(
+    if let Some(seq) = attempt_counted(
         declined,
         "sequence",
         super::try_sequence_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -393,7 +393,7 @@ pub(crate) fn run_pair_chain(
     // → `x`, `# repeat`) — after the type sweep (those own whole-statement
     // templates; this owns call-spine strips), before the verbatim stage
     // in the caller. No earlier detector claims a call→non-call pair.
-    if let Some(fold) = attempt(
+    if let Some(fold) = attempt_counted(
         declined,
         "repeat_fold",
         super::try_repeat_fold_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -405,7 +405,7 @@ pub(crate) fn run_pair_chain(
     // the kept layers). After the fold (full strips stay folded;
     // disjoint by construction: the fold declines partial pairs and
     // the strip declines full strips), before the verbatim stage.
-    if let Some(strip) = attempt(
+    if let Some(strip) = attempt_counted(
         declined,
         "partial_strip",
         super::try_partial_strip_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -415,7 +415,7 @@ pub(crate) fn run_pair_chain(
     // WI-5d: single-block hetero `let` run (one contiguous K = 2–4
     // window, within-pair abstraction) — every earlier detector keeps
     // its classes (this owns only runs declined by all of them).
-    if let Some(single) = attempt(
+    if let Some(single) = attempt_counted(
         declined,
         "single_block",
         super::try_single_block_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -429,7 +429,7 @@ pub(crate) fn run_pair_chain(
     // other delta combination declines and the section falls through
     // to the partition literals. Strict T375 downstream owns the byte
     // guard, like every chain arm.
-    if let Some(window) = attempt(
+    if let Some(window) = attempt_counted(
         declined,
         "single_block",
         super::try_hetero_pair_window_single(minuses, pluses, path, file_old, changed, used_rules),
@@ -442,7 +442,7 @@ pub(crate) fn run_pair_chain(
     // detectors (calls, lets, windows) keep their classes first; the
     // verbatim stage in the caller owns all-identical lines (T422,
     // declined inside the detector).
-    if let Some(frame) = attempt(
+    if let Some(frame) = attempt_counted(
         declined,
         "literal_frame",
         super::try_literal_frame_sweep(minuses, pluses, path, file_old, changed, used_rules),

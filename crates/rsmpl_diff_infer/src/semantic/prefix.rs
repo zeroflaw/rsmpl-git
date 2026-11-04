@@ -110,15 +110,21 @@ pub(crate) fn try_use_prefix_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
-    let minus_segs = parse_use_path(minuses[0])?;
-    let plus_segs = parse_use_path(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(minus_segs) = parse_use_path(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(plus_segs) = parse_use_path(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if minus_segs.len() != plus_segs.len() || minus_segs.len() < 3 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Shared parent (longest common prefix), exactly one renamed
     // segment, textually equal non-empty tail.
@@ -130,14 +136,23 @@ pub(crate) fn try_use_prefix_single(
     // all-equal case exits here via `parent + 1 >= len`), so the
     // renamed segments differ and only the tail needs comparing.
     if parent < 1 || parent + 1 >= minus_segs.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if minus_segs[parent + 1..] != plus_segs[parent + 1..] {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let old_prefix: Vec<String> = minus_segs[..parent + 1].to_vec();
-    if !crate::totality::use_holds(Some(pre), &old_prefix, minuses, changed) {
-        return None;
+    match crate::totality_counted::use_verdict(Some(pre), &old_prefix, minuses, changed) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let new_prefix: Vec<String> = plus_segs[..parent + 1].to_vec();
     let minus_tpl = format!("use {}", old_prefix.join("::"));
@@ -145,7 +160,7 @@ pub(crate) fn try_use_prefix_single(
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let checkpoint = used_rules.len();
     let rule = super::unique_rule(
@@ -159,9 +174,9 @@ pub(crate) fn try_use_prefix_single(
     // but the hunk header is new — never emit a guess.
     if rsmpl_patch::parse_patch(&hunk).is_err() {
         used_rules.truncate(checkpoint);
-        return None;
+        return super::prov::Counted::Miss;
     }
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// Parse one diff line as a `use` path: strip one trailing `;`,
@@ -242,7 +257,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("single must fire");
+        .unwrap_fire("single must fire");
         assert!(out.contains("- use crate::old\n"), "got:\n{out}");
         assert!(out.contains("+ use crate::new\n"), "got:\n{out}");
         assert!(
@@ -267,42 +282,48 @@ mod tests {
         let pre2 = "use crate::old::Thing;\nuse crate::old::Other;\n";
         let mut used = Vec::new();
         assert!(
-            try_use_prefix_single(
-                &["use crate::old::Thing;"],
-                &["use crate::new::Thing;"],
-                "f.rs",
-                Some(pre2),
-                &[1],
-                &mut used,
-            )
-            .is_none(),
+            matches!(
+                try_use_prefix_single(
+                    &["use crate::old::Thing;"],
+                    &["use crate::new::Thing;"],
+                    "f.rs",
+                    Some(pre2),
+                    &[1],
+                    &mut used,
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin prefix must veto"
         );
         // Tail-empty leaf renames stay ordinary (sweep parity: `m.len() > k`).
         let pre_leaf = "use crate::old_mod;\n";
         assert!(
-            try_use_prefix_single(
-                &["use crate::old_mod;"],
-                &["use crate::new_mod;"],
-                "f.rs",
-                Some(pre_leaf),
-                &[1],
-                &mut Vec::new(),
-            )
-            .is_none(),
+            matches!(
+                try_use_prefix_single(
+                    &["use crate::old_mod;"],
+                    &["use crate::new_mod;"],
+                    "f.rs",
+                    Some(pre_leaf),
+                    &[1],
+                    &mut Vec::new(),
+                ),
+                crate::semantic::prov::Counted::Miss
+            ),
             "leaf rename must stay ordinary"
         );
         // Single-segment prefixes never infer (too broad).
         assert!(
-            try_use_prefix_single(
-                &["use crate;"],
-                &["use other;"],
-                "f.rs",
-                Some("use crate;\n"),
-                &[1],
-                &mut Vec::new(),
-            )
-            .is_none(),
+            matches!(
+                try_use_prefix_single(
+                    &["use crate;"],
+                    &["use other;"],
+                    "f.rs",
+                    Some("use crate;\n"),
+                    &[1],
+                    &mut Vec::new(),
+                ),
+                crate::semantic::prov::Counted::Miss
+            ),
             "single segment must stay ordinary"
         );
         // Fn-body `use` pairs stay ordinary (SPEC 14.9: only file-
@@ -310,29 +331,33 @@ mod tests {
         // counts them, so the count misses and vetoes).
         let pre_body = "fn m() {\n    use crate::old::Thing;\n}\n";
         assert!(
-            try_use_prefix_single(
-                &["    use crate::old::Thing;"],
-                &["    use crate::new::Thing;"],
-                "f.rs",
-                Some(pre_body),
-                &[2],
-                &mut Vec::new(),
-            )
-            .is_none(),
+            matches!(
+                try_use_prefix_single(
+                    &["    use crate::old::Thing;"],
+                    &["    use crate::new::Thing;"],
+                    "f.rs",
+                    Some(pre_body),
+                    &[2],
+                    &mut Vec::new(),
+                ),
+                crate::semantic::prov::Counted::Totality { found: 0, want: 1 }
+            ),
             "fn-body use must stay ordinary"
         );
         // Parent mismatch (two renamed segments) stays ordinary.
         let pre_mm = "use crate::old::Thing;\n";
         assert!(
-            try_use_prefix_single(
-                &["use crate::old::Thing;"],
-                &["use other::new::Thing;"],
-                "f.rs",
-                Some(pre_mm),
-                &[1],
-                &mut Vec::new(),
-            )
-            .is_none(),
+            matches!(
+                try_use_prefix_single(
+                    &["use crate::old::Thing;"],
+                    &["use other::new::Thing;"],
+                    "f.rs",
+                    Some(pre_mm),
+                    &[1],
+                    &mut Vec::new(),
+                ),
+                crate::semantic::prov::Counted::Miss
+            ),
             "parent mismatch must stay ordinary"
         );
     }
@@ -351,7 +376,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("grouped tail must fire");
+        .unwrap_fire("grouped tail must fire");
         assert!(out.contains("- use crate::old\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&format!("{}\n{out}", crate::git_header("f.rs")))
             .expect("emission must parse with header");

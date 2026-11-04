@@ -304,21 +304,25 @@ pub(crate) fn try_subline_call_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line (and T449 `let`-init bare-call) pairs belong to the
     // slice-1 single — decline here even when it vetoed.
     if parse_call_pair(minuses[0], pluses[0]).is_some() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_bare_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_bare_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let (old_cal, new_cal, arity) = (
         sites[0].old_cal.clone(),
@@ -326,10 +330,10 @@ pub(crate) fn try_subline_call_single(
         sites[0].arity,
     );
     if old_cal == new_cal {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !crate::totality::template_expr_holds(path, file_old, &call_template(&old_cal, arity), 1) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut vars = Vec::with_capacity(arity);
     for i in 0..arity {
@@ -345,13 +349,13 @@ pub(crate) fn try_subline_call_single(
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_cal}_to_{new_cal}"));
     // Allow-one: directive-free ranged hunk (slice-1 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-23: sub-line bare-arg-template wrap single (N=1) under
@@ -384,13 +388,15 @@ pub(crate) fn try_subline_bare_wrap_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line-owned pairs belong to the slice-6 single — decline
     // here even when it vetoed (shared counter, no bypass). Callee
     // deltas never parse here as owned (the extractor vetoes them).
@@ -400,12 +406,14 @@ pub(crate) fn try_subline_bare_wrap_single(
         if o_cal == n_cal
             && super::arg_template::antiunify_call_args_single(&o_args, &n_args).is_some()
         {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
-    let sites = super::subline::extract_bare_wrap_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_bare_wrap_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let site = &sites[0];
     // WI-7b: uppercase callee rides backticks (literal), else it
@@ -422,10 +430,23 @@ pub(crate) fn try_subline_bare_wrap_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     // T361 byte gate: the sub-expression rewrite must reproduce the
     // native line swap byte-identical.
@@ -438,13 +459,13 @@ pub(crate) fn try_subline_bare_wrap_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{}_wrap", site.cal));
     // Allow-one: directive-free ranged hunk (slices-1-6 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// Shared emission for the whole-line and sub-line bare-call paths
@@ -927,7 +948,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -967,7 +988,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -986,7 +1007,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -1002,7 +1023,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1173,15 +1194,17 @@ mod tests {
         // raises as a WI-6-slice-1 literal verbatim single.
         let pre = "fn m() {\n    foo(bar(alpha_argument));\n    bar(different_value);\n}\n";
         assert!(
-            super::try_subline_bare_wrap_single(
-                &["    foo(bar(alpha_argument));"],
-                &["    foo(bar(alpha_argument.clone()));"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_bare_wrap_single(
+                    &["    foo(bar(alpha_argument));"],
+                    &["    foo(bar(alpha_argument.clone()));"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -1240,7 +1263,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -1260,7 +1283,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "wrap core must decline callee deltas"
         );
         let raw = section(
@@ -1296,7 +1319,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "wrap core must decline pure-concrete deltas"
         );
         let raw = section(
@@ -1325,7 +1348,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "wrap core must decline permuted holes"
         );
         let raw = section(
@@ -1357,7 +1380,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1394,7 +1417,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "wrap core must decline two-site lines"
         );
         let raw = section(
@@ -1430,7 +1453,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "wrap core must decline hetero partial claims"
         );
         let raw = section(

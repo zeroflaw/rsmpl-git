@@ -421,6 +421,9 @@ pub(crate) fn method_verdict(
 /// N-site method totality (m2f + m2m share the minus shape): `method`
 /// with `arity` args occurs exactly `minuses.len()` times. All receivers
 /// counted (incl `&`-wrapped — conservative).
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn method_holds(
     file_old: Option<&str>,
     method: &str,
@@ -441,6 +444,9 @@ pub(crate) fn method_holds(
 /// concrete-literal pattern); the arg tuple is the precise pre-image.
 /// All receivers counted (incl `&`-wrapped -- conservative, like
 /// `method_holds`).
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn method_literal_holds(
     file_old: Option<&str>,
     method: &str,
@@ -567,6 +573,9 @@ pub(crate) fn let_untyped_verdict(
 /// never match, `match_local` — and `E0` requires an init), so the
 /// count is exactly the template's match domain. Same opaque handling
 /// as the other counters.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn let_untyped_holds(
     file_old: Option<&str>,
     minuses: &[&str],
@@ -589,6 +598,9 @@ pub(crate) fn let_untyped_holds(
 /// veto: the engine never matches inside macros or string literals, so
 /// hidden twins never count; nested matches count outer-only
 /// (contained skips), exactly like the real sweep rewrites.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn template_type_holds(
     path: &str,
     file_old: Option<&str>,
@@ -689,6 +701,9 @@ pub(crate) fn template_pair_holds(
 /// keeps the legacy allow; probe parse/apply failure vetoes. Opaque
 /// positions need no extra veto: the engine never matches inside
 /// macros or string literals, so hidden twins never count.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn template_repeat_holds(
     path: &str,
     file_old: Option<&str>,
@@ -728,6 +743,10 @@ pub(crate) fn template_repeat_holds(
 /// keeps the legacy allow; probe parse/apply failure vetoes. Opaque
 /// positions need no extra veto: sequence windows only match plain
 /// `let` statements, which never sit inside macros or string literals.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted::template_sequence_counts`; kept for the
+/// single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn template_sequence_holds(
     path: &str,
     file_old: Option<&str>,
@@ -860,6 +879,9 @@ pub(crate) fn template_fn_holds(
 /// leading segments equal `old_prefix` occur exactly `minuses.len()`
 /// times (tails preserved; group members each count). Fn-body uses never
 /// match (SPEC 14.9) and are not counted.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn use_holds(
     file_old: Option<&str>,
     old_prefix: &[String],
@@ -995,6 +1017,9 @@ pub(crate) fn turbo_concrete_holds(
 /// matches all three delimiters, probed) occur exactly `minuses.len()`
 /// times. Qualified twins (`crate::old!`) never match the bare pattern
 /// (probed) so they never count.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn macro_holds(
     file_old: Option<&str>,
     old_name: &str,
@@ -1034,6 +1059,9 @@ pub(crate) fn macro_holds(
 /// delimiter, any body — the emitted `...` matches all, probed) occur
 /// exactly `minuses.len()` times. Bare twins never match the qualified
 /// pattern and vice versa (probed), so only exact-path hits count.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted` verdicts; kept for the single/section drivers.
+#[allow(dead_code)]
 pub(crate) fn qualified_macro_holds(
     file_old: Option<&str>,
     old_path: &str,

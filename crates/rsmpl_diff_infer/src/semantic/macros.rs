@@ -142,26 +142,54 @@ pub(crate) fn try_macro_rename_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
-    let (old_path, new_path) = parse_macro_pair(minuses[0], pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((old_path, new_path)) = parse_macro_pair(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if old_path == new_path {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (o_pre, o_last) = split_macro_path(&old_path)?;
-    let (n_pre, n_last) = split_macro_path(&new_path)?;
+    let Some((o_pre, o_last)) = split_macro_path(&old_path) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((n_pre, n_last)) = split_macro_path(&new_path) else {
+        return super::prov::Counted::Miss;
+    };
     if o_pre != n_pre || o_last == n_last {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if o_pre.is_empty() {
-        if !crate::totality::macro_holds(file_old, &o_last, minuses, changed) {
-            return None;
+        match crate::totality_counted::macro_verdict(file_old, &o_last, false, minuses, changed) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            crate::totality_counted::FamilyVerdict::Unproven => {
+                return super::prov::Counted::Miss;
+            }
         }
-    } else if !crate::totality::qualified_macro_holds(file_old, &old_path, minuses, changed) {
-        return None;
+    } else {
+        match crate::totality_counted::macro_verdict(file_old, &old_path, true, minuses, changed) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            crate::totality_counted::FamilyVerdict::Unproven => {
+                return super::prov::Counted::Miss;
+            }
+        }
     }
     let checkpoint = used_rules.len();
     let flat = |p: &str| p.replace("::", "_");
@@ -179,13 +207,13 @@ pub(crate) fn try_macro_rename_single(
     // spellings, but the hunk header is new — never emit a guess.
     if rsmpl_patch::parse_patch(&hunk).is_err() {
         used_rules.truncate(checkpoint);
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !macro_single_reproduces(pre, path, &hunk, changed, pluses) {
         used_rules.truncate(checkpoint);
-        return None;
+        return super::prov::Counted::Miss;
     }
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// T361 byte-compare probe for the N=1 macro-rename single (the
@@ -1088,7 +1116,7 @@ mod tests {
                 &[2],
                 &mut Vec::new(),
             )
-            .is_none(),
+            .is_miss(),
             "same-path interior must decline"
         );
         // Prefix mismatch (two renamed segments) stays ordinary.
@@ -1101,7 +1129,7 @@ mod tests {
                 &[2],
                 &mut Vec::new(),
             )
-            .is_none(),
+            .is_miss(),
             "prefix mismatch must decline"
         );
     }
@@ -1118,7 +1146,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .expect("qualified single must fire");
+        .unwrap_fire("qualified single must fire");
         assert!(out.contains("- crate::old_m!(...)\n"), "got:\n{out}");
         assert!(out.contains("+ crate::new_m!(...)\n"), "got:\n{out}");
         assert!(out.contains("# macro=token_tree\n"), "got:\n{out}");

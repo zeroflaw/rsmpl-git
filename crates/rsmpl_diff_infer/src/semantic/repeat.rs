@@ -38,33 +38,50 @@ pub(crate) fn try_repeat_fold_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // All-byte-identical classes stay for the tighter verbatim sweep
     // (T422 precedent — verbatim wins identical runs byte-for-byte).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut callee: Option<String> = None;
     let mut nested = false;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         if m.trim_start().starts_with('&') || p.trim_start().starts_with('&') {
-            return None;
+            return super::prov::Counted::Miss;
         }
-        let (c, layers) = peel_layers(m, p)?;
+        let Some((c, layers)) = peel_layers(m, p) else {
+            return super::prov::Counted::Miss;
+        };
         if callee.as_ref().is_some_and(|have| *have != c) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         nested |= layers >= 2;
         callee = Some(c);
     }
-    let callee = callee?;
+    let Some(callee) = callee else {
+        return super::prov::Counted::Miss;
+    };
     let lit = super::shape::literal_path_last(&callee);
     let minus_template = format!("{lit}(E0)");
-    if !crate::totality::template_repeat_holds(path, file_old, &minus_template, minuses.len()) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_repeat_counts(path, file_old, &minus_template),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(used_rules, &format!("repeat_{callee}_fold"));
     let mut hunk = crate::emission_header(path, &rule, changed);
@@ -72,7 +89,7 @@ pub(crate) fn try_repeat_fold_sweep(
         hunk.push_str("# repeat\n");
     }
     hunk.push_str(&format!("- {minus_template}\n+ E0\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// N-site (N ≥ 2) uniform one-layer partial strip (WI-1d): every pair
@@ -102,51 +119,67 @@ pub(crate) fn try_partial_strip_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut callee: Option<String> = None;
     let mut minus_depth: Option<usize> = None;
     let mut plus_depth: Option<usize> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         if m.trim_start().starts_with('&') || p.trim_start().starts_with('&') {
-            return None;
+            return super::prov::Counted::Miss;
         }
-        let (c, md, pd) = peel_one_layer(m, p)?;
+        let Some((c, md, pd)) = peel_one_layer(m, p) else {
+            return super::prov::Counted::Miss;
+        };
         if callee.as_ref().is_some_and(|have| *have != c) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if minus_depth.is_some_and(|have| have != md) || plus_depth.is_some_and(|have| have != pd) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         callee = Some(c);
         minus_depth = Some(md);
         plus_depth = Some(pd);
     }
-    let (callee, md, pd) = (callee?, minus_depth?, plus_depth?);
+    let (Some(callee), Some(md), Some(pd)) = (callee, minus_depth, plus_depth) else {
+        return super::prov::Counted::Miss;
+    };
     if md != pd + 1 || md < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let lit = super::shape::literal_path_last(&callee);
     let minus_template = nest_callee(&lit, md);
     let plus_template = nest_callee(&lit, pd);
-    if !crate::totality::template_pair_holds(
-        path,
+    match crate::totality_counted::engine_verdict(
         file_old,
-        &minus_template,
-        &plus_template,
+        crate::totality_counted::template_pair_counts(
+            path,
+            file_old,
+            &minus_template,
+            &plus_template,
+        ),
         minuses.len(),
     ) {
-        return None;
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(used_rules, &format!("strip_{callee}"));
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_template}\n+ {plus_template}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice 1: single-pair full-strip fold (N = 1) under the
@@ -169,26 +202,43 @@ pub(crate) fn try_repeat_fold_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     let m = minuses[0];
     let p = pluses[0];
     if m.trim_start().starts_with('&') || p.trim_start().starts_with('&') {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (callee, layers) = peel_layers(m, p)?;
+    let Some((callee, layers)) = peel_layers(m, p) else {
+        return super::prov::Counted::Miss;
+    };
     let lit = super::shape::literal_path_last(&callee);
     let minus_template = format!("{lit}(E0)");
-    if !crate::totality::template_repeat_holds(path, Some(pre), &minus_template, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_repeat_counts(path, Some(pre), &minus_template),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !repeat_single_reproduces(path, pre, changed[0], m, p, &minus_template, "E0") {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("repeat_{callee}_fold"));
     let header = crate::emission_header(path, &rule, changed);
@@ -198,7 +248,7 @@ pub(crate) fn try_repeat_fold_single(
         header.replace("# allow=many\n", "")
     };
     hunk.push_str(&format!("- {minus_template}\n+ E0\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// T361 byte-compare pre-reservation for the fold single (WI-7 slice 1):
@@ -834,15 +884,17 @@ mod tests {
             "fn a(x: i32) -> i32 {\n    let v = Box::new(Box::new(x));\n    v\n}\nfn b(y: i32) -> i32 {\n    let w = Box::new(y);\n    w\n}\n",
         )]);
         assert!(
-            super::try_repeat_fold_single(
-                &["    let v = Box::new(Box::new(x));"],
-                &["    let v = x;"],
-                "f.rs",
-                pre.get("f.rs").map(String::as_str),
-                &[2],
-                &mut Vec::new(),
-            )
-            .is_none(),
+            matches!(
+                super::try_repeat_fold_single(
+                    &["    let v = Box::new(Box::new(x));"],
+                    &["    let v = x;"],
+                    "f.rs",
+                    pre.get("f.rs").map(String::as_str),
+                    &[2],
+                    &mut Vec::new(),
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin must veto the holed fold single"
         );
     }
@@ -869,7 +921,7 @@ mod tests {
             "    let v = Box::new(x);",
             &pre
         )
-        .is_none());
+        .is_miss());
         // Plus still holds the callee — repeat would fold past post.
         let pre = pre_one("let v = Box::new(wrap(Box::new(x)));");
         assert!(direct(
@@ -877,7 +929,7 @@ mod tests {
             "    let v = wrap(Box::new(x));",
             &pre
         )
-        .is_none());
+        .is_miss());
         // `&`-led, turbofish, leading-`::` decline.
         let pre = pre_one("let v = &Box::new(Box::new(x));");
         assert!(direct(
@@ -885,24 +937,24 @@ mod tests {
             "    let v = &x;",
             &pre
         )
-        .is_none());
+        .is_miss());
         let pre = pre_one("let v = Box::<u8>::new(Box::<u8>::new(x));");
         assert!(direct(
             "    let v = Box::<u8>::new(Box::<u8>::new(x));",
             "    let v = x;",
             &pre
         )
-        .is_none());
+        .is_miss());
         let pre = pre_one("let v = ::Box::new(::Box::new(x));");
         assert!(direct(
             "    let v = ::Box::new(::Box::new(x));",
             "    let v = x;",
             &pre
         )
-        .is_none());
+        .is_miss());
         // Array len-delta is not a call fold (WI-7 residue: 63/118).
         let pre = pre_one("let buf = [7u8; 8];");
-        assert!(direct("    let buf = [7u8; 8];", "    let buf = [7u8; 16];", &pre).is_none());
+        assert!(direct("    let buf = [7u8; 8];", "    let buf = [7u8; 16];", &pre).is_miss());
     }
 
     fn infer_semantic_with_pre(raw: &str, pre: &HashMap<String, String>) -> String {

@@ -381,16 +381,18 @@ pub(crate) fn try_attr_replace_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<(String, &'static str)> {
+) -> super::prov::Counted<(String, &'static str)> {
     if minuses.len() != pluses.len() || minuses.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     let Ok(file) = syn::parse_str::<syn::File>(pre) else {
-        return None;
+        return super::prov::Counted::Miss;
     };
     let owners = collect_owners(&file);
     // Single-line attr pairs only (multi-line spellings never match the
@@ -398,16 +400,16 @@ pub(crate) fn try_attr_replace_sweep(
     let mut pairs: Vec<(String, String)> = Vec::with_capacity(minuses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         if !is_attr_line(m) || !is_attr_line(p) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         pairs.push((key_attr(m), key_attr(p)));
     }
     let (m0, p0) = pairs[0].clone();
     if m0 == p0 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if pairs.iter().any(|(m, p)| m != &m0 || p != &p0) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // One owner per pair, one family for the class. The N = 1 arm
     // below needs the owner's span for its ranged diet header.
@@ -415,9 +417,11 @@ pub(crate) fn try_attr_replace_sweep(
     let mut names: Vec<String> = Vec::with_capacity(pairs.len());
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(pairs.len());
     for line in changed.iter().copied() {
-        let owner = owner_at(&owners, line)?;
+        let Some(owner) = owner_at(&owners, line) else {
+            return super::prov::Counted::Miss;
+        };
         if family.as_ref().is_some_and(|f| *f != owner.family) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         family = Some(owner.family.clone());
         names.push(owner.name.clone());
@@ -427,7 +431,10 @@ pub(crate) fn try_attr_replace_sweep(
         mode: AttrMode::Replace,
         minus: vec![m0],
         plus: vec![p0],
-        family: family?,
+        family: match family {
+            Some(v) => v,
+            None => return super::prov::Counted::Miss,
+        },
     };
     // Candidates reserve no rules: the probe gate below drops violators
     // first, so dropped classes burn no `rN` names (peel precedent).
@@ -439,7 +446,17 @@ pub(crate) fn try_attr_replace_sweep(
         let l = changed[i];
         ordinary.push_str(&format!("@@ -{l},1 +{l},1 @@\n-{m}\n+{p}\n"));
     }
-    let lines = probe_tiered(path, pre, &ordinary, &class, &names, pairs.len())?;
+    let Some(lines) = probe_tiered(path, pre, &ordinary, &class, &names, pairs.len()) else {
+        match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            _ => return super::prov::Counted::Miss,
+        }
+    };
     let rule = unique_rule(used_rules, "attr_sweep");
     // N = 1 emits the ranged diet: the `syn` owner span always contains
     // both pattern lines (changed attr + owner header, stacked attrs
@@ -465,7 +482,7 @@ pub(crate) fn try_attr_replace_sweep(
         crate::emission_header(path, &rule, &[])
     };
     out.push_str(&lines);
-    Some((out, "attr_sweep"))
+    super::prov::Counted::Fire((out, "attr_sweep"))
 }
 
 /// Chain-link section entry for the non-whole path: insert/delete/
@@ -806,7 +823,7 @@ mod tests {
         let mut used = Vec::new();
         let (out, detector) =
             try_attr_replace_sweep(&minuses, &pluses, "f.rs", Some(pre), &[1, 3], &mut used)
-                .expect("homogeneous replace must fire");
+                .unwrap_fire("homogeneous replace must fire");
         assert_eq!(detector, "attr_sweep");
         assert!(out.contains("- struct N\n"), "got:\n{out}");
         assert!(out.contains("+ #[derive(Debug, Clone)]\n"), "got:\n{out}");
@@ -841,7 +858,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("N=1 item replace must fire");
+        .unwrap_fire("N=1 item replace must fire");
         assert_eq!(detector, "attr_sweep");
         // Concrete owner name — hetero `N` is impossible with one site.
         // Ranged diet (fidelity fix): owner span 1-2, no `# sweep`.
@@ -871,7 +888,7 @@ mod tests {
         // stays authoritative (whatever it proves, the range covers).
         let pre = "#[derive(Debug)]\n#[allow(dead_code)]\nstruct S { x: i32 }\n";
         let mut used = Vec::new();
-        let Some((out, detector)) = try_attr_replace_sweep(
+        let crate::semantic::prov::Counted::Fire((out, detector)) = try_attr_replace_sweep(
             &["#[derive(Debug)]"],
             &["#[derive(Clone)]"],
             "f.rs",
@@ -903,20 +920,23 @@ mod tests {
         // A same-name twin matches the concrete header and vetoes
         // (`matches == 2 != 1`) — the N=1 uniqueness proof failing loud
         // (the section-entry `section_singleton_nested_same_name_twin_vetoes`
-        // pin's pair-chain twin).
+        // pin's pair-chain twin). WI-4 slice 2b-rest-b: the veto names
+        // its counts.
         let twin_pre = "mod m {\n    #[derive(Debug)]\n    pub struct S { x: i32 }\n}\n#[derive(Debug)]\nstruct S { y: i32 }\n";
         let mut used = Vec::new();
         assert!(
-            try_attr_replace_sweep(
-                &["#[derive(Debug)]"],
-                &["#[derive(Clone)]"],
-                "f.rs",
-                Some(twin_pre),
-                &[2],
-                &mut used,
-            )
-            .is_none(),
-            "same-name twin must veto the singleton"
+            matches!(
+                try_attr_replace_sweep(
+                    &["#[derive(Debug)]"],
+                    &["#[derive(Clone)]"],
+                    "f.rs",
+                    Some(twin_pre),
+                    &[2],
+                    &mut used,
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
+            "same-name twin must veto the singleton with its counts"
         );
         assert!(used.is_empty());
     }
@@ -938,7 +958,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("distinct-name twin must not veto the singleton");
+        .unwrap_fire("distinct-name twin must not veto the singleton");
         assert_eq!(detector, "attr_sweep");
         assert!(out.contains("@@ -1,2 @@ rule=r1\n"), "got:\n{out}");
         assert!(out.contains("- struct S\n"), "got:\n{out}");
@@ -976,7 +996,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("fn singleton must pass the detector probe");
+        .unwrap_fire("fn singleton must pass the detector probe");
         assert_eq!(detector, "attr_sweep");
         // Ranged owner-span diet (fn span 1-2), same as items: what keeps
         // fn singles ordinary downstream is the byte guard alone.
@@ -1002,7 +1022,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .expect("paren-attr fn singleton must pass the detector probe");
+        .unwrap_fire("paren-attr fn singleton must pass the detector probe");
         assert_eq!(detector, "attr_sweep");
         assert!(out.contains("- fn solo(...) {"), "got:\n{out}");
         assert!(out.contains("+ #[inline(never)]"), "got:\n{out}");
@@ -1022,7 +1042,7 @@ mod tests {
             &[1, 3],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
         // Mixed families decline (fn + struct share no emission).
         let mixed_pre = "#[derive(Debug)]\nstruct A {}\n#[derive(Debug)]\nfn b() {}\n";
@@ -1035,7 +1055,7 @@ mod tests {
             &[1, 3],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
         // No pre-image: honest decline (owners unprovable).
         let mut used = Vec::new();
@@ -1047,26 +1067,29 @@ mod tests {
             &[1, 3],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 
     #[test]
     fn untouched_twin_vetoes_but_migrated_site_does_not() {
-        // An untouched same-state twin matches the probe and vetoes.
+        // An untouched same-state twin matches the probe and vetoes
+        // (3 file-wide `#[derive(Debug)]` sites vs 2 claimed).
         let twin_pre = "#[derive(Debug)]\nstruct A {}\n#[derive(Debug)]\nstruct B {}\n#[derive(Debug)]\nstruct C {}\n";
         let mut used = Vec::new();
         assert!(
-            try_attr_replace_sweep(
-                &["#[derive(Debug)]", "#[derive(Debug)]"],
-                &["#[derive(Debug, Clone)]", "#[derive(Debug, Clone)]"],
-                "f.rs",
-                Some(twin_pre),
-                &[1, 3],
-                &mut used,
-            )
-            .is_none(),
-            "twin at line 5 must veto"
+            matches!(
+                try_attr_replace_sweep(
+                    &["#[derive(Debug)]", "#[derive(Debug)]"],
+                    &["#[derive(Debug, Clone)]", "#[derive(Debug, Clone)]"],
+                    "f.rs",
+                    Some(twin_pre),
+                    &[1, 3],
+                    &mut used,
+                ),
+                crate::semantic::prov::Counted::Totality { found: 3, want: 2 }
+            ),
+            "twin at line 5 must veto with its counts"
         );
         assert!(used.is_empty());
         // An already-migrated site elsewhere in the file is skipped by

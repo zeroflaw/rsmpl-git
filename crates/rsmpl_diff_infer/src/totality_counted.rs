@@ -206,6 +206,217 @@ pub(crate) fn engine_verdict(
     }
 }
 
+/// WI-4 slice 2b-rest-b: sequence engine count
+/// (`template_sequence_holds` prescription). `None` pre-image is not
+/// callable — callers map it to `Holds` before invoking (legacy allow).
+pub(crate) fn template_sequence_counts(
+    path: &str,
+    file_old: Option<&str>,
+    minus_tpls: &[String],
+    plus_tpls: &[String],
+) -> Option<usize> {
+    let pre = file_old?;
+    if minus_tpls.len() != plus_tpls.len() || !(2..=4).contains(&minus_tpls.len()) {
+        return None;
+    }
+    if minus_tpls.iter().any(|l| l.contains('\n')) || plus_tpls.iter().any(|l| l.contains('\n')) {
+        return None;
+    }
+    let mut probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n",
+        crate::git_header(path)
+    );
+    for m in minus_tpls {
+        probe.push_str(&format!("- {m}\n"));
+    }
+    for p in plus_tpls {
+        probe.push_str(&format!("+ {p}\n"));
+    }
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return None;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return None;
+    };
+    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+}
+
+/// WI-4 slice 2b-rest-b: fold engine count (`template_repeat_holds`
+/// prescription: `# sweep` + `# repeat`, `- M` / `+ E0`). `None`
+/// pre-image is not callable — callers map it to `Holds` first.
+pub(crate) fn template_repeat_counts(
+    path: &str,
+    file_old: Option<&str>,
+    minus_template: &str,
+) -> Option<usize> {
+    let pre = file_old?;
+    if minus_template.contains('\n') {
+        return None;
+    }
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# repeat\n- {minus_template}\n+ E0\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return None;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return None;
+    };
+    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+}
+
+/// WI-4 slice 2b-rest-b: generic expression engine count
+/// (`template_expr_holds` prescription: `- M` / `+ M` self-rewrite
+/// under `# sweep` + `# optional`, engine-applied to a scratch tree,
+/// match count must equal `n`). `None` pre-image is not callable —
+/// callers map it to `Holds` before invoking (legacy allow).
+pub(crate) fn template_expr_counts(
+    path: &str,
+    file_old: Option<&str>,
+    minus_template: &str,
+) -> Option<usize> {
+    let pre = file_old?;
+    if minus_template.contains('\n') {
+        return None;
+    }
+    let probe = format!(
+        "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n- {minus_template}\n+ {minus_template}\n",
+        crate::git_header(path)
+    );
+    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
+        return None;
+    };
+    let mut files = std::collections::HashMap::new();
+    files.insert(path.to_string(), pre.to_string());
+    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
+        return None;
+    };
+    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+}
+
+/// WI-4 slice 2b-rest-b: peel verdict (mirrors `peel_holds` — the
+/// `cal`/`head`/`len` syntax walk plus the line-aware opaque arm).
+pub(crate) fn peel_verdict(
+    file_old: Option<&str>,
+    cal: &str,
+    head: &str,
+    len: usize,
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(file) = parse_pre(file_old) else {
+        if file_old.is_none() {
+            return FamilyVerdict::Holds;
+        }
+        return FamilyVerdict::Unproven;
+    };
+    struct P<'a> {
+        cal: &'a str,
+        head: &'a str,
+        len: usize,
+        count: usize,
+    }
+    impl<'ast> Visit<'ast> for P<'_> {
+        fn visit_expr(&mut self, node: &'ast syn::Expr) {
+            if let syn::Expr::Call(call) = node {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    if p.qself.is_none()
+                        && p.path.leading_colon.is_none()
+                        && p.path.segments.len() == 1
+                        && p.path.segments[0].ident == self.cal
+                        && matches!(p.path.segments[0].arguments, syn::PathArguments::None)
+                        && call.args.len() == 2
+                    {
+                        let mut args = call.args.iter();
+                        let _first = args.next();
+                        if let Some(syn::Expr::Reference(r)) = args.next() {
+                            if r.mutability.is_none() {
+                                if let syn::Expr::Array(arr) = r.expr.as_ref() {
+                                    if arr.elems.len() == self.len {
+                                        let mut elems = arr.elems.iter();
+                                        if let Some(syn::Expr::Lit(lit)) = elems.next() {
+                                            if let syn::Lit::Str(s) = &lit.lit {
+                                                if s.value() == self.head {
+                                                    self.count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr(self, node);
+        }
+    }
+    let mut p = P {
+        cal,
+        head,
+        len,
+        count: 0,
+    };
+    p.visit_file(&file);
+    if p.count != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found: p.count,
+            want: minuses.len(),
+        };
+    }
+    if opaque_hit(minuses, &file, changed) {
+        return FamilyVerdict::OpaqueHit;
+    }
+    FamilyVerdict::Holds
+}
+
+/// WI-4 slice 2b-rest-b: generic twin counter for scratch-probe
+/// families (member/assoc/definition/macro/trait/inherent/attr).
+/// Counts pre-image lines whose trimmed text matches a minus line
+/// (single trailing `,`/`;` tolerated — patterns omit member commas).
+/// `None` pre-image is not callable (detectors needing it map to `Miss`
+/// before invoking); unparseable pre-image is `Unproven`. A mismatch
+/// names the twin class; a match means "no count blocker" (`Holds` —
+/// the caller's scratch probe stays authoritative for the fire).
+pub(crate) fn scratch_line_verdict(
+    file_old: Option<&str>,
+    minuses: &[&str],
+    changed: &[usize],
+) -> FamilyVerdict {
+    let Some(pre) = file_old else {
+        return FamilyVerdict::Holds;
+    };
+    let _ = changed;
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let norm = |s: &str| {
+        let t = s.trim().trim_end_matches(',').trim_end_matches(';').trim();
+        t.to_string()
+    };
+    let wants: Vec<String> = minuses.iter().map(|m| norm(m)).collect();
+    if wants.iter().any(|w| w.is_empty()) {
+        return FamilyVerdict::Unproven;
+    }
+    let mut found = 0usize;
+    for line in &pre_lines {
+        let got = norm(line);
+        if wants.contains(&got) {
+            found += 1;
+        }
+    }
+    if found != minuses.len() {
+        return FamilyVerdict::CountMismatch {
+            found,
+            want: minuses.len(),
+        };
+    }
+    FamilyVerdict::Holds
+}
+
 use quote::ToTokens;
 
 /// Call trailing-literal verdict (mirrors `call_literal_holds`).
@@ -1057,5 +1268,83 @@ mod tests {
             FamilyVerdict::Unproven
         );
         assert_eq!(engine_verdict(None, None, 2), FamilyVerdict::Holds);
+    }
+
+    #[test]
+    fn wi4_slice2brest_b_remaining_verdicts_name_counts() {
+        // WI-4 slice 2b-rest-b: sequence/repeat engine counts, the peel
+        // syntax-walk verdict, and the scratch-twin counter.
+        // Sequence: 2 matching windows vs 1 claimed.
+        let spre = "fn a() {\n    let x = foo();\n    let y: u32 = bar(x);\n}\nfn b() {\n    let p = foo();\n    let q: u32 = bar(p);\n}\n";
+        let smin = vec!["let P0 = E0;".to_string(), "let P1: T1 = E1;".to_string()];
+        let splu = vec![
+            "let P0: u32 = E0;".to_string(),
+            "let P1: T1 = E1.wrapping_add(1);".to_string(),
+        ];
+        let sfound = template_sequence_counts("f.rs", Some(spre), &smin, &splu).unwrap();
+        assert_eq!(
+            engine_verdict(Some(spre), Some(sfound), 1),
+            FamilyVerdict::CountMismatch { found: 2, want: 1 }
+        );
+        // Repeat: 2 `Box::new(E0)` sites vs 1 claimed.
+        let rpre = "fn m() {\n    let a = Box::new(x);\n    let b = Box::new(y);\n}\n";
+        let rfound = template_repeat_counts("f.rs", Some(rpre), "Box::new(E0)").unwrap();
+        assert_eq!(
+            engine_verdict(Some(rpre), Some(rfound), 1),
+            FamilyVerdict::CountMismatch { found: 2, want: 1 }
+        );
+        // Peel: 3 peel sites vs 2 claimed.
+        let ppre =
+            "fn m() {\n    f(a, &[\"h\", x]);\n    f(b, &[\"h\", y]);\n    f(c, &[\"h\", z]);\n}\n";
+        assert_eq!(
+            peel_verdict(
+                Some(ppre),
+                "f",
+                "h",
+                2,
+                &["    f(a, &[\"h\", x]);", "    f(b, &[\"h\", y]);"],
+                &[2, 3],
+            ),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        // Peel exact holds.
+        assert_eq!(
+            peel_verdict(
+                Some("fn m() {\n    f(a, &[\"h\", x]);\n    f(b, &[\"h\", y]);\n}\n"),
+                "f",
+                "h",
+                2,
+                &["    f(a, &[\"h\", x]);", "    f(b, &[\"h\", y]);"],
+                &[2, 3],
+            ),
+            FamilyVerdict::Holds
+        );
+        // Scratch twin: 3 `old: u32` def lines vs 2 claimed.
+        assert_eq!(
+            scratch_line_verdict(
+                Some("struct S {\n    old: u32,\n    old: u32,\n    old: u32,\n}\n"),
+                &["    old: u32,", "    old: u32,"],
+                &[2, 3],
+            ),
+            FamilyVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        // Scratch exact holds; garbage pre-image with no matching line
+        // names the 0:1 count gap; None is Holds (legacy allow).
+        assert_eq!(
+            scratch_line_verdict(
+                Some("struct S {\n    old: u32,\n    old: u32,\n}\n"),
+                &["    old: u32,", "    old: u32,"],
+                &[2, 3],
+            ),
+            FamilyVerdict::Holds
+        );
+        assert_eq!(
+            scratch_line_verdict(Some("not rust"), &["    old: u32,"], &[1]),
+            FamilyVerdict::CountMismatch { found: 0, want: 1 }
+        );
+        assert_eq!(
+            scratch_line_verdict(None, &["    old: u32,"], &[1]),
+            FamilyVerdict::Holds
+        );
     }
 }

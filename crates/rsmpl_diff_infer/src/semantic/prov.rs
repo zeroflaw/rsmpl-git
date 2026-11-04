@@ -60,9 +60,14 @@ pub struct HunkProvenance {
 /// type; WI-4 slice 2a adds general-expr, method-literal, call-literal,
 /// ref-strip, and sig-evolution; WI-4 slice 2b-1 adds fn-slot,
 /// header-evolution, qualified-call, turbofish, use-prefix, and
-/// macro-rename; WI-4 slice 2b-rest-a adds call-perm, call-arg-template,
-/// and method-arg-template; every other detector still declines
-/// shape-or-count as `no-match` pending WI-4 slice 2b-rest-b), `veto:<name>`
+/// macro-rename; WI-4 slice 2b-rest-a adds call-perm (as `call_perm`),
+/// call-arg-template, and method-arg-template; WI-4 slice 2b-rest-b
+/// wires every remaining chain detector (engine-count families:
+/// control, peel, let-template ×3, sequence, single-block ×2, repeat,
+/// partial-strip, literal-frame, framed let-fallback; scratch-twin
+/// families: member, assoc, definition, macro-rules, trait/inherent,
+/// attr, per-hunk + whole-section singles; `item_rename` stays
+/// `no-match` by design — partition path)), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
 /// anti-unification, joint-territory section gates),
 /// `precondition:<name>` (a stated shape premise failed, incl. the
@@ -217,6 +222,11 @@ impl<T: std::fmt::Debug> Counted<T> {
     pub(crate) fn is_miss(&self) -> bool {
         matches!(self, Counted::Miss)
     }
+    /// Test-only fire predicate for counted-detector fire pins.
+    #[cfg(test)]
+    pub(crate) fn is_fire(&self) -> bool {
+        matches!(self, Counted::Fire(_))
+    }
 }
 
 /// WI-17 slice 4 chain attempt recorder for counted detectors: `Fire`
@@ -294,9 +304,10 @@ pub(crate) fn declined_guard_with_numbers(
 }
 
 /// WI-17 slice 1 whole-section pair-chain registry in chain order
-/// (emitted detector names, deduped — the two `call_arg_template`
-/// arms, three `let_template` arms, and two `single_block` arms each
-/// share one family entry). `push_ordinary_prov` completes wholly-
+/// (emitted detector names, deduped — the whole-line `call_arg_template`
+/// arm, three `let_template` arms, and two `single_block` arms each
+/// share one family entry; the sub-line perm arm reports as `call_perm`
+/// alongside it). `push_ordinary_prov` completes wholly-
 /// ordinary entries with `not-tried` for every registry detector the
 /// chain never attempted, so the F10 comment-only probe lists every
 /// detector exactly once across `declined`/`not-tried`. A new chain
@@ -323,6 +334,7 @@ pub(crate) const CHAIN_DETECTORS: &[&str] = &[
     "macro_rename",
     "use_prefix",
     "call_sweep",
+    "call_perm",
     "call_arg_template",
     "call_arg_add",
     "call_literal",
@@ -1433,7 +1445,7 @@ mod tests {
             "macro_rename",
             "use_prefix",
             "call_sweep",
-            "call_arg_template",
+            "call_perm",
             "call_arg_add",
             "call_literal",
             "call_arg_template",

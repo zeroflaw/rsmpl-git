@@ -1004,25 +1004,38 @@ pub(crate) fn emit_general_expr_single(
     minus_tpl: &str,
     plus_tpl: &str,
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if !is_anchored(minus_tpl, plus_tpl) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), minus_tpl, plus_tpl, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), minus_tpl, plus_tpl),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     // Byte-compare pre-reservation: reserve the rule name only for
     // emissions that reproduce the native swap exactly.
     if !single_reproduces(
         path, pre, changed[0], minus_line, plus_line, minus_tpl, plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "general_expr");
     // Allow-one: directive-free ranged hunk (slices-1-3 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 pub(crate) fn try_general_expr_single(
@@ -1032,22 +1045,26 @@ pub(crate) fn try_general_expr_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line entry first (tightest, incl. WI-4 frame unwrap).
     if let (Some(minus), Some(plus)) = (parse_line_expr(minuses[0]), parse_line_expr(pluses[0])) {
         for e in [&minus, &plus] {
             let probe = shape::probe_expr(e);
             if probe.macros > 0 || probe.unsupported > 0 {
-                return None;
+                return super::prov::Counted::Miss;
             }
         }
-        let (minus_tpl, plus_tpl) = antiunify_general_expr_single(&minus, &plus)?;
+        let Some((minus_tpl, plus_tpl)) = antiunify_general_expr_single(&minus, &plus) else {
+            return super::prov::Counted::Miss;
+        };
         return emit_general_expr_single(
             path, pre, minuses[0], pluses[0], changed, &minus_tpl, &plus_tpl, used_rules,
         );
@@ -1059,15 +1076,21 @@ pub(crate) fn try_general_expr_single(
     // (pattern/type ride each site's own wrapper). The byte-compare
     // probe validates the init entry exactly as the whole-line entry
     // (spacing-drift veto carries over).
-    let minus_init = parse_let_init(minuses[0])?;
-    let plus_init = parse_let_init(pluses[0])?;
+    let Some(minus_init) = parse_let_init(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(plus_init) = parse_let_init(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     for e in [&minus_init, &plus_init] {
         let probe = shape::probe_expr(e);
         if probe.macros > 0 || probe.unsupported > 0 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
-    let (minus_tpl, plus_tpl) = antiunify_general_expr_single(&minus_init, &plus_init)?;
+    let Some((minus_tpl, plus_tpl)) = antiunify_general_expr_single(&minus_init, &plus_init) else {
+        return super::prov::Counted::Miss;
+    };
     emit_general_expr_single(
         path, pre, minuses[0], pluses[0], changed, &minus_tpl, &plus_tpl, used_rules,
     )
@@ -1565,15 +1588,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    x + 1;\n    y + 1;\n}\n";
         assert!(
-            super::try_general_expr_single(
-                &["    x + 1;"],
-                &["    x + 2;"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_general_expr_single(
+                    &["    x + 1;"],
+                    &["    x + 2;"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section("f.rs", "@@ -2 +2 @@\n-    x + 1;\n+    x + 2;\n");
@@ -1611,7 +1636,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1628,7 +1653,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-delta shape must veto"
         );
     }
@@ -1644,7 +1669,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .expect("cast single must fire");
+        .unwrap_fire("cast single must fire");
         assert!(out.contains("- E0 as u8\n"), "got: {out}");
         assert!(out.contains("+ E0 as u16\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -1690,15 +1715,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    let a = x + 1;\n    let b = y + 1;\n}\n";
         assert!(
-            super::try_general_expr_single(
-                &["    let a = x + 1;"],
-                &["    let a = x + 2;"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_general_expr_single(
+                    &["    let a = x + 1;"],
+                    &["    let a = x + 2;"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed let-init twin must veto at the core"
         );
         let raw = section(
@@ -1741,7 +1768,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1758,7 +1785,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-delta let-init must veto"
         );
     }
@@ -1775,7 +1802,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .expect("whole-line single must still fire");
+        .unwrap_fire("whole-line single must still fire");
         assert!(out.contains("- E0 + 1\n"), "got: {out}");
     }
     #[test]
@@ -1799,7 +1826,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "drifted general single must stay vetoed"
         );
         let raw = section(

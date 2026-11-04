@@ -61,13 +61,15 @@ pub(crate) fn try_let_sweep(
     }
     // WI-14 slice 4: framed fallback lives in the `let_framed`
     // sibling (D5 split — production only, tests stay inline here).
-    // Counted mapping is a later slice (bool probe inside); a miss
-    // here is shape-or-count, not yet attributed.
+    // WI-4 slice 2b-rest-b: counted (the framed arm maps its own
+    // untyped-let verdict; a miss here is shape, not yet attributed).
     match super::let_framed::try_framed_let_sweep(
         minuses, pluses, path, file_old, changed, used_rules,
     ) {
-        Some(s) => Counted::Fire(s),
-        None => Counted::Miss,
+        Counted::Fire(s) => Counted::Fire(s),
+        Counted::Totality { found, want } => Counted::Totality { found, want },
+        Counted::Opaque => Counted::Opaque,
+        Counted::Miss => Counted::Miss,
     }
 }
 
@@ -156,18 +158,29 @@ pub(crate) fn try_let_template_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
-    let (minus_tpl, plus_tpl) = antiunify_let_template(minuses, pluses)?;
-    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
-        return None;
+    let Some((minus_tpl, plus_tpl)) = antiunify_let_template(minuses, pluses) else {
+        return Counted::Miss;
+    };
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, "let_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N-site (N ≥ 2) untyped joint let-template sweep (WI-8 slice 1):
@@ -191,18 +204,29 @@ pub(crate) fn try_untyped_let_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
-    let (minus_tpl, plus_tpl) = antiunify_untyped_let(minuses, pluses)?;
-    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
-        return None;
+    let Some((minus_tpl, plus_tpl)) = antiunify_untyped_let(minuses, pluses) else {
+        return Counted::Miss;
+    };
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, "let_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N-site (N ≥ 2) tuple-position swap sweep (WI-8 slice 1):
@@ -217,18 +241,29 @@ pub(crate) fn try_pat_swap_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
-    let (minus_tpl, plus_tpl) = antiunify_pat_swap(minuses, pluses)?;
-    if !crate::totality::template_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
-        return None;
+    let Some((minus_tpl, plus_tpl)) = antiunify_pat_swap(minuses, pluses) else {
+        return Counted::Miss;
+    };
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+        minuses.len(),
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => return Counted::Opaque,
+        crate::totality_counted::FamilyVerdict::Unproven => return Counted::Miss,
     }
     let rule = unique_rule(used_rules, "let_template");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N-pair (N ≥ 4) repeated-block sequence sweep (WI-5c): N flat pairs
@@ -249,18 +284,19 @@ pub(crate) fn try_sequence_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     let n = minuses.len();
     if n != pluses.len() || n < 4 || changed.len() != n {
-        return None;
+        return Counted::Miss;
     }
     // All-identical whole classes stay for the tighter verbatim sweep
     // (T422 precedent).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return Counted::Miss;
     }
     // Largest K first: the most specific template wins the byte guard
     // naturally.
+    let mut saw_count_mismatch: Option<(usize, usize)> = None;
     for k in [4, 3, 2] {
         if !n.is_multiple_of(k) || n / k < 2 {
             continue;
@@ -281,10 +317,28 @@ pub(crate) fn try_sequence_sweep(
         if !contiguous {
             continue;
         }
-        let (minus_tpls, plus_tpls) = antiunify_sequence(minuses, pluses, k)?;
-        if !crate::totality::template_sequence_holds(path, file_old, &minus_tpls, &plus_tpls, n / k)
-        {
+        let Some((minus_tpls, plus_tpls)) = antiunify_sequence(minuses, pluses, k) else {
             continue;
+        };
+        match crate::totality_counted::engine_verdict(
+            file_old,
+            crate::totality_counted::template_sequence_counts(
+                path,
+                file_old,
+                &minus_tpls,
+                &plus_tpls,
+            ),
+            n / k,
+        ) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                saw_count_mismatch = Some((found, want));
+                continue;
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return Counted::Opaque;
+            }
+            crate::totality_counted::FamilyVerdict::Unproven => continue,
         }
         let rule = unique_rule(used_rules, "sequence");
         let mut hunk = crate::emission_header(path, &rule, changed);
@@ -294,9 +348,12 @@ pub(crate) fn try_sequence_sweep(
         for l in &plus_tpls {
             hunk.push_str(&format!("+ {l}\n"));
         }
-        return Some(hunk);
+        return Counted::Fire(hunk);
     }
-    None
+    if let Some((found, want)) = saw_count_mismatch {
+        return Counted::Totality { found, want };
+    }
+    Counted::Miss
 }
 
 /// One pair's `(minus, plus)` types plus their original spellings: the
@@ -1264,7 +1321,7 @@ mod tests {
             &[1, 2],
             &mut Vec::new()
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]

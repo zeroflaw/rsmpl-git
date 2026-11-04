@@ -235,16 +235,16 @@ pub(crate) fn try_single_block_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     let n = minuses.len();
     if n != pluses.len() || !(2..=4).contains(&n) || changed.len() != n {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // One run: every changed old line adjacent (a context line inside
     // the span means two runs, which v1 never fuses).
     for w in changed.windows(2) {
         if w[1] != w[0] + 1 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // Pure let runs only — a header, expression, or any other member
@@ -252,16 +252,31 @@ pub(crate) fn try_single_block_sweep(
     // mixed runs ordinary instead of splitting hunks.
     if !minuses.iter().all(|l| is_plain_let_line(l)) || !pluses.iter().all(|l| is_plain_let_line(l))
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // All-identical whole classes stay for the tighter verbatim sweep
     // (T422 precedent).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (minus_tpls, plus_tpls) = antiunify_single_block(minuses, pluses)?;
-    if !crate::totality::template_sequence_holds(path, file_old, &minus_tpls, &plus_tpls, 1) {
-        return None;
+    let Some((minus_tpls, plus_tpls)) = antiunify_single_block(minuses, pluses) else {
+        return super::prov::Counted::Miss;
+    };
+    match crate::totality_counted::engine_verdict(
+        file_old,
+        crate::totality_counted::template_sequence_counts(path, file_old, &minus_tpls, &plus_tpls),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(used_rules, "single_block");
     // Allow-one tight range (SPEC D.5): a single-window claim needs no
@@ -269,7 +284,7 @@ pub(crate) fn try_single_block_sweep(
     // as too-many at apply time.
     let min = changed.iter().min().copied().unwrap_or(0);
     if min < 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut hunk = format!(
         "{}\n@@ -{min},{n} @@ rule={rule}\n",
@@ -281,7 +296,7 @@ pub(crate) fn try_single_block_sweep(
     for l in &plus_tpls {
         hunk.push_str(&format!("+ {l}\n"));
     }
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 #[cfg(test)]

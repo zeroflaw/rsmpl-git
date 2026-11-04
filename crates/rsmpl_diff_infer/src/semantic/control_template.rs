@@ -426,6 +426,10 @@ fn method_parts(expr: &syn::Expr) -> Option<(String, String, Vec<syn::Expr>)> {
 /// itself (WI-23: field-base holes infer `expr`, so no declaration
 /// rides the probe). An untouched twin anywhere (including an
 /// out-of-position plain-body twin) counts `N+1` and vetoes.
+/// WI-4 slice 2b-rest-b: superseded on the chain path by
+/// `totality_counted::template_pair_counts`; kept for the unit pins
+/// below.
+#[allow(dead_code)]
 fn control_pair_holds(
     path: &str,
     file_old: Option<&str>,
@@ -475,13 +479,13 @@ pub(crate) fn try_control_template_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // All-identical classes stay for the tighter verbatim sweep (T422).
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Fixed position order, most specific first: guard arms contain
     // both ` if ` and ` => `, arm bodies contain ` => ` alone.
@@ -552,15 +556,28 @@ pub(crate) fn try_control_template_sweep(
         if !frames_hold {
             continue;
         }
-        if !control_pair_holds(path, file_old, &minus_tpl, &plus_tpl, minuses.len()) {
-            return None;
+        match crate::totality_counted::engine_verdict(
+            file_old,
+            crate::totality_counted::template_pair_counts(path, file_old, &minus_tpl, &plus_tpl),
+            minuses.len(),
+        ) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            crate::totality_counted::FamilyVerdict::Unproven => {
+                return super::prov::Counted::Miss;
+            }
         }
         let rule = unique_rule(used_rules, "control_template");
         let mut hunk = crate::emission_header(path, &rule, changed);
         hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-        return Some(hunk);
+        return super::prov::Counted::Fire(hunk);
     }
-    None
+    super::prov::Counted::Miss
 }
 
 #[cfg(test)]
@@ -1092,7 +1109,7 @@ mod tests {
                 &[2, 3, 4],
                 &mut used
             )
-            .is_none(),
+            .is_miss(),
             "binder delta must veto the closure position"
         );
         // Uniform binders still fire (the gate only vetoes per-pair
@@ -1111,7 +1128,7 @@ mod tests {
             &[2, 3, 4],
             &mut used,
         )
-        .expect("uniform closure frames must still fire");
+        .unwrap_fire("uniform closure frames must still fire");
         assert!(out.contains("- x > E0"), "got: {out}");
         assert!(out.contains("+ x >= E0"), "got: {out}");
     }
@@ -1140,7 +1157,7 @@ mod tests {
                 &[3, 4, 5],
                 &mut used
             )
-            .is_none(),
+            .is_miss(),
             "arm pattern delta must veto the arm-body position"
         );
         // Uniform patterns still fire.
@@ -1158,7 +1175,7 @@ mod tests {
             &[3, 4, 5],
             &mut used,
         )
-        .expect("uniform arm frames must still fire");
+        .unwrap_fire("uniform arm frames must still fire");
         assert!(out.contains("- E0 > 0"), "got: {out}");
     }
 
@@ -1181,7 +1198,7 @@ mod tests {
                 &[2, 3, 4],
                 &mut used
             )
-            .is_none(),
+            .is_miss(),
             "keyword delta must veto the condition position"
         );
     }

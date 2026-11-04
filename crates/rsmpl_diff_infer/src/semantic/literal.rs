@@ -413,32 +413,38 @@ pub(crate) fn try_call_literal_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     use quote::ToTokens;
     let tok = |e: &syn::Expr| e.to_token_stream().to_string();
-    let (o_cal, o_args) = call_parts(&parse_call_expr(minuses[0])?)?;
-    let (n_cal, n_args) = call_parts(&parse_call_expr(pluses[0])?)?;
+    let Some((o_cal, o_args)) = parse_call_expr(minuses[0]).and_then(|e| call_parts(&e)) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((n_cal, n_args)) = parse_call_expr(pluses[0]).and_then(|e| call_parts(&e)) else {
+        return super::prov::Counted::Miss;
+    };
     // Callee deltas stay with the slice-1 single.
     if o_cal != n_cal || o_args.len() != n_args.len() || o_args.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !o_args[..o_args.len() - 1]
         .iter()
         .zip(n_args[..n_args.len() - 1].iter())
         .all(|(a, b)| tok(a) == tok(b))
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for arg in o_args.iter().chain(n_args.iter()) {
         let probe = super::shape::probe_expr(arg);
         if probe.macros > 0 || probe.unsupported > 0 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     let (o_last, n_last) = (
@@ -446,7 +452,7 @@ pub(crate) fn try_call_literal_single(
         tok(&n_args[n_args.len() - 1]),
     );
     if o_last == n_last {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let k = o_args.len() - 1;
     // Zero-hole templates never raise: with no leading args the pair is
@@ -457,7 +463,7 @@ pub(crate) fn try_call_literal_single(
     // verbatim, T422). This keeps single-site verbatim miniatures
     // (fixture 57) ordinary.
     if k == 0 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     emit_call_literal_single(
         path, pre, file_old, minuses[0], pluses[0], minuses, changed, &o_cal, k, &o_last, &n_last,
@@ -486,9 +492,25 @@ pub(crate) fn emit_call_literal_single(
     o_last: &str,
     n_last: &str,
     used_rules: &mut Vec<String>,
-) -> Option<String> {
-    if !crate::totality::call_literal_holds(file_old, o_cal, k + 1, o_last, minuses, changed) {
-        return None;
+) -> super::prov::Counted<String> {
+    match crate::totality_counted::call_literal_verdict(
+        file_old,
+        o_cal,
+        k + 1,
+        o_last,
+        minuses,
+        changed,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let mut vars = Vec::with_capacity(k);
     for i in 0..k {
@@ -520,7 +542,7 @@ pub(crate) fn emit_call_literal_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -531,13 +553,13 @@ pub(crate) fn emit_call_literal_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{o_cal}_literal"));
     // Allow-one: directive-free ranged hunk (slices-1-11 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-20: sub-line bare-call trailing-literal single (N=1)
@@ -568,23 +590,27 @@ pub(crate) fn try_subline_literal_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line-owned pairs belong to the slice-12 single — decline
     // here even when it vetoed (shared counter, no bypass). Wrapper
     // pairs (`prefix == 0`) fall through: the whole-line single vetoes
     // them as zero-hole, so the inner delta is sub-line territory.
     if parse_literal_pair(minuses[0], pluses[0]).is_some_and(|c| c.prefix >= 1) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_literal_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_literal_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let site = &sites[0];
     emit_call_literal_single(
@@ -1090,7 +1116,12 @@ mod tests {
         assert!(out.contains("-    drop();\n"), "got: {out}");
     }
 
-    fn lsingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn lsingle(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_call_literal_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
     }
 
@@ -1170,7 +1201,7 @@ mod tests {
                 Some("fn m() {\n    make_widget_with_long_name_here(false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "zero-prefix (hole-free) literal single must veto"
         );
         assert!(
@@ -1180,22 +1211,25 @@ mod tests {
                 Some("fn m() {\n    foo(&state.parsed);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "verbatim-shaped strip must stay ordinary"
         );
     }
 
     #[test]
     fn wi12_literal_single_twin_vetoes() {
+        // WI-4 slice 2b-rest-b: the twin veto names its counts.
         assert!(
-            lsingle(
-                "    make_widget(a, 1, false);",
-                "    make_widget(a, 1, \"100644\");",
-                Some("fn m() {\n    make_widget(a, 1, false);\n    make_widget(g, 3, false);\n}\n"),
-                &[2]
-            )
-            .is_none(),
-            "same-trailing twin must veto"
+            matches!(
+                lsingle(
+                    "    make_widget(a, 1, false);",
+                    "    make_widget(a, 1, \"100644\");",
+                    Some("fn m() {\n    make_widget(a, 1, false);\n    make_widget(g, 3, false);\n}\n"),
+                    &[2]
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
+            "same-trailing twin must veto with its counts"
         );
     }
 
@@ -1210,7 +1244,7 @@ mod tests {
             Some("fn m() {\n    make_widget(a, 1, false);\n    make_widget(g, 3, true);\n}\n"),
             &[2],
         )
-        .expect("different-trailing twin must not veto");
+        .unwrap_fire("different-trailing twin must not veto");
         assert!(out.contains("- make_widget(E0, E1, false)"), "got: {out}");
     }
 
@@ -1223,7 +1257,7 @@ mod tests {
                 Some("fn m() {\n    foo(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "callee delta must decline here"
         );
         assert!(
@@ -1233,7 +1267,7 @@ mod tests {
                 Some("fn m() {\n    make_widget(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "leading-arg delta must decline here"
         );
     }
@@ -1247,7 +1281,7 @@ mod tests {
                 None,
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
         assert!(
@@ -1257,7 +1291,7 @@ mod tests {
                 Some("fn m() {\n    make_widget(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "identity must veto"
         );
         assert!(
@@ -1267,7 +1301,7 @@ mod tests {
                 Some("fn m() {\n    make_widget(m!(x), false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -1280,7 +1314,7 @@ mod tests {
             Some("fn m() {\n    MakeWidget(a, false);\n}\n"),
             &[2],
         )
-        .expect("uppercase literal single must fire");
+        .unwrap_fire("uppercase literal single must fire");
         assert!(out.contains("`MakeWidget`(E0, false)"), "got: {out}");
         assert!(out.contains("`MakeWidget`(E0, \"100644\")"), "got: {out}");
     }
@@ -1307,7 +1341,12 @@ mod tests {
         );
     }
 
-    fn sslingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn sslingle(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_subline_literal_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
     }
 
@@ -1395,7 +1434,7 @@ mod tests {
             Some("fn m() {\n    foo(Bar(alpha, 1));\n}\n"),
             &[2],
         )
-        .expect("uppercase sub-line literal single must fire");
+        .unwrap_fire("uppercase sub-line literal single must fire");
         assert!(out.contains("- `Bar`(E0, 1)"), "got: {out}");
         assert!(out.contains("+ `Bar`(E0, 2)"), "got: {out}");
     }
@@ -1407,15 +1446,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(bar(alpha, 1));\n    bar(alpha, 1);\n}\n";
         assert!(
-            super::try_subline_literal_single(
-                &["    foo(bar(alpha, 1));"],
-                &["    foo(bar(alpha, 2));"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_literal_single(
+                    &["    foo(bar(alpha, 1));"],
+                    &["    foo(bar(alpha, 2));"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -1459,7 +1500,7 @@ mod tests {
                 Some("fn m() {\n    make_widget(a, false);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -1475,7 +1516,7 @@ mod tests {
                 Some("fn m() {\n    foo(bar(alpha));\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "zero-hole inner must decline"
         );
         assert!(
@@ -1485,7 +1526,7 @@ mod tests {
                 Some("fn m() {\n    foo(&state.parsed);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "verbatim-shaped strip must stay ordinary"
         );
     }
@@ -1501,7 +1542,7 @@ mod tests {
                 Some("fn m() {\n    foo(bar(alpha, 1), bar(beta, 1));\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -1515,7 +1556,7 @@ mod tests {
                 None,
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1531,7 +1572,7 @@ mod tests {
                 Some("fn m() {\n    foo(bar(alpha, 1));\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "callee delta must decline"
         );
     }
@@ -1547,7 +1588,7 @@ mod tests {
                 Some("fn m() {\n    foo(bar(m!(x), 1));\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }

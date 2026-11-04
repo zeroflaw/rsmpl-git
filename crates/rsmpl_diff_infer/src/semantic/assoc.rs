@@ -39,14 +39,16 @@ pub(crate) fn try_assoc_rename(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Classify every pair: assoc definition rename or `::`-tail use.
     // A second spelling of definition in one pair is impossible by
     // construction (parse decides once).
@@ -54,21 +56,23 @@ pub(crate) fn try_assoc_rename(
     for (m, p) in minuses.iter().zip(pluses.iter()) {
         defs.push(parse_assoc_def_pair(m, p));
     }
-    let first_def = defs.iter().flatten().next()?;
+    let Some(first_def) = defs.iter().flatten().next() else {
+        return super::prov::Counted::Miss;
+    };
     let (is_type, old, new) = (
         first_def.is_type,
         first_def.old.clone(),
         first_def.new.clone(),
     );
     if old == new || old.is_empty() || new.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut def_idx: Vec<usize> = Vec::new();
     for (i, d) in defs.iter().enumerate() {
         match d {
             Some(d) => {
                 if d.is_type != is_type || d.old != old || d.new != new {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
                 def_idx.push(i);
             }
@@ -78,19 +82,19 @@ pub(crate) fn try_assoc_rename(
                 // the pair is not itself a definition.
                 let (m, p) = (minuses[i], pluses[i]);
                 if m.trim() == p.trim() {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
                 if !contains_path_tail(m, &old) || !contains_path_tail(p, &new) {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
                 if !contains_ident(m, &old) || !contains_ident(p, &new) {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
             }
         }
     }
     if def_idx.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Every def site must sit in a trait or impl block; recover its
     // verbatim header plus block span. Use lines need no block proof
@@ -100,17 +104,23 @@ pub(crate) fn try_assoc_rename(
     let mut def_header: Vec<String> = Vec::new();
     let mut def_span: Vec<(usize, usize)> = Vec::new();
     for &i in def_idx.iter() {
-        let (header, start, end) = enclosing_block(pre, changed[i])?;
+        let (header, start, end) = match enclosing_block(pre, changed[i]) {
+            Some(v) => v,
+            None => return super::prov::Counted::Miss,
+        };
         // The trimmed native def line must match its minus side
         // (trailing `,` tolerated — patterns omit member commas).
-        let pre_line = pre_lines.get(changed[i].saturating_sub(1))?;
+        let pre_line = match pre_lines.get(changed[i].saturating_sub(1)) {
+            Some(v) => v,
+            None => return super::prov::Counted::Miss,
+        };
         let want = minuses[i].trim();
         let got = pre_line.trim();
         if got != want
             && !(got == format!("{want},").as_str()
                 || got.trim_end_matches(',').trim() == want.trim_end_matches(',').trim())
         {
-            return None;
+            return super::prov::Counted::Miss;
         }
         def_header.push(header);
         def_span.push((start, end));
@@ -127,7 +137,7 @@ pub(crate) fn try_assoc_rename(
             }
         }
         if traits.len() > 1 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // Group def sites by verbatim header (document order); one def per
@@ -142,7 +152,7 @@ pub(crate) fn try_assoc_rename(
             Some(g) => {
                 g.2.push(*k);
                 if g.2.len() > 1 {
-                    return None;
+                    return super::prov::Counted::Miss;
                 }
             }
             None => groups.push((h.clone(), *span, vec![*k])),
@@ -167,7 +177,7 @@ pub(crate) fn try_assoc_rename(
     single.push_str(&format!("- {}\n", minuses[k].trim()));
     single.push_str(&format!("+ {}\n", pluses[k].trim()));
     if scratch_reproduces(pre, path, &single, &pre_lines, changed, pluses) {
-        return Some(single);
+        return super::prov::Counted::Fire(single);
     }
     let mut out = String::new();
     // Fallback: one hunk per block, follow on the first only (a follow on
@@ -187,9 +197,17 @@ pub(crate) fn try_assoc_rename(
     }
     if !scratch_reproduces(pre, path, &out, &pre_lines, changed, pluses) {
         used_rules.pop();
-        return None;
+        match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            _ => return super::prov::Counted::Miss,
+        }
     }
-    Some(out)
+    super::prov::Counted::Fire(out)
 }
 
 /// A `-`/`+` line pair as an assoc definition rename: both sides parse
@@ -697,7 +715,7 @@ mod tests {
             &[2, 5],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
             .expect("per-hunk def-only singles must fire");
         assert!(!out.contains("follow=uses"), "got:\n{out}");
@@ -769,7 +787,7 @@ mod tests {
             &[2, 3],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre_map)
             .expect("per-hunk def-only singles must fire");
         assert!(!out.contains("follow=uses"), "got:\n{out}");

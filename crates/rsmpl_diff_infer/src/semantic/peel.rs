@@ -30,19 +30,24 @@ pub(crate) fn try_call_peel_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut class: Option<PeelClass> = None;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let c = parse_peel_pair(m, p)?;
+        let c = match parse_peel_pair(m, p) {
+            Some(c) => c,
+            None => return super::prov::Counted::Miss,
+        };
         if class.as_ref().is_some_and(|k| *k != c) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         class = Some(c);
     }
-    let c = class?;
+    let Some(c) = class else {
+        return super::prov::Counted::Miss;
+    };
     // Hetero required: an all-identical class compresses tighter as a
     // verbatim hunk (no `# expr` directives), so leave it for verbatim.
     if minuses
@@ -50,18 +55,26 @@ pub(crate) fn try_call_peel_sweep(
         .zip(pluses.iter())
         .all(|(m, p)| flat_ws(m) == flat_ws(minuses[0]) && flat_ws(p) == flat_ws(pluses[0]))
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::peel_holds(
+    match crate::totality_counted::peel_verdict(
         file_old,
         &c.old_cal,
         &c.head_value,
         c.tails + 2,
-        minuses.len(),
         minuses,
         changed,
     ) {
-        return None;
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let rule = unique_rule(
         used_rules,
@@ -86,7 +99,7 @@ pub(crate) fn try_call_peel_sweep(
         g = super::shape::literal_callee(&c.new_cal),
         h = c.head_text,
     ));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// Cross-hunk peel driver for non-whole sections (T441): mirrors the

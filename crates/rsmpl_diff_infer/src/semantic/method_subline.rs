@@ -34,21 +34,25 @@ pub(crate) fn try_subline_method_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line pairs belong to the slice-2 single — decline here even
     // when it vetoed.
     if parse_method_to_method_pair(minuses[0], pluses[0]).is_some() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_method_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_method_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let (old_method, new_method, arity) = (
         sites[0].old_method.clone(),
@@ -56,15 +60,27 @@ pub(crate) fn try_subline_method_single(
         sites[0].arity,
     );
     if old_method == new_method {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_expr_holds(
-        path,
+    match crate::totality_counted::engine_verdict(
         file_old,
-        &format!("Receiver.{old_method}({})", m2f_args(arity)),
+        crate::totality_counted::template_expr_counts(
+            path,
+            file_old,
+            &format!("Receiver.{old_method}({})", m2f_args(arity)),
+        ),
         1,
     ) {
-        return None;
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let mut vars = Vec::with_capacity(arity);
     for i in 0..arity {
@@ -84,20 +100,20 @@ pub(crate) fn try_subline_method_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // T361 byte gate: the sub-expression rewrite must reproduce the
     // native line swap byte-identical.
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_method}"));
     // Allow-one: directive-free ranged hunk (slice-2 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-16: sub-line method-to-function single (N=1) under
@@ -126,34 +142,50 @@ pub(crate) fn try_subline_method_fn_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line pairs belong to the slice-3 single — decline here even
     // when it vetoed.
     if parse_method_to_fn_pair(minuses[0], pluses[0]).is_some() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_method_fn_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_method_fn_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let (old_method, new_func, arity) = (
         sites[0].old_method.clone(),
         sites[0].new_func.clone(),
         sites[0].arity,
     );
-    if !crate::totality::template_expr_holds(
-        path,
+    match crate::totality_counted::engine_verdict(
         file_old,
-        &format!("Receiver.{old_method}({})", m2f_args(arity)),
+        crate::totality_counted::template_expr_counts(
+            path,
+            file_old,
+            &format!("Receiver.{old_method}({})", m2f_args(arity)),
+        ),
         1,
     ) {
-        return None;
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     let mut vars = Vec::with_capacity(arity);
     for i in 0..arity {
@@ -179,20 +211,20 @@ pub(crate) fn try_subline_method_fn_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // T361 byte gate: the sub-expression rewrite must reproduce the
     // native line swap byte-identical.
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minuses[0], pluses[0], &minus_tpl, &plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{old_method}_to_{new_func}"));
     // Allow-one: directive-free ranged hunk (slice-3 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// Shared emission tail of the method same-literal paths (whole-line
@@ -216,9 +248,20 @@ pub(crate) fn emit_method_literal_single(
     old_toks: &[String],
     new_toks: &[String],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
-    if !crate::totality::method_literal_holds(file_old, o_method, old_toks, minuses, changed) {
-        return None;
+) -> super::prov::Counted<String> {
+    match crate::totality_counted::method_literal_verdict(
+        file_old, o_method, old_toks, minuses, changed,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     // Permuted tuples belong to the perm domain (slices 10/11/17/18):
     // a swap is a concrete-tuple delta too, so without this fence the
@@ -233,7 +276,7 @@ pub(crate) fn emit_method_literal_single(
         o_sorted == n_sorted
     };
     if is_perm {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let old = old_toks.join(", ");
     let new = new_toks.join(", ");
@@ -250,7 +293,7 @@ pub(crate) fn emit_method_literal_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -261,13 +304,13 @@ pub(crate) fn emit_method_literal_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{o_method}_literal"));
     // Allow-one: directive-free ranged hunk (slices-1-13 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-21: sub-line method same-literal single (N=1) under
@@ -293,21 +336,25 @@ pub(crate) fn try_subline_method_literal_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line-owned pairs belong to the slice-13 single — decline
     // here even when it vetoed (shared counter, no bypass).
     if parse_method_same_literal_pair(minuses[0], pluses[0]).is_some() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_method_literal_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_method_literal_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let site = &sites[0];
     emit_method_literal_single(
@@ -352,13 +399,15 @@ pub(crate) fn try_subline_method_wrap_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Whole-line-owned pairs belong to the slice-7 single — decline
     // here even when it vetoed (shared counter, no bypass).
     if let (Some((o_recv, o_method, o_args)), Some((n_recv, n_method, n_args))) = (
@@ -369,12 +418,14 @@ pub(crate) fn try_subline_method_wrap_single(
             && o_method == n_method
             && super::arg_template::antiunify_call_args_single(&o_args, &n_args).is_some()
         {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
-    let sites = super::subline::extract_method_wrap_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_method_wrap_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let site = &sites[0];
     // WI-7b: uppercase method rides backticks (literal).
@@ -390,10 +441,23 @@ pub(crate) fn try_subline_method_wrap_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     // T361 byte gate: the sub-expression rewrite must reproduce the
     // native line swap byte-identical.
@@ -406,13 +470,13 @@ pub(crate) fn try_subline_method_wrap_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, &format!("calls_{}_wrap", site.method));
     // Allow-one: directive-free ranged hunk (slices-1-7 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 #[cfg(test)]
@@ -523,15 +587,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    val.old_method(alpha_argument) + 1;\n    other.old_method(different_value);\n}\n";
         assert!(
-            super::try_subline_method_single(
-                &["    val.old_method(alpha_argument) + 1;"],
-                &["    val.new_method(alpha_argument) + 1;"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_method_single(
+                    &["    val.old_method(alpha_argument) + 1;"],
+                    &["    val.new_method(alpha_argument) + 1;"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -579,7 +645,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -598,7 +664,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -614,7 +680,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -702,15 +768,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    val.old_method(alpha_argument) + 1;\n    other.old_method(different_value);\n}\n";
         assert!(
-            super::try_subline_method_fn_single(
-                &["    val.old_method(alpha_argument) + 1;"],
-                &["    new_func(val, alpha_argument) + 1;"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_method_fn_single(
+                    &["    val.old_method(alpha_argument) + 1;"],
+                    &["    new_func(val, alpha_argument) + 1;"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -758,7 +826,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -777,7 +845,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -793,7 +861,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -919,15 +987,17 @@ mod tests {
         // WI-6-slice-1 literal verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(svc.configure(alpha_arg, 1));\n    svc.configure(alpha_arg, 1);\n}\n";
         assert!(
-            super::try_subline_method_literal_single(
-                &["    foo(svc.configure(alpha_arg, 1));"],
-                &["    foo(svc.configure(alpha_arg, 2));"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_method_literal_single(
+                    &["    foo(svc.configure(alpha_arg, 1));"],
+                    &["    foo(svc.configure(alpha_arg, 2));"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -977,7 +1047,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -994,7 +1064,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "receiver delta must decline"
         );
     }
@@ -1011,7 +1081,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "method delta must decline"
         );
     }
@@ -1027,7 +1097,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1043,7 +1113,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -1062,7 +1132,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -1082,7 +1152,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "perm must decline"
         );
     }
@@ -1233,15 +1303,17 @@ mod tests {
         // verbatim single (byte-probe verified).
         let pre = "fn m() {\n    foo(svc.process(alpha_arg));\n    svc.process(other_arg);\n}\n";
         assert!(
-            super::try_subline_method_wrap_single(
-                &["    foo(svc.process(alpha_arg));"],
-                &["    foo(svc.process(alpha_arg.clone()));"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_method_wrap_single(
+                    &["    foo(svc.process(alpha_arg));"],
+                    &["    foo(svc.process(alpha_arg.clone()));"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -1303,7 +1375,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -1320,7 +1392,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "receiver delta must decline"
         );
     }
@@ -1337,7 +1409,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "method delta must decline"
         );
     }
@@ -1355,7 +1427,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "concrete delta must decline"
         );
     }
@@ -1373,7 +1445,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "perm must decline"
         );
     }
@@ -1389,7 +1461,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
     }
@@ -1405,7 +1477,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -1424,7 +1496,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }

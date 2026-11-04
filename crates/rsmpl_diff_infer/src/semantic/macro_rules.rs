@@ -42,12 +42,12 @@ pub(crate) fn try_macro_rules_rename(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if changed.len() != minuses.len() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Partition pairs: exactly one `macro_rules!` definition, the rest
     // bare invocations. Anything else declines the whole section.
@@ -56,35 +56,46 @@ pub(crate) fn try_macro_rules_rename(
     for (i, (m, p)) in minuses.iter().zip(pluses.iter()).enumerate() {
         if is_macro_rules_def_pair(m, p).is_some() {
             if def_idx.is_some() {
-                return None; // twin definitions stay ordinary
+                return super::prov::Counted::Miss; // twin definitions stay ordinary
             }
             def_idx = Some(i);
         } else if parse_macro_pair(m, p).is_some() {
             inv_idx.push(i);
         } else {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
-    let def_idx = def_idx?;
+    let Some(def_idx) = def_idx else {
+        return super::prov::Counted::Miss;
+    };
     if inv_idx.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Shared bare-ident delta across the definition and every invocation.
-    let (def_old, def_new) = is_macro_rules_def_pair(minuses[def_idx], pluses[def_idx])?;
+    let Some((def_old, def_new)) = is_macro_rules_def_pair(minuses[def_idx], pluses[def_idx])
+    else {
+        return super::prov::Counted::Miss;
+    };
     if def_old == def_new || def_old.is_empty() || def_new.is_empty() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for &i in &inv_idx {
-        let (o, n) = parse_macro_pair(minuses[i], pluses[i])?;
-        let (o_pre, o_last) = split_macro_path(&o)?;
-        let (n_pre, n_last) = split_macro_path(&n)?;
+        let Some((o, n)) = parse_macro_pair(minuses[i], pluses[i]) else {
+            return super::prov::Counted::Miss;
+        };
+        let Some((o_pre, o_last)) = split_macro_path(&o) else {
+            return super::prov::Counted::Miss;
+        };
+        let Some((n_pre, n_last)) = split_macro_path(&n) else {
+            return super::prov::Counted::Miss;
+        };
         // Bare only in v1; prefixes must be empty and last segments must
         // carry the definition delta.
         if !o_pre.is_empty() || !n_pre.is_empty() {
-            return None;
+            return super::prov::Counted::Miss;
         }
         if o_last != def_old || n_last != def_new {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     // Pre-image totality.
@@ -92,12 +103,27 @@ pub(crate) fn try_macro_rules_rename(
     let def_site = changed[def_idx];
     if let Some(pre_text) = pre {
         if macro_rules_def_site(pre_text, &def_old) != Some(def_site) {
-            return None;
+            return super::prov::Counted::Miss;
         }
         let inv_minuses: Vec<&str> = inv_idx.iter().map(|&i| minuses[i]).collect();
         let inv_changed: Vec<usize> = inv_idx.iter().map(|&i| changed[i]).collect();
-        if !crate::totality::macro_holds(file_old, &def_old, &inv_minuses, &inv_changed) {
-            return None;
+        match crate::totality_counted::macro_verdict(
+            file_old,
+            &def_old,
+            false,
+            &inv_minuses,
+            &inv_changed,
+        ) {
+            crate::totality_counted::FamilyVerdict::Holds => {}
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            crate::totality_counted::FamilyVerdict::Unproven => {
+                return super::prov::Counted::Miss;
+            }
         }
     }
     // WI-16 slice 1: the follow form wins when proven. The same
@@ -112,7 +138,7 @@ pub(crate) fn try_macro_rules_rename(
         let pre_lines: Vec<&str> = pre_text.lines().collect();
         if scratch_reproduces(pre_text, path, &probe, &pre_lines, changed, pluses) {
             let rule = unique_rule(used_rules, &format!("rename_{def_old}_to_{def_new}"));
-            return Some(emit_follow(
+            return super::prov::Counted::Fire(emit_follow(
                 path,
                 &rule,
                 Some(pre_text),
@@ -130,11 +156,19 @@ pub(crate) fn try_macro_rules_rename(
     );
     if let Some(pre_text) = pre {
         if scratch_matches(pre_text, path, &probe) != Some(1 + inv_idx.len()) {
-            return None;
+            match crate::totality_counted::scratch_line_verdict(Some(pre_text), minuses, changed) {
+                crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                    return super::prov::Counted::Totality { found, want };
+                }
+                crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                    return super::prov::Counted::Opaque;
+                }
+                _ => return super::prov::Counted::Miss,
+            }
         }
     }
     let rule = unique_rule(used_rules, &format!("rename_{def_old}_to_{def_new}"));
-    Some(emit(
+    super::prov::Counted::Fire(emit(
         path, &rule, file_old, def_site, &inv_idx, changed, &def_old, &def_new,
     ))
 }
@@ -512,7 +546,7 @@ mod tests {
         let pluses = ["    let a = new_widget!(1);"];
         let mut used = Vec::new();
         assert!(
-            try_macro_rules_rename(&minuses, &pluses, "f.rs", Some(PRE), &[5], &mut used).is_none()
+            try_macro_rules_rename(&minuses, &pluses, "f.rs", Some(PRE), &[5], &mut used).is_miss()
         );
     }
 
@@ -567,7 +601,7 @@ mod tests {
                 &[1, 8, 9, 10, 11],
                 &mut used,
             )
-            .is_none(),
+            .is_miss(),
             "twin definitions must decline"
         );
         let _ = (raw, pre);
@@ -587,7 +621,7 @@ mod tests {
         let mut used = Vec::new();
         assert!(
             try_macro_rules_rename(&minuses, &pluses, "f.rs", Some(pre), &[1, 5], &mut used)
-                .is_none(),
+                .is_miss(),
             "qualified invocations must decline in v1"
         );
     }
@@ -612,16 +646,18 @@ mod tests {
         ];
         let mut used = Vec::new();
         assert!(
-            try_macro_rules_rename(
-                &minuses,
-                &pluses,
-                "f.rs",
-                Some(&twin_pre),
-                &[1, 5, 6],
-                &mut used,
-            )
-            .is_none(),
-            "untouched twin must veto"
+            matches!(
+                try_macro_rules_rename(
+                    &minuses,
+                    &pluses,
+                    "f.rs",
+                    Some(&twin_pre),
+                    &[1, 5, 6],
+                    &mut used,
+                ),
+                crate::semantic::prov::Counted::Totality { found: 5, want: 2 }
+            ),
+            "untouched twin must veto with its counts (5 invocation sites vs 2 claimed)"
         );
     }
 
@@ -660,7 +696,7 @@ mod tests {
         let pluses = ["macro_rules! new_widget {"];
         let mut used = Vec::new();
         assert!(
-            try_macro_rules_rename(&minuses, &pluses, "f.rs", Some(PRE), &[1], &mut used).is_none()
+            try_macro_rules_rename(&minuses, &pluses, "f.rs", Some(PRE), &[1], &mut used).is_miss()
         );
         let _ = unique_rule(&mut used, "r1");
     }

@@ -961,3 +961,107 @@ fn wi4_slice2brest_a_call_arg_template_names_totality_end_to_end() {
         String::from_utf8_lossy(&text_out.stderr)
     );
 }
+
+#[test]
+fn wi4_slice2brest_b_control_template_names_totality_end_to_end() {
+    // WI-4 slice 2b-rest-b: a 2-pair guard-position rewrite over 3
+    // same-template sites stays wholly ordinary (no control single
+    // exists to claim a pair), and the trial names the counted
+    // decline (`control_template` / `totality:3:2`) with text parity.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m(v: i32) -> i32 {\n    match v {\n        _ if v > 0 => 1,\n        _ if v > 0 => 2,\n        _ if v > 0 => 3,\n    }\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m(v: i32) -> i32 {\n    match v {\n        _ if v >= 0 => 1,\n        _ if v >= 0 => 2,\n        _ if v > 0 => 3,\n    }\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "stays ordinary, got: {v}");
+    let declined = hunks[0]["declined"].as_array().unwrap();
+    assert!(
+        declined
+            .iter()
+            .any(|d| d["detector"] == serde_json::json!("control_template")
+                && d["reason"] == serde_json::json!("totality:3:2")),
+        "counted decline named, got: {declined:?}"
+    );
+    let text_out = run(dir.path(), &[]);
+    assert!(
+        String::from_utf8_lossy(&text_out.stderr)
+            .lines()
+            .any(|l| l == "declined: src/f.rs control_template totality:3:2"),
+        "text parity, got: {}",
+        String::from_utf8_lossy(&text_out.stderr)
+    );
+}
+
+#[test]
+fn wi4_slice2brest_b_call_perm_split_from_arg_template_end_to_end() {
+    // WI-4 slice 2b-rest-b: the sub-line perm arm reports as `call_perm`
+    // (distinct from the whole-line `call_arg_template` arm), so a
+    // wholly-ordinary section names each once — no shared-name double
+    // entry. The same probe pins a scratch-twin family
+    // (`literal_frame` / `totality:4:2`) with text parity.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    let x = f(\"old\");\n    let y = f(\"old\");\n    let x = f(\"old\");\n    let y = f(\"old\");\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    let x = f(\"new\");\n    let y = f(\"new\");\n    let x = f(\"old\");\n    let y = f(\"old\");\n}\n",
+    );
+    let out = run(dir.path(), &["--format", "json"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "stays ordinary, got: {v}");
+    let declined = hunks[0]["declined"].as_array().unwrap();
+    let perm: Vec<_> = declined
+        .iter()
+        .filter(|d| d["detector"] == serde_json::json!("call_perm"))
+        .collect();
+    assert_eq!(perm.len(), 1, "call_perm named once, got: {declined:?}");
+    assert_eq!(perm[0]["reason"], serde_json::json!("no-match"));
+    let arg: Vec<_> = declined
+        .iter()
+        .filter(|d| d["detector"] == serde_json::json!("call_arg_template"))
+        .collect();
+    assert_eq!(arg.len(), 1, "whole-line arm named once, got: {declined:?}");
+    assert_eq!(arg[0]["reason"], serde_json::json!("totality:4:2"));
+    assert!(
+        declined
+            .iter()
+            .any(|d| d["detector"] == serde_json::json!("literal_frame")
+                && d["reason"] == serde_json::json!("totality:4:2")),
+        "scratch-twin decline named, got: {declined:?}"
+    );
+    let text_out = run(dir.path(), &[]);
+    let text = String::from_utf8_lossy(&text_out.stderr);
+    assert!(
+        text.lines()
+            .any(|l| l == "declined: src/f.rs literal_frame totality:4:2"),
+        "text parity, got: {text}"
+    );
+}

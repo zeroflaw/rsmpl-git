@@ -33,28 +33,32 @@ pub(crate) fn try_call_perm_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Uniqueness needs the whole file; section-visible fallback stays
     // ordinary (no guessing).
-    let pre = file_old?;
-    let (o_cal, n_cal, o_args, n_args) = parse_bare_pair(minuses[0], pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((o_cal, n_cal, o_args, n_args)) = parse_bare_pair(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     // Callee deltas stay with the slice-1 single.
     if o_cal != n_cal {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let k = o_args.len();
     // Arity 0/1 cannot permute; `parse_bare_pair` already enforces
     // uniform arity across the pair.
     if k < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for arg in o_args.iter().chain(n_args.iter()) {
         let probe = super::shape::probe_expr(arg);
         if probe.macros > 0 || probe.unsupported > 0 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     let minus_toks: Vec<String> = o_args.iter().map(tok).collect();
@@ -65,10 +69,10 @@ pub(crate) fn try_call_perm_single(
     sorted_minus.sort();
     sorted_plus.sort();
     if sorted_minus != sorted_plus {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if minus_toks == plus_toks {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Deterministic hole mapping: each plus position binds the first
     // still-unused minus position with equal token text. Multiset
@@ -83,7 +87,9 @@ pub(crate) fn try_call_perm_single(
                 break;
             }
         }
-        let i = found?;
+        let Some(i) = found else {
+            return super::prov::Counted::Miss;
+        };
         used[i] = true;
         plus_tpl.push(format!("E{i}"));
     }
@@ -103,10 +109,23 @@ pub(crate) fn try_call_perm_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -117,13 +136,13 @@ pub(crate) fn try_call_perm_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "call_arg_template");
     // Allow-one: directive-free ranged hunk (slices-1-9 precedent).
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-17: sub-line bare perm single (N=1) under
@@ -152,21 +171,25 @@ pub(crate) fn try_subline_perm_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     if super::arg_template::parse_bare_pair(minuses[0], pluses[0]).is_some() {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_arg_permutation_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_arg_permutation_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let (cal, arity, perm) = (sites[0].cal.clone(), sites[0].arity, sites[0].perm.clone());
     if arity < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let minus_tpl: Vec<String> = (0..arity).map(|i| format!("E{i}")).collect();
     let mut plus_tpl = Vec::with_capacity(arity);
@@ -181,10 +204,23 @@ pub(crate) fn try_subline_perm_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -195,12 +231,12 @@ pub(crate) fn try_subline_perm_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "call_arg_template");
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-18: sub-line method perm single (N=1) under
@@ -231,19 +267,23 @@ pub(crate) fn try_subline_method_perm_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     if super::arg_template::parse_method_line(minuses[0]).is_some()
         && super::arg_template::parse_method_line(pluses[0]).is_some()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let sites = super::subline::extract_method_perm_sites(minuses[0], pluses[0])?;
+    let Some(sites) = super::subline::extract_method_perm_sites(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if sites.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let (method, arity, perm) = (
         sites[0].method.clone(),
@@ -251,7 +291,7 @@ pub(crate) fn try_subline_method_perm_single(
         sites[0].perm.clone(),
     );
     if arity < 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let minus_tpl: Vec<String> = (0..arity).map(|i| format!("E{i}")).collect();
     let mut plus_tpl = Vec::with_capacity(arity);
@@ -266,10 +306,23 @@ pub(crate) fn try_subline_method_perm_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -280,12 +333,12 @@ pub(crate) fn try_subline_method_perm_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "method_arg_template");
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice-11: whole-line method-call arg-permutation single (N=1)
@@ -304,24 +357,30 @@ pub(crate) fn try_method_perm_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
-    let (o_recv, o_method, o_args) = parse_method_line(minuses[0])?;
-    let (n_recv, n_method, n_args) = parse_method_line(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((o_recv, o_method, o_args)) = parse_method_line(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((n_recv, n_method, n_args)) = parse_method_line(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if o_recv != n_recv || o_method != n_method {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let k = o_args.len();
     if k < 2 || n_args.len() != k {
-        return None;
+        return super::prov::Counted::Miss;
     }
     for arg in o_args.iter().chain(n_args.iter()) {
         let probe = super::shape::probe_expr(arg);
         if probe.macros > 0 || probe.unsupported > 0 {
-            return None;
+            return super::prov::Counted::Miss;
         }
     }
     let minus_toks: Vec<String> = o_args.iter().map(tok).collect();
@@ -331,10 +390,10 @@ pub(crate) fn try_method_perm_single(
     sorted_minus.sort();
     sorted_plus.sort();
     if sorted_minus != sorted_plus {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if minus_toks == plus_toks {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut used = vec![false; k];
     let mut plus_tpl = Vec::with_capacity(k);
@@ -346,7 +405,9 @@ pub(crate) fn try_method_perm_single(
                 break;
             }
         }
-        let i = found?;
+        let Some(i) = found else {
+            return super::prov::Counted::Miss;
+        };
         used[i] = true;
         plus_tpl.push(format!("E{i}"));
     }
@@ -361,10 +422,23 @@ pub(crate) fn try_method_perm_single(
     if syn::parse_str::<syn::Expr>(&raw_minus).is_err()
         || syn::parse_str::<syn::Expr>(&raw_plus).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), &minus_call, &plus_call, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), &minus_call, &plus_call),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path,
@@ -375,12 +449,12 @@ pub(crate) fn try_method_perm_single(
         &minus_call,
         &plus_call,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "method_arg_template");
     let mut hunk = crate::emission_header(path, &rule, changed).replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_call}\n+ {plus_call}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 #[cfg(test)]
@@ -408,7 +482,12 @@ mod tests {
             .expect("emitted patch must apply cleanly");
     }
 
-    fn psingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn psingle(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_call_perm_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
     }
 
@@ -474,7 +553,7 @@ mod tests {
             Some("fn m() {\n    f(a, b, c);\n}\n"),
             &[2],
         )
-        .expect("3-cycle perm single must fire");
+        .unwrap_fire("3-cycle perm single must fire");
         assert!(out.contains("- f(E0, E1, E2)\n"), "got: {out}");
         assert!(out.contains("+ f(E2, E0, E1)\n"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -484,13 +563,15 @@ mod tests {
     fn wi10_perm_single_twin_vetoes() {
         // An untouched same-callee same-arity twin anywhere vetoes.
         assert!(
-            psingle(
-                "    swap(x, y);",
-                "    swap(y, x);",
-                Some("fn m() {\n    swap(x, y);\n    swap(a, b);\n}\n"),
-                &[2]
-            )
-            .is_none(),
+            matches!(
+                psingle(
+                    "    swap(x, y);",
+                    "    swap(y, x);",
+                    Some("fn m() {\n    swap(x, y);\n    swap(a, b);\n}\n"),
+                    &[2]
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin must veto"
         );
     }
@@ -505,7 +586,7 @@ mod tests {
             Some("fn m() {\n    swap(x, y);\n    swap(x, y, z);\n}\n"),
             &[2],
         )
-        .expect("different-arity twin must not veto");
+        .unwrap_fire("different-arity twin must not veto");
         assert!(out.contains("+ swap(E1, E0)\n"), "got: {out}");
     }
 
@@ -513,7 +594,7 @@ mod tests {
     fn wi10_perm_single_none_vetoes() {
         // No whole-file evidence → no guessing (D3).
         assert!(
-            psingle("    swap(x, y);", "    swap(y, x);", None, &[2]).is_none(),
+            psingle("    swap(x, y);", "    swap(y, x);", None, &[2]).is_miss(),
             "None pre-image must veto"
         );
     }
@@ -528,7 +609,7 @@ mod tests {
                 Some("fn m() {\n    swap(x, y);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "identity must veto"
         );
     }
@@ -543,7 +624,7 @@ mod tests {
                 Some("fn m() {\n    swap(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "non-bijective delta must veto"
         );
     }
@@ -558,7 +639,7 @@ mod tests {
                 Some("fn m() {\n    f(x);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "unary must veto"
         );
         assert!(
@@ -568,7 +649,7 @@ mod tests {
                 Some("fn m() {\n    f();\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "nullary must veto"
         );
     }
@@ -583,7 +664,7 @@ mod tests {
                 Some("fn m() {\n    foo(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "callee delta must decline here"
         );
     }
@@ -599,7 +680,7 @@ mod tests {
                 Some("fn m() {\n    swap(m!(x), y);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -614,12 +695,17 @@ mod tests {
             Some("fn m() {\n    Swap(a, b);\n}\n"),
             &[2],
         )
-        .expect("uppercase perm single must fire");
+        .unwrap_fire("uppercase perm single must fire");
         assert!(out.contains("`Swap`(E0, E1)"), "got: {out}");
         assert!(out.contains("`Swap`(E1, E0)"), "got: {out}");
     }
 
-    fn msingle(minus: &str, plus: &str, pre: Option<&str>, changed: &[usize]) -> Option<String> {
+    fn msingle(
+        minus: &str,
+        plus: &str,
+        pre: Option<&str>,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         super::try_method_perm_single(&[minus], &[plus], "f.rs", pre, changed, &mut Vec::new())
     }
 
@@ -686,7 +772,7 @@ mod tests {
             Some("fn m(s: S) {\n    s.foo(a, b, c);\n}\n"),
             &[2],
         )
-        .expect("3-cycle method perm must fire");
+        .unwrap_fire("3-cycle method perm must fire");
         assert!(out.contains("- Receiver.foo(E0, E1, E2)\n"), "got: {out}");
         assert!(out.contains("+ Receiver.foo(E2, E0, E1)\n"), "got: {out}");
     }
@@ -694,13 +780,15 @@ mod tests {
     #[test]
     fn wi11_method_perm_single_twin_vetoes() {
         assert!(
-            msingle(
-                "    s.foo(a, b);",
-                "    s.foo(b, a);",
-                Some("fn m(s: S) {\n    s.foo(a, b);\n    s.foo(c, d);\n}\n"),
-                &[2]
-            )
-            .is_none(),
+            matches!(
+                msingle(
+                    "    s.foo(a, b);",
+                    "    s.foo(b, a);",
+                    Some("fn m(s: S) {\n    s.foo(a, b);\n    s.foo(c, d);\n}\n"),
+                    &[2]
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "twin must veto"
         );
     }
@@ -713,7 +801,7 @@ mod tests {
             Some("fn m(s: S) {\n    s.foo(a, b);\n    s.foo(a, b, c);\n}\n"),
             &[2],
         )
-        .expect("different-arity twin must not veto");
+        .unwrap_fire("different-arity twin must not veto");
         assert!(out.contains("+ Receiver.foo(E1, E0)\n"), "got: {out}");
     }
 
@@ -726,7 +814,7 @@ mod tests {
                 Some("fn m(s: S, t: S) {\n    s.foo(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "receiver delta must decline here"
         );
     }
@@ -740,14 +828,14 @@ mod tests {
                 Some("fn m(s: S) {\n    s.foo(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "method delta must decline here"
         );
     }
 
     #[test]
     fn wi11_method_perm_single_none_identity_nonbijection_veto() {
-        assert!(msingle("    s.foo(a, b);", "    s.foo(b, a);", None, &[2]).is_none());
+        assert!(msingle("    s.foo(a, b);", "    s.foo(b, a);", None, &[2]).is_miss());
         assert!(
             msingle(
                 "    s.foo(a, b);",
@@ -755,7 +843,7 @@ mod tests {
                 Some("fn m(s: S) {\n    s.foo(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "identity must veto"
         );
         assert!(
@@ -765,7 +853,7 @@ mod tests {
                 Some("fn m(s: S) {\n    s.foo(a, b);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "non-bijective delta must veto"
         );
         assert!(
@@ -775,7 +863,7 @@ mod tests {
                 Some("fn m(s: S) {\n    s.foo(m!(x), y);\n}\n"),
                 &[2]
             )
-            .is_none(),
+            .is_miss(),
             "macro arg must veto"
         );
     }
@@ -788,7 +876,7 @@ mod tests {
             Some("fn m(s: S) {\n    s.Foo(a, b);\n}\n"),
             &[2],
         )
-        .expect("uppercase method perm must fire");
+        .unwrap_fire("uppercase method perm must fire");
         assert!(out.contains("Receiver.`Foo`(E0, E1)"), "got: {out}");
         assert!(out.contains("Receiver.`Foo`(E1, E0)"), "got: {out}");
     }
@@ -806,7 +894,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .expect("uppercase bare-call wrap single must fire");
+        .unwrap_fire("uppercase bare-call wrap single must fire");
         assert!(out.contains("`Foo`(E0)"), "got: {out}");
         assert!(out.contains("`Foo`(E0.clone())"), "got: {out}");
         assert!(!out.contains("# allow=many"), "allow-one: {out}");
@@ -818,7 +906,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .expect("uppercase method wrap single must fire");
+        .unwrap_fire("uppercase method wrap single must fire");
         assert!(out.contains("Receiver.`Foo`(E0)"), "got: {out}");
         assert!(out.contains("Receiver.`Foo`(E0.clone())"), "got: {out}");
     }
@@ -899,15 +987,17 @@ mod tests {
         // verbatim single (byte-probe verified).
         let pre = "fn m() {\n    swap(alpha_arg, beta_arg) + 1;\n    swap(first_value, second_value);\n}\n";
         assert!(
-            super::try_subline_perm_single(
-                &["    swap(alpha_arg, beta_arg) + 1;"],
-                &["    swap(beta_arg, alpha_arg) + 1;"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_perm_single(
+                    &["    swap(alpha_arg, beta_arg) + 1;"],
+                    &["    swap(beta_arg, alpha_arg) + 1;"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -953,7 +1043,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -970,7 +1060,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -986,7 +1076,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
         assert!(
@@ -998,7 +1088,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "non-bijective delta must decline"
         );
     }
@@ -1079,15 +1169,17 @@ mod tests {
         // verbatim single (byte-probe verified).
         let pre = "fn m(svc: Svc) {\n    svc.configure(alpha_arg, beta_arg) + 1;\n    svc.configure(first_value, second_value);\n}\n";
         assert!(
-            super::try_subline_method_perm_single(
-                &["    svc.configure(alpha_arg, beta_arg) + 1;"],
-                &["    svc.configure(beta_arg, alpha_arg) + 1;"],
-                "f.rs",
-                Some(pre),
-                &[2],
-                &mut Vec::new()
-            )
-            .is_none(),
+            matches!(
+                super::try_subline_method_perm_single(
+                    &["    svc.configure(alpha_arg, beta_arg) + 1;"],
+                    &["    svc.configure(beta_arg, alpha_arg) + 1;"],
+                    "f.rs",
+                    Some(pre),
+                    &[2],
+                    &mut Vec::new()
+                ),
+                crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+            ),
             "holed twin must veto at the core"
         );
         let raw = section(
@@ -1133,7 +1225,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "whole-line pair must decline"
         );
     }
@@ -1150,7 +1242,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "two-site line must decline"
         );
     }
@@ -1166,7 +1258,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "None pre-image must veto"
         );
         assert!(
@@ -1178,7 +1270,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "non-bijective delta must decline"
         );
         assert!(
@@ -1190,7 +1282,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "receiver delta must decline"
         );
         assert!(
@@ -1202,7 +1294,7 @@ mod tests {
                 &[2],
                 &mut Vec::new()
             )
-            .is_none(),
+            .is_miss(),
             "method delta must decline"
         );
     }

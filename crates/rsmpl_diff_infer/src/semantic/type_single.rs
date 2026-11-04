@@ -29,20 +29,24 @@ pub(crate) fn try_type_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     let m = minuses[0].trim();
     let p = pluses[0].trim();
     if m.is_empty() || p.is_empty() || m == p {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if m.contains('\n') || p.contains('\n') {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (minus_ty, plus_ty) = single_type_delta(m, p)?;
+    let Some((minus_ty, plus_ty)) = single_type_delta(m, p) else {
+        return super::prov::Counted::Miss;
+    };
     // Type-position honesty (WI-3 fixture-64 precedent): the delta must
     // be a `syn::Type` node *in its own line*, not merely text that
     // parses as a type in isolation. A call-callee path with turbofish
@@ -52,7 +56,7 @@ pub(crate) fn try_type_single(
     // friends, which keep the args in the pattern) stay owners and this
     // arm declines instead of emitting an arg-dropping "type" rewrite.
     if !line_type_spellings(m).contains(&minus_ty) || !line_type_spellings(p).contains(&plus_ty) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // The emitted texts must re-parse as types (the extractor already
     // checked, but the emission is what the engine reads — never emit
@@ -60,19 +64,21 @@ pub(crate) fn try_type_single(
     if syn::parse_str::<syn::Type>(&minus_ty).is_err()
         || syn::parse_str::<syn::Type>(&plus_ty).is_err()
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Exactly one type subterm in the whole file (an untouched twin
     // vetoes — same posture as the N>=2 sweep).
-    if !crate::totality::template_type_holds(path, Some(pre), &minus_ty, 1) {
-        return None;
+    match crate::totality::template_type_counts(path, Some(pre), &minus_ty) {
+        Some(1) => {}
+        Some(found) => return super::prov::Counted::Totality { found, want: 1 },
+        None => return super::prov::Counted::Miss,
     }
     // T361: the ranged allow-one emission must real-apply byte-identical
     // to the native single-line swap.
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minuses[0], pluses[0], &minus_ty, &plus_ty,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let checkpoint = used_rules.len();
     let rule = unique_rule(used_rules, "type_sweep");
@@ -82,9 +88,9 @@ pub(crate) fn try_type_single(
     // applied equivalent spellings, but the hunk header is new).
     if rsmpl_patch::parse_patch(&hunk).is_err() {
         used_rules.truncate(checkpoint);
-        return None;
+        return super::prov::Counted::Miss;
     }
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// The single differing middle of two trimmed lines when both middles
@@ -238,7 +244,12 @@ mod tests {
             .collect()
     }
 
-    fn single(minus: &str, plus: &str, pre: &str, changed: &[usize]) -> Option<String> {
+    fn single(
+        minus: &str,
+        plus: &str,
+        pre: &str,
+        changed: &[usize],
+    ) -> crate::semantic::prov::Counted<String> {
         let mut used = Vec::new();
         super::try_type_single(&[minus], &[plus], "f.rs", Some(pre), changed, &mut used)
     }
@@ -254,7 +265,7 @@ mod tests {
             PRE_117,
             &[1],
         )
-        .expect("117-shaped single must fire");
+        .unwrap_fire("117-shaped single must fire");
         assert!(out.contains("- Vec<i32>\n"), "got:\n{out}");
         assert!(out.contains("+ Box<[i32]>\n"), "got:\n{out}");
         assert!(!out.contains("# allow=many"), "ranged single: {out}");
@@ -270,7 +281,7 @@ mod tests {
         // Return-position delta: the middle is the return type.
         let pre = "fn f() -> Vec<u32> {\n    vec![]\n}\nfn g() -> u32 {\n    0\n}\n";
         let out = single("fn f() -> Vec<u32> {", "fn f() -> Box<[u32]> {", pre, &[1])
-            .expect("return-type single must fire");
+            .unwrap_fire("return-type single must fire");
         assert!(out.contains("- Vec<u32>\n"), "got:\n{out}");
         assert!(out.contains("+ Box<[u32]>\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
@@ -288,7 +299,7 @@ mod tests {
             pre,
             &[2],
         )
-        .expect("let-ascription single must fire");
+        .unwrap_fire("let-ascription single must fire");
         assert!(out.contains("- Vec<u32>\n"), "got:\n{out}");
         assert!(out.contains("+ Box<[u32]>\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
@@ -302,13 +313,15 @@ mod tests {
         // Totality: a second `Vec<i32>` param elsewhere would be
         // silently rewritten — the single vetoes.
         let pre = "fn sum(values: Vec<i32>) -> i32 {\n    values.iter().sum()\n}\nfn other(v: Vec<i32>) -> usize {\n    v.len()\n}\n";
-        assert!(single(
-            "fn sum(values: Vec<i32>) -> i32 {",
-            "fn sum(values: Box<[i32]>) -> i32 {",
-            pre,
-            &[1],
-        )
-        .is_none());
+        assert!(matches!(
+            single(
+                "fn sum(values: Vec<i32>) -> i32 {",
+                "fn sum(values: Box<[i32]>) -> i32 {",
+                pre,
+                &[1],
+            ),
+            crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+        ));
     }
 
     #[test]
@@ -321,21 +334,21 @@ mod tests {
             pre,
             &[1],
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]
     fn bare_ident_rename_declines() {
         // Item-name deltas belong to the rename arms, never here.
         let pre = "fn foo(x: i32) {\n    x\n}\n";
-        assert!(single("fn foo(x: i32) {", "fn bar(x: i32) {", pre, &[1]).is_none());
+        assert!(single("fn foo(x: i32) {", "fn bar(x: i32) {", pre, &[1]).is_miss());
     }
 
     #[test]
     fn non_type_delta_declines() {
         // A body-token delta is not a type.
         let pre = "fn m() {\n    foo(1);\n}\n";
-        assert!(single("    foo(1);", "    foo(2);", pre, &[2]).is_none());
+        assert!(single("    foo(1);", "    foo(2);", pre, &[2]).is_miss());
     }
 
     #[test]
@@ -349,7 +362,7 @@ mod tests {
             &[1],
             &mut used,
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 
@@ -363,7 +376,7 @@ mod tests {
             PRE_117,
             &[5],
         )
-        .is_none());
+        .is_miss());
     }
     #[test]
     fn turbofish_callee_delta_declines() {
@@ -378,7 +391,7 @@ mod tests {
             pre,
             &[2],
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]
@@ -393,7 +406,7 @@ mod tests {
             pre,
             &[2],
         )
-        .expect("Vec<String> single must fire");
+        .unwrap_fire("Vec<String> single must fire");
         assert!(out.contains("- Vec<String>\n"), "got:\n{out}");
         assert!(out.contains("+ Box<[String]>\n"), "got:\n{out}");
     }
@@ -406,13 +419,15 @@ mod tests {
         // stays a literal and fires. Same shape, different verdicts,
         // pinned.
         let pre = "fn m() {\n    let beta_value: Vec<String> = compute_second(other);\n    let untouched_guard: Vec<u8> = compute_fourth(more);\n}\n";
-        assert!(single(
-            "    let beta_value: Vec<String> = compute_second(other);",
-            "    let beta_value: Box<[String]> = compute_second(other);",
-            pre,
-            &[2],
-        )
-        .is_none());
+        assert!(matches!(
+            single(
+                "    let beta_value: Vec<String> = compute_second(other);",
+                "    let beta_value: Box<[String]> = compute_second(other);",
+                pre,
+                &[2],
+            ),
+            crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+        ));
         let pre2 = "fn m() {\n    let alpha_value: Vec<u32> = compute_first(input);\n    let untouched_guard: Vec<u8> = compute_fourth(more);\n}\n";
         single(
             "    let alpha_value: Vec<u32> = compute_first(input);",
@@ -420,7 +435,7 @@ mod tests {
             pre2,
             &[2],
         )
-        .expect("primitive-inner literal still fires beside an extra Vec");
+        .unwrap_fire("primitive-inner literal still fires beside an extra Vec");
     }
 
     #[test]

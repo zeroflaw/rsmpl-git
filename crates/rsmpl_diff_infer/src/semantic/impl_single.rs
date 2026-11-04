@@ -131,17 +131,23 @@ pub(crate) fn try_impl_header_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<(String, &'static str)> {
+) -> super::prov::Counted<(String, &'static str)> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let (old, new) = parse_impl_pair(minuses[0], pluses[0])?;
-    let pre = file_old?;
+    let Some((old, new)) = parse_impl_pair(minuses[0], pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     // Pre-image alignment: the claimed line must be the diff's minus.
     let pre_lines: Vec<&str> = pre.lines().collect();
-    let pre_line = pre_lines.get(changed[0].saturating_sub(1))?;
+    let Some(pre_line) = pre_lines.get(changed[0].saturating_sub(1)) else {
+        return super::prov::Counted::Miss;
+    };
     if pre_line.trim() != minuses[0].trim() {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let checkpoint = used_rules.len();
     let rule = unique_rule(used_rules, &format!("rename_{old}_to_{new}"));
@@ -149,9 +155,17 @@ pub(crate) fn try_impl_header_single(
     out.push_str(&format!("- impl {old}\n+ impl {new}\n"));
     if !scratch_reproduces(pre, path, &out, &pre_lines, changed, pluses) {
         used_rules.truncate(checkpoint);
-        return None;
+        match crate::totality_counted::scratch_line_verdict(Some(pre), minuses, changed) {
+            crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+                return super::prov::Counted::Totality { found, want };
+            }
+            crate::totality_counted::FamilyVerdict::OpaqueHit => {
+                return super::prov::Counted::Opaque;
+            }
+            _ => return super::prov::Counted::Miss,
+        }
     }
-    Some((out, "item_rename"))
+    super::prov::Counted::Fire((out, "item_rename"))
 }
 
 /// Apply `section` to `pre` in memory and require exact line equality:
@@ -211,8 +225,15 @@ mod tests {
         plus: &str,
         changed: &[usize],
         used: &mut Vec<String>,
-    ) -> Option<String> {
-        try_impl_header_single(&[minus], &[plus], path, file_old, changed, used).map(|(s, _)| s)
+    ) -> crate::semantic::prov::Counted<String> {
+        match try_impl_header_single(&[minus], &[plus], path, file_old, changed, used) {
+            crate::semantic::prov::Counted::Fire((s, _)) => crate::semantic::prov::Counted::Fire(s),
+            crate::semantic::prov::Counted::Totality { found, want } => {
+                crate::semantic::prov::Counted::Totality { found, want }
+            }
+            crate::semantic::prov::Counted::Opaque => crate::semantic::prov::Counted::Opaque,
+            crate::semantic::prov::Counted::Miss => crate::semantic::prov::Counted::Miss,
+        }
     }
 
     const PRE: &str = "struct Old;\nstruct Foo;\nimpl Old {\n    fn f(&self) {}\n}\nimpl Printable for Foo {\n}\nimpl Printable for Old {\n}\n";
@@ -230,7 +251,7 @@ mod tests {
             &[3],
             &mut used,
         )
-        .expect("self-ty single must fire");
+        .unwrap_fire("self-ty single must fire");
         assert!(out.contains("- impl Old\n"), "got:\n{out}");
         assert!(out.contains("+ impl New\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
@@ -254,7 +275,7 @@ mod tests {
             &[6],
             &mut used,
         )
-        .expect("trait-side single must fire");
+        .unwrap_fire("trait-side single must fire");
         assert!(out.contains("- impl Printable\n"), "got:\n{out}");
         assert!(out.contains("+ impl Labeled\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
@@ -277,7 +298,7 @@ mod tests {
             &[8],
             &mut used
         )
-        .is_none());
+        .is_miss());
         // Identical names decline.
         assert!(section_body(
             "f.rs",
@@ -287,7 +308,7 @@ mod tests {
             &[3],
             &mut used
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 
@@ -305,7 +326,7 @@ mod tests {
             &[3],
             &mut used,
         )
-        .expect("generic self-ty single must fire");
+        .unwrap_fire("generic self-ty single must fire");
         assert!(out.contains("- impl Old\n"), "got:\n{out}");
         assert!(out.contains("+ impl New\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
@@ -330,7 +351,7 @@ mod tests {
             &[2],
             &mut used,
         )
-        .expect("qualified trait-side single must fire");
+        .unwrap_fire("qualified trait-side single must fire");
         assert!(out.contains("- impl Printable\n"), "got:\n{out}");
         assert!(out.contains("+ impl Labeled\n"), "got:\n{out}");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
@@ -356,7 +377,7 @@ mod tests {
             &[2],
             &mut used,
         )
-        .expect("generic trait-side single must fire");
+        .unwrap_fire("generic trait-side single must fire");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
         let mut files = std::collections::HashMap::from([("f.rs".to_string(), pre.to_string())]);
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
@@ -371,7 +392,7 @@ mod tests {
             &[2],
             &mut used,
         )
-        .expect("generic+qualified trait-side single must fire");
+        .unwrap_fire("generic+qualified trait-side single must fire");
         let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
         let mut files = std::collections::HashMap::from([("f.rs".to_string(), combo.to_string())]);
         rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
@@ -394,7 +415,7 @@ mod tests {
             &[2],
             &mut used
         )
-        .is_none());
+        .is_miss());
         // Qualified prefix must compare byte-equal.
         let qpre = "struct Foo;\nimpl crate::Printable for Foo {\n}\n";
         assert!(section_body(
@@ -405,7 +426,7 @@ mod tests {
             &[2],
             &mut used
         )
-        .is_none());
+        .is_miss());
         // Bare-vs-qualified shape mismatch declines.
         assert!(section_body(
             "f.rs",
@@ -415,7 +436,7 @@ mod tests {
             &[6],
             &mut used
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 
@@ -431,7 +452,7 @@ mod tests {
             &[4],
             &mut used
         )
-        .is_none());
+        .is_miss());
         assert!(used.is_empty());
     }
 }

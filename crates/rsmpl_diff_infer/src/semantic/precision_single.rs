@@ -5,8 +5,8 @@
 //! this module's name so `super::` paths keep working.
 
 use super::{
-    guard_for, item_rename_vis, prov::Counted, try_assoc_def_only, try_fn_slot_sweep,
-    try_macro_rules_def_only, try_member_def_only, try_sig_evolution_sweep, Guard,
+    guard_for, item_rename_vis, try_assoc_def_only, try_fn_slot_sweep, try_macro_rules_def_only,
+    try_member_def_only, try_sig_evolution_sweep, Guard,
 };
 
 /// WI-19b precision singles beyond item-rename/definition-evolution:
@@ -24,21 +24,32 @@ pub(crate) fn try_precision_definition_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<(String, &'static str)> {
+) -> super::prov::Counted<(String, &'static str)> {
+    use super::prov::Counted;
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return Counted::Miss;
     }
-    if let Counted::Fire(sweep) =
-        try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        debug_assert_eq!(guard_for("fn_slot_sweep"), Guard::Precision);
-        return Some((sweep, "fn_slot_sweep"));
+    // WI-4 slice 2b-rest-b: the counted slot/sig arms propagate their
+    // verdicts (a twin names its counts instead of falling through to
+    // an unrelated arm); the def-only arms stay shape-Miss by design
+    // (`item_rename` family — partition path).
+    match try_fn_slot_sweep(minuses, pluses, path, file_old, changed, used_rules) {
+        Counted::Fire(sweep) => {
+            debug_assert_eq!(guard_for("fn_slot_sweep"), Guard::Precision);
+            return Counted::Fire((sweep, "fn_slot_sweep"));
+        }
+        Counted::Totality { found, want } => return Counted::Totality { found, want },
+        Counted::Opaque => return Counted::Opaque,
+        Counted::Miss => {}
     }
-    if let Counted::Fire(evo) =
-        try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules)
-    {
-        debug_assert_eq!(guard_for("sig_evolution"), Guard::Precision);
-        return Some((evo, "sig_evolution"));
+    match try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules) {
+        Counted::Fire(evo) => {
+            debug_assert_eq!(guard_for("sig_evolution"), Guard::Precision);
+            return Counted::Fire((evo, "sig_evolution"));
+        }
+        Counted::Totality { found, want } => return Counted::Totality { found, want },
+        Counted::Opaque => return Counted::Opaque,
+        Counted::Miss => {}
     }
     // N=1 bare-item vis single (struct/enum vis singles): same-name
     // closed-set vis step as a terse ItemRename pair. Same machinery as
@@ -48,18 +59,18 @@ pub(crate) fn try_precision_definition_single(
         item_rename_vis::try_item_vis_single(minuses, pluses, path, file_old, changed, used_rules)
     {
         debug_assert_eq!(guard_for("item_rename"), Guard::Precision);
-        return Some((vis, "item_rename"));
+        return Counted::Fire((vis, "item_rename"));
     }
     if let Some(out) = try_member_def_only(minuses, pluses, path, file_old, changed, used_rules) {
-        return Some(out);
+        return Counted::Fire(out);
     }
     if let Some(out) =
         try_macro_rules_def_only(minuses, pluses, path, file_old, changed, used_rules)
     {
-        return Some(out);
+        return Counted::Fire(out);
     }
     if let Some(out) = try_assoc_def_only(minuses, pluses, path, file_old, changed, used_rules) {
-        return Some(out);
+        return Counted::Fire(out);
     }
-    None
+    Counted::Miss
 }

@@ -7916,11 +7916,21 @@ single: the shape matched and the file-wide count `found` differs
    family (free + per-block counts), the qualified-call family, the
    turbofish family (call + method), the use-prefix family, and the
    macro-rename family (bare + qualified); WI-4 slice 2b-rest-a wires
-   the call-perm family (sub-line perm, same emission family as
-   call-arg-template), the call-arg-template family, and the
+   the call-perm family (sub-line perm, detector name `call_perm`
+   distinct from the whole-line `call_arg_template` arm), the
+   call-arg-template family, and the
    method-arg-template family (all via the real-pair engine count);
-   every other detector still
-   declines shape-or-count as `no-match` pending WI-4 slice 2b-rest-b),
+   WI-4 slice 2b-rest-b wires every remaining chain detector:
+   engine-count families (control-template via the real-pair count,
+   call-peel via the syntax-walk count, let-template ×3 + sequence +
+   single-block ×2 + repeat-fold + partial-strip + literal-frame via
+   the real-pair / sequence / repeat engine counts, framed let-fallback
+   via the untyped-let count) and scratch-twin families
+   (member-rename, assoc-rename, definition-evolution, macro-rules,
+   trait/inherent-method, attr-sweep, and every per-hunk +
+   whole-section single — each records `totality:found:want` when the
+   pre-image holds a twin minus-line elsewhere, else `no-match`;
+   `item_rename` stays `no-match` by design — partition path)),
   `veto:<name>` (named veto: off-diff
   use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
   family when a macro/string twin covers a changed line, WI-4 slice 1

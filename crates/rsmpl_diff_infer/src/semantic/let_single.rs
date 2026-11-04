@@ -102,23 +102,36 @@ fn emit_let_single(
     minus_tpl: &str,
     plus_tpl: &str,
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minus_tpl == plus_tpl {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    if !crate::totality::template_pair_holds(path, Some(pre), minus_tpl, plus_tpl, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_pair_counts(path, Some(pre), minus_tpl, plus_tpl),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !super::general_expr::single_reproduces(
         path, pre, changed[0], minus_line, plus_line, minus_tpl, plus_tpl,
     ) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "let_template");
     let header = crate::emission_header(path, &rule, changed);
     let mut hunk = header.replace("# allow=many\n", "");
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 /// WI-7 slice 2, typed wrap-add single (fixture `98`): typed→typed
@@ -132,21 +145,31 @@ pub(crate) fn try_typed_wrap_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
-    let (m_pat, m_ty, m_init) = parse_typed_let_full(minuses[0])?;
-    let (p_pat, p_ty, p_init) = parse_typed_let_full(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((m_pat, m_ty, m_init)) = parse_typed_let_full(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((p_pat, p_ty, p_init)) = parse_typed_let_full(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if tok(&m_pat) != tok(&p_pat) || tok(&m_ty) != tok(&p_ty) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !init_ok(&m_init) || !init_ok(&p_init) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pat_tpl = hole_single_pat(&m_pat)?;
-    let suffix = method_wrap_suffix(&m_init, &p_init)?;
+    let Some(pat_tpl) = hole_single_pat(&m_pat) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(suffix) = method_wrap_suffix(&m_init, &p_init) else {
+        return super::prov::Counted::Miss;
+    };
     let minus_tpl = format!("let {pat_tpl}: T0 = E0;");
     let plus_tpl = format!("let {pat_tpl}: T0 = E0{suffix};");
     emit_let_single(
@@ -164,21 +187,31 @@ pub(crate) fn try_untyped_wrap_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
-    let (m_pat, m_init) = parse_untyped_let_full(minuses[0])?;
-    let (p_pat, p_init) = parse_untyped_let_full(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((m_pat, m_init)) = parse_untyped_let_full(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((p_pat, p_init)) = parse_untyped_let_full(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if tok(&m_pat) != tok(&p_pat) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !init_ok(&m_init) || !init_ok(&p_init) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pat_tpl = hole_single_pat(&m_pat)?;
-    let suffix = method_wrap_suffix(&m_init, &p_init)?;
+    let Some(pat_tpl) = hole_single_pat(&m_pat) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some(suffix) = method_wrap_suffix(&m_init, &p_init) else {
+        return super::prov::Counted::Miss;
+    };
     let minus_tpl = format!("let {pat_tpl} = E0;");
     let plus_tpl = format!("let {pat_tpl} = E0{suffix};");
     emit_let_single(
@@ -201,34 +234,40 @@ pub(crate) fn try_pat_swap_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 1 || pluses.len() != 1 || changed.len() != 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
-    let (m_pat, m_init) = parse_untyped_let_full(minuses[0])?;
-    let (p_pat, p_init) = parse_untyped_let_full(pluses[0])?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((m_pat, m_init)) = parse_untyped_let_full(minuses[0]) else {
+        return super::prov::Counted::Miss;
+    };
+    let Some((p_pat, p_init)) = parse_untyped_let_full(pluses[0]) else {
+        return super::prov::Counted::Miss;
+    };
     if tok(&m_init) != tok(&p_init) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !init_ok(&m_init) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let syn::Pat::Tuple(mt) = m_pat else {
-        return None;
+        return super::prov::Counted::Miss;
     };
     let syn::Pat::Tuple(pt) = p_pat else {
-        return None;
+        return super::prov::Counted::Miss;
     };
     if mt.elems.len() != 2 || pt.elems.len() != 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let m0 = tok(&mt.elems[0]);
     let m1 = tok(&mt.elems[1]);
     let p0 = tok(&pt.elems[0]);
     let p1 = tok(&pt.elems[1]);
     if m0 == m1 || m0 != p1 || m1 != p0 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let minus_tpl = "let (P0, P1) = E0;".to_string();
     let plus_tpl = "let (P1, P0) = E0;".to_string();
@@ -303,48 +342,73 @@ pub(crate) fn try_hetero_pair_window_single(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> super::prov::Counted<String> {
     if minuses.len() != 2 || pluses.len() != 2 || changed.len() != 2 {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let pre = file_old?;
+    let Some(pre) = file_old else {
+        return super::prov::Counted::Miss;
+    };
     if changed[1] != changed[0] + 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !minuses.iter().all(|l| is_plain_let_line(l)) || !pluses.iter().all(|l| is_plain_let_line(l))
     {
-        return None;
+        return super::prov::Counted::Miss;
     }
     // Position 0: pure type-add (no rename, no init delta).
-    let (p0_pat_m, p0_init_m) = parse_untyped_let_full(minuses[0])?;
-    let (p0_pat_p, p0_ty_p, p0_init_p) = parse_typed_let_full(pluses[0])?;
+    let (Some((p0_pat_m, p0_init_m)), Some((p0_pat_p, p0_ty_p, p0_init_p))) = (
+        parse_untyped_let_full(minuses[0]),
+        parse_typed_let_full(pluses[0]),
+    ) else {
+        return super::prov::Counted::Miss;
+    };
     if tok(&p0_pat_m) != tok(&p0_pat_p) || tok(&p0_init_m) != tok(&p0_init_p) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !init_ok(&p0_init_m) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let ty0 = tok(&p0_ty_p);
     // Position 1: typed method-wrap with preserved pattern and type.
-    let (p1_pat_m, p1_ty_m, p1_init_m) = parse_typed_let_full(minuses[1])?;
-    let (p1_pat_p, p1_ty_p, p1_init_p) = parse_typed_let_full(pluses[1])?;
+    let (Some((p1_pat_m, p1_ty_m, p1_init_m)), Some((p1_pat_p, p1_ty_p, p1_init_p))) = (
+        parse_typed_let_full(minuses[1]),
+        parse_typed_let_full(pluses[1]),
+    ) else {
+        return super::prov::Counted::Miss;
+    };
     if tok(&p1_pat_m) != tok(&p1_pat_p) || tok(&p1_ty_m) != tok(&p1_ty_p) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     if !init_ok(&p1_init_m) || !init_ok(&p1_init_p) {
-        return None;
+        return super::prov::Counted::Miss;
     }
-    let suffix1 = method_wrap_suffix(&p1_init_m, &p1_init_p)?;
+    let Some(suffix1) = method_wrap_suffix(&p1_init_m, &p1_init_p) else {
+        return super::prov::Counted::Miss;
+    };
     let minus_tpls = vec!["let P0 = E0;".to_string(), "let P1: T1 = E1;".to_string()];
     let plus_tpls = vec![
         format!("let P0: {ty0} = E0;"),
         format!("let P1: T1 = E1{suffix1};"),
     ];
-    if !crate::totality::template_sequence_holds(path, Some(pre), &minus_tpls, &plus_tpls, 1) {
-        return None;
+    match crate::totality_counted::engine_verdict(
+        Some(pre),
+        crate::totality_counted::template_sequence_counts(path, Some(pre), &minus_tpls, &plus_tpls),
+        1,
+    ) {
+        crate::totality_counted::FamilyVerdict::Holds => {}
+        crate::totality_counted::FamilyVerdict::CountMismatch { found, want } => {
+            return super::prov::Counted::Totality { found, want };
+        }
+        crate::totality_counted::FamilyVerdict::OpaqueHit => {
+            return super::prov::Counted::Opaque;
+        }
+        crate::totality_counted::FamilyVerdict::Unproven => {
+            return super::prov::Counted::Miss;
+        }
     }
     if !window_reproduces(path, pre, changed, minuses, pluses, &minus_tpls, &plus_tpls) {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let rule = unique_rule(used_rules, "single_block");
     // Allow-one tight range (single_block family posture): no
@@ -352,7 +416,7 @@ pub(crate) fn try_hetero_pair_window_single(
     // as too-many at apply time.
     let min = changed.iter().min().copied().unwrap_or(0);
     if min < 1 {
-        return None;
+        return super::prov::Counted::Miss;
     }
     let mut hunk = format!("{}\n@@ -{min},2 @@ rule={rule}\n", crate::git_header(path));
     for l in &minus_tpls {
@@ -361,7 +425,7 @@ pub(crate) fn try_hetero_pair_window_single(
     for l in &plus_tpls {
         hunk.push_str(&format!("+ {l}\n"));
     }
-    Some(hunk)
+    super::prov::Counted::Fire(hunk)
 }
 
 #[cfg(test)]
@@ -420,15 +484,17 @@ mod tests {
             "f.rs",
             "fn f() {\n    let a: i32 = 0;\n    let b: i32 = 5;\n}\n",
         )]);
-        assert!(super::try_typed_wrap_single(
-            &["    let a: i32 = 0;"],
-            &["    let a: i32 = 0.wrapping_add(1);"],
-            "f.rs",
-            Some(&pre["f.rs"]),
-            &[2],
-            &mut Vec::new(),
-        )
-        .is_none());
+        assert!(matches!(
+            super::try_typed_wrap_single(
+                &["    let a: i32 = 0;"],
+                &["    let a: i32 = 0.wrapping_add(1);"],
+                "f.rs",
+                Some(&pre["f.rs"]),
+                &[2],
+                &mut Vec::new(),
+            ),
+            crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+        ));
     }
 
     const PRE_73: &str = "fn a(o: Option<i32>) {\n    let Some(v) = o;\n    let _ = v;\n}\n";
@@ -458,15 +524,17 @@ mod tests {
             "f.rs",
             "fn a(o: Option<i32>, p: Option<i32>) {\n    let Some(v) = o;\n    let Some(w) = p;\n    let _ = (v, w);\n}\n",
         )]);
-        assert!(super::try_untyped_wrap_single(
-            &["    let Some(v) = o;"],
-            &["    let Some(v) = o.unwrap_or(0);"],
-            "f.rs",
-            Some(&pre["f.rs"]),
-            &[2],
-            &mut Vec::new(),
-        )
-        .is_none());
+        assert!(matches!(
+            super::try_untyped_wrap_single(
+                &["    let Some(v) = o;"],
+                &["    let Some(v) = o.unwrap_or(0);"],
+                "f.rs",
+                Some(&pre["f.rs"]),
+                &[2],
+                &mut Vec::new(),
+            ),
+            crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+        ));
     }
 
     const PRE_72: &str = "fn a(t: (i32, i32)) {\n    let (x, y) = t;\n    let _ = (x, y);\n}\n";
@@ -493,15 +561,17 @@ mod tests {
             "f.rs",
             "fn a(t: (i32, i32), u: (i32, i32)) {\n    let (x, y) = t;\n    let (p, q) = u;\n    let _ = ((x, y), (p, q));\n}\n",
         )]);
-        assert!(super::try_pat_swap_single(
-            &["    let (x, y) = t;"],
-            &["    let (y, x) = t;"],
-            "f.rs",
-            Some(&pre["f.rs"]),
-            &[2],
-            &mut Vec::new(),
-        )
-        .is_none());
+        assert!(matches!(
+            super::try_pat_swap_single(
+                &["    let (x, y) = t;"],
+                &["    let (y, x) = t;"],
+                "f.rs",
+                Some(&pre["f.rs"]),
+                &[2],
+                &mut Vec::new(),
+            ),
+            crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+        ));
     }
 
     const PRE_107: &str =
@@ -535,25 +605,28 @@ mod tests {
     fn hetero_pair_window_twin_vetoes() {
         // Totality: an untouched twin window vetoes the fusion (the
         // section falls back to the partition literals downstream).
+        // WI-4 slice 2b-rest-b: the veto names its counts.
         let pre = pre_map(&[(
             "f.rs",
             "fn first() {\n    let alpha = compute_first(input);\n    let beta: u32 = wrap(alpha);\n}\nfn second() {\n    let alpha = compute_first(input);\n    let beta: u32 = wrap(alpha);\n}\n",
         )]);
-        assert!(super::try_hetero_pair_window_single(
-            &[
-                "    let alpha = compute_first(input);",
-                "    let beta: u32 = wrap(alpha);"
-            ],
-            &[
-                "    let alpha: u32 = compute_first(input);",
-                "    let beta: u32 = wrap(alpha).wrapping_add(1);"
-            ],
-            "f.rs",
-            Some(&pre["f.rs"]),
-            &[2, 3],
-            &mut Vec::new(),
-        )
-        .is_none());
+        assert!(matches!(
+            super::try_hetero_pair_window_single(
+                &[
+                    "    let alpha = compute_first(input);",
+                    "    let beta: u32 = wrap(alpha);"
+                ],
+                &[
+                    "    let alpha: u32 = compute_first(input);",
+                    "    let beta: u32 = wrap(alpha).wrapping_add(1);"
+                ],
+                "f.rs",
+                Some(&pre["f.rs"]),
+                &[2, 3],
+                &mut Vec::new(),
+            ),
+            crate::semantic::prov::Counted::Totality { found: 2, want: 1 }
+        ));
     }
 
     #[test]
@@ -571,7 +644,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Binary plus-shape: not a method wrap.
         assert!(super::try_typed_wrap_single(
             &["    let a: i32 = 0;"],
@@ -581,7 +654,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Receiver-changing method: the wrap must wrap the minus init.
         assert!(super::try_typed_wrap_single(
             &["    let a: i32 = 0;"],
@@ -591,7 +664,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Pattern drift: a rename is not a wrap.
         assert!(super::try_typed_wrap_single(
             &["    let a: i32 = 0;"],
@@ -601,7 +674,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Type drift: a type change is not a wrap.
         assert!(super::try_typed_wrap_single(
             &["    let a: i32 = 0;"],
@@ -611,7 +684,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Untyped twin with init delta (not a preserved-pattern wrap).
         assert!(super::try_untyped_wrap_single(
             &["    let Some(v) = o;"],
@@ -621,7 +694,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Tuple swap with init delta: an untyped-wrap shape, never a swap.
         assert!(super::try_pat_swap_single(
             &["    let (x, y) = t;"],
@@ -631,7 +704,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Nested pattern: no single-ident hoist exists.
         assert!(super::try_untyped_wrap_single(
             &["    let Some((a, b)) = o;"],
@@ -641,7 +714,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Multi-arg tuple struct: no single-ident hoist exists.
         assert!(super::try_untyped_wrap_single(
             &["    let Pair(a, b) = o;"],
@@ -651,7 +724,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // `mut` binding: holing would drop the mutability anchor.
         assert!(super::try_typed_wrap_single(
             &["    let mut a: i32 = 0;"],
@@ -661,7 +734,7 @@ mod tests {
             &[2],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
     }
 
     #[test]
@@ -688,7 +761,7 @@ mod tests {
             &[2, 4],
             &mut Vec::new()
         )
-        .is_none());
+        .is_miss());
         // Position 0 with a rename: not a pure type-add.
         assert!(super::try_hetero_pair_window_single(
             &m,
@@ -701,7 +774,7 @@ mod tests {
             &[2, 3],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Position 1 with a type drift: not a pure wrap.
         assert!(super::try_hetero_pair_window_single(
             &m,
@@ -714,7 +787,7 @@ mod tests {
             &[2, 3],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Double type-add: two additions are not this hetero window.
         assert!(super::try_hetero_pair_window_single(
             &[
@@ -730,7 +803,7 @@ mod tests {
             &[2, 3],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
         // Double wrap: a uniform wrap pair is the typed-wrap class
         // (two singles after partition), never this window.
         assert!(super::try_hetero_pair_window_single(
@@ -747,6 +820,6 @@ mod tests {
             &[2, 3],
             &mut Vec::new(),
         )
-        .is_none());
+        .is_miss());
     }
 }

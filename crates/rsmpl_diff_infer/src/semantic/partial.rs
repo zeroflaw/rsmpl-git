@@ -142,7 +142,7 @@ pub(crate) fn try_partial_partition_section(
                         &h.sites[i..i + 1],
                         used_rules,
                     ) {
-                        Some((full, _)) => match full.split_once('\n') {
+                        super::prov::Counted::Fire((full, _)) => match full.split_once('\n') {
                             Some((_, b)) => (b.to_string(), true),
                             None => {
                                 ok = false;
@@ -150,7 +150,7 @@ pub(crate) fn try_partial_partition_section(
                                 break;
                             }
                         },
-                        None => {
+                        _ => {
                             ok = false;
                             used_rules.truncate(probe_before);
                             break;
@@ -232,8 +232,8 @@ pub(crate) fn try_partial_partition_section(
                         &h.sites[i..i + 1],
                         used_rules,
                     ) {
-                        Some((f, _)) => f,
-                        None => {
+                        super::prov::Counted::Fire((f, _)) => f,
+                        _ => {
                             used_rules.truncate(checkpoint);
                             return None;
                         }
@@ -350,16 +350,17 @@ pub(crate) fn section_has_stranded_item_joint(
                 let ms = [m.as_str()];
                 let ps = [p.as_str()];
                 let ss = [*site];
-                if super::try_definition_evolution_sweep(
-                    &ms,
-                    &ps,
-                    path,
-                    file_old,
-                    &ss,
-                    &mut scratch,
-                )
-                .is_some()
-                {
+                if matches!(
+                    super::try_definition_evolution_sweep(
+                        &ms,
+                        &ps,
+                        path,
+                        file_old,
+                        &ss,
+                        &mut scratch,
+                    ),
+                    super::prov::Counted::Fire(_)
+                ) {
                     has_evo = true;
                 }
             }
