@@ -968,6 +968,36 @@ mod tests {
         assert!(err.contains("RSMPL_MATCH_CONFLICT"), "got: {err}");
     }
 
+    // WI-7: a `let` with a macro init applies on literal legs
+    // (token-equal macro, SPEC 21 / C19): the whole-line statement
+    // matches structurally and the plus side replays verbatim. This
+    // is the authored `75` leg — appliable, so the cycle wall is
+    // raiser-side (N=1 Strict pricing), never apply-side.
+    #[test]
+    fn let_macro_init_literal_legs_apply() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n- let b = format!(\"x{{}}\", 1);\n+ let b = format!(\"y{{}}\", 1);\n"
+        );
+        let src = "fn f() {\n    let b = format!(\"x{}\", 1);\n    let _ = b;\n}\n";
+        let out = apply(&patch, src).unwrap();
+        assert!(out.contains("let b = format!(\"y{}\", 1);"), "got: {out}");
+        assert!(!out.contains("let b = format!(\"x{}\", 1);"), "got: {out}");
+    }
+
+    // WI-7: expansion is never consulted — a hole inside a macro
+    // body never binds (C19 verbatim law, SPEC 21). The same
+    // `let`-with-macro shape with a holed init rejects loud instead
+    // of guessing the interior.
+    #[test]
+    fn let_macro_init_hole_inside_never_binds() {
+        let patch = format!(
+            "{HEAD}@@ -2,1 @@ rule=r\n# lang=rust\n# expr E\n- let b = format!(E);\n+ let b = format!(E, 2);\n"
+        );
+        let src = "fn f() {\n    let b = format!(\"x{}\", 1);\n    let _ = b;\n}\n";
+        let err = apply(&patch, src).unwrap_err();
+        assert!(err.contains("RSMPL_PATTERN_CONFLICT"), "got: {err}");
+    }
+
     // WI-6b: holes may live inside an inner `fn` body (header strict,
     // body structural).
     #[test]

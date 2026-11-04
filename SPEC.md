@@ -4146,7 +4146,7 @@ A hunk with matching `-` and `+` patterns replaces the matched AST fragment.
 >
 > Bare `<kind> <Name>` pairs for `struct`, `enum`, `trait`, `union`, `type`, `const`, `static`, `mod`, and `impl` (Section 14.8) are item renames, not general shapes: one ident-span edit per match, everything else preserved. `impl` renames the self-ty ident and the trait-side path's last segment.
 >
-> Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, with or without a `let-else` diverge block — both sides must agree structurally): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, spell an ascribed shape `P: T` with placeholder parts, or spell `P @ sub` with a placeholder head (WI-5a: `P` binds the whole target pattern text, `sub` matches recursively). A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher.
+> Non-call shapes are handled by the generalized matcher. Statements are limited to `let` bindings (`syn::Stmt::Local`, with or without a `let-else` diverge block — both sides must agree structurally): the pattern may bind the whole pattern with one `# pat P` placeholder, use a concrete pattern, spell an ascribed shape `P: T` with placeholder parts, or spell `P @ sub` with a placeholder head (WI-5a: `P` binds the whole target pattern text, `sub` matches recursively). A bare `P` never matches an annotated `x: T` (strict, like function slots); embedded metavariables elsewhere in the pattern are rejected at compile time. The initializer is matched with the general expression matcher. A `let` initializer that is a macro invocation (`let PAT = MACRO!(...);`) matches only on literal legs (whole invocation path, delimiters, and body token-equal per C19); a hole inside the macro body never binds and macro expansion is never consulted (WI-7, pinned by `let_macro_init_literal_legs_apply` + `let_macro_init_hole_inside_never_binds`).
 >
 > General expressions cover paths, literals, binary/unary/cast/reference/paren, calls, method calls, assignment, field access, indexing, arrays, tuples, struct literals, ranges, `await`, `?`, `return`, `break` (optional label plus value), `continue` (optional label), `if` (condition plus then-block plus else branch — `else if` chains recurse), blocks (concrete prefix plus an optional trailing `...` tail, Section 16.4.1), `match` (scrutinee plus arms — arm patterns bind whole placeholders or compare strictly, guards and bodies match structurally, arm count must agree), `loop`/`while`/`for` (labels strictly equal, conditions/iterators matched structurally, bound patterns via `# pat P`, bodies as concrete prefixes with optional trailing `...` tails), closures (async/move/qualifier strict, params decomposed like `P: T`, return type and body structural), `async`/`try`/`unsafe` blocks (qualifiers strict, bodies structural) and `yield` (optional value structural, WI-6 slice 1), and `let` expressions (pattern plus scrutinee — the `if let`/`while let` condition form). Block members that are macro statements match only whole-shape (path, delimiters, and body token-equal — interiors are opaque and never host holes, Section 21); members that are `fn` items match with attributes, visibility, and signature strict and the body structural (holes may live in the inner function); any other item member must be token-equal (WI-6b). General types cover paths with generic arguments (including parenthesized `Fn(A) -> B` arguments, whose inputs match via `match_type` and whose output matches via `match_return_type` — cross-kind pairs such as `P(T)` vs `Vec<u8>` still reject), references, slices, arrays, tuples, parentheses, raw pointers (`*const`/`*mut`), fn-pointer types, `impl Trait`, `dyn Trait`, `_` (which matches any type), and macro types verbatim-only (token-equal, never holed — a `# type T` hole inside a macro never binds). Anything else (mixed `let-else` where only one side carries the diverge, `...` outside trailing-block position) rejects the candidate rather than guessing. (WI-6 slice 1: `async`/`try`/`unsafe`/`yield` join the control-flow family; WI-6b: block members as above; WI-6c: macro types verbatim + parenthesized `Fn` args.) Placeholder path segments may carry generic arguments (`P<u8>`, `P::<T>`) and method-call turbofish compares structurally (`collect::<T>` binds `T`); lifetimes are wildcards in v1 and are not compared. A call shape must consume the whole pattern: `foo(E) + 1` and `E.foo() + 1` route to the general matcher, not to a `foo(E)`/`E.foo()` call prefix (only a trailing `;` keeps call routing, so `foo(E);` stays a call). An empty `+` side deletes a `let` statement (whole lines) or a `...;` expression statement; type patterns cannot be deleted. Leading `#[...]` attributes are only supported on `let` patterns and follow `# attrs=...` (a `+` side that writes attributes the `-` side did not is rejected as ambiguous). The fail-fast reference is Section 18.6.
 
@@ -10378,13 +10378,31 @@ bugs in the cycle itself): the laws stay hand-written here; the
 enumeration below is generated from `bin/diffrs/tests/cycle_e2e.rs`
 by `python3 tools/gen_d5_exclusions.py --write` and linted by the
 `d5_exclusions_sync` test in that file — edit the harness table, never
-the block. Law summary: single-site shapes the raiser deliberately
-leaves ordinary stay ordinary (two-slot joints, hetero sites, engine
-walls); mixed sections split only where every run proves (WI-4/WI-15),
-otherwise the ordinary remainder never normalizes; trait-side-only,
-standalone-insertion, and zero-edit shapes stay ordinary by design;
-macro-rename singles fire as allow-one verbatim hunks under
-`# macro=token_tree` where the `macro_holds` proof admits them.
+the block. Law summary (WI-7, each with its one-line proof
+obligation): L-empty — zero-match optional leaves an empty re-diff,
+so the empty leg is the pin (`05`); L-insertion — standalone
+single-line insertion singles cost more than native (rule-tag
+overhead, literal-only) so they stay ordinary, insertion joints ride
+WI-8/WI-13 (`06`); L-generics — generics/`where`-carrying sig
+singles stay ordinary, the N>=2 type sweep owns the shape and a
+single proved evolution never licenses a generics hole (`13`
+hunk-2); L-trait-side — trait-side-only decl/def shapes stay
+ordinary with no impl side, mixed trait+impl raises via
+`trait_method_rename` (`30`); L-hetero-multi — multi-site hetero
+shapes stay ordinary where D17 literal equality needs exactly one
+line site (`52`); L-wildcard — hetero concrete inits under a
+uniform plus stay ordinary, wildcard invention would license
+rewriting sites the diff never showed (`55`); L-macro-interior-single —
+N=1 same-path macro-interior whole-line literals stay ordinary
+under Strict (rule-tag overhead over a 2-line ordinary hunk), while
+the engine applies the authored literal leg and holed macro inits
+never bind with no expansion ever (`75`, pinned by
+`let_macro_init_literal_legs_apply` +
+`let_macro_init_hole_inside_never_binds`). Mixed sections split
+only where every run proves (WI-4/WI-15), otherwise the ordinary
+remainder never normalizes; macro-rename singles fire as allow-one
+verbatim hunks under `# macro=token_tree` where the `macro_holds`
+proof admits them.
 Joint/partition benches 45–48 are auditability-pinned (one composed
 scratch-apply probe per intent, D13), not token-saving claims: at small N
 the anchor/header facts exceed the native bytes (WI-7 allowance admits
@@ -10393,14 +10411,14 @@ them as proved intents); a factored shared-rule diet stays future work.
 <!-- generated: d5-exclusions start -- do not hand-edit; run `python3 tools/gen_d5_exclusions.py --write` -->
 CYCLE_OK: 105 entries (canonically lossless; the harness asserts tree-canonical equality plus the `S'' == S'` fixed point).
 KNOWN_DIVERGENT: 8 entries (divergence pinned with the owning reason; a fix moves the entry to CYCLE_OK in the same change as the detector):
-- `05-optional-noop`: empty: zero-match optional leaves an empty re-diff
-- `06-insert-use`: by design (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13
+- `05-optional-noop`: by law D.5 L-empty: zero-match optional leaves an empty re-diff — nothing to re-infer, so the empty leg is the pin
+- `06-insert-use`: by law D.5 L-insertion (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13
 - `12-stmt-rewrite`: partial (WI-5): the binder line now raises as one `let_binder` intent (`let count = E;` → `let n = E;` plus the in-block follow covering `let bumped`, D11/D16 proof: count + follow-coverage + scratch-apply). The fused same-name header keeps it divergent: authored states `Vec<T>` → `Box<[T]>` as a holed sweep hunk plus a separate `count` → `n` use hunk (3 hunks), the raiser emits a concrete type single plus the binder-follow hunk (2 hunks) — canonical spellings differ while both tree legs close.
-- `13-sig-evolution`: mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)
-- `30-trait-sweep`: hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)
-- `52-macro-verbatim`: hetero by design (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close
-- `55-infer-wildcard`: t442: hetero concrete inits vs uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole; tree legs still close)
-- `75-macro-verbatim-single`: engine wall (WI-3 slice 5): whole-line let-with-macro literal matches nothing (T440 `verbatim_let_shape`/`init_ok` wall) so D17 re-prove cannot keep -- the appliable nested-macro-text emission diverges from the authored whole-line leg; needs engine literal-statement matching with macro inits
+- `13-sig-evolution`: by law D.5 L-generics (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary (generics/where veto, the N>=2 type sweep owns the shape — a single proved evolution never licenses a generics hole)
+- `30-trait-sweep`: by law D.5 L-trait-side: trait-side-only decl/def shapes stay ordinary (no impl side; mixed trait+impl raises via trait_method_rename)
+- `52-macro-verbatim`: by law D.5 L-hetero-multi (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close
+- `55-infer-wildcard`: by law D.5 L-wildcard: hetero concrete inits under a uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole — wildcard invention would license rewriting sites the diff never showed; tree legs still close)
+- `75-macro-verbatim-single`: by law D.5 L-macro-interior-single: N=1 same-path macro-interior whole-line literal stays ordinary under Strict (rule-tag overhead over a 2-line ordinary hunk); engine applies the authored literal leg (pinned) while holed macro inits never bind and expansion is never consulted (pinned negative control)
 <!-- generated: d5-exclusions end -->
 These are the only non-tree-canonical cycles; every other corpus case is
 canonically lossless, and one further iteration is a byte-identical

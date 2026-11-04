@@ -363,23 +363,25 @@ const CYCLE_OK: &[&str] = &[
 ];
 
 /// Divergent cases pinned with one-line reasons (the SPEC D.5
-/// exclusion list is the normative review surface; each reason names
-/// the family and the owning follow-up). The harness asserts the
-/// divergence persists, so a fix must move the entry to CYCLE_OK
-/// instead of silently passing.
+/// exclusion list is the normative review surface; each reason cites
+/// its D.5 law plus the one-line proof obligation). The harness
+/// asserts the divergence persists, so a fix must move the entry to
+/// CYCLE_OK instead of silently passing.
 ///
-/// Families: `t375` single-site demoted to ordinary by the byte-guard;
-/// `nodet` multi-site shape with no detector yet (names the owning WI);
-/// `hetero` sites differ structurally so no template fires (WI-4/7);
-/// `empty` zero-edit re-diff (05).
+/// Laws (WI-7): `L-empty` zero-edit re-diff (05); `L-insertion`
+/// standalone insertion (06); `L-generics` generics/where singles
+/// (13 hunk-2); `L-trait-side` trait-only shapes (30);
+/// `L-hetero-multi` multi-site hetero (52); `L-wildcard` hetero
+/// inits under uniform plus (55); `L-macro-interior-single` N=1
+/// macro-interior literals (75).
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "05-optional-noop",
-        "empty: zero-match optional leaves an empty re-diff",
+        "by law D.5 L-empty: zero-match optional leaves an empty re-diff — nothing to re-infer, so the empty leg is the pin",
     ),
     (
         "06-insert-use",
-        "by design (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13",
+        "by law D.5 L-insertion (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13",
     ),
     (
         "12-stmt-rewrite",
@@ -387,25 +389,25 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "13-sig-evolution",
-        "mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)",
+        "by law D.5 L-generics (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary (generics/where veto, the N>=2 type sweep owns the shape — a single proved evolution never licenses a generics hole)",
     ),
     (
         "30-trait-sweep",
-        "hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)",
+        "by law D.5 L-trait-side: trait-side-only decl/def shapes stay ordinary (no impl side; mixed trait+impl raises via trait_method_rename)",
     ),
 
     (
         "52-macro-verbatim",
-        "hetero by design (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close",
+        "by law D.5 L-hetero-multi (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close",
     ),
     (
         "55-infer-wildcard",
-        "t442: hetero concrete inits vs uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole; tree legs still close)",
+        "by law D.5 L-wildcard: hetero concrete inits under a uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole — wildcard invention would license rewriting sites the diff never showed; tree legs still close)",
     ),
 
     (
         "75-macro-verbatim-single",
-        "engine wall (WI-3 slice 5): whole-line let-with-macro literal matches nothing (T440 `verbatim_let_shape`/`init_ok` wall) so D17 re-prove cannot keep -- the appliable nested-macro-text emission diverges from the authored whole-line leg; needs engine literal-statement matching with macro inits",
+        "by law D.5 L-macro-interior-single: N=1 same-path macro-interior whole-line literal stays ordinary under Strict (rule-tag overhead over a 2-line ordinary hunk); engine applies the authored literal leg (pinned) while holed macro inits never bind and expansion is never consulted (pinned negative control)",
     ),
 ];
 
