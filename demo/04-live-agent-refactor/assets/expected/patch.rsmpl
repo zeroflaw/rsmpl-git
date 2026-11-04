@@ -1,0 +1,68 @@
+diff --git src/scopeguard.rs
+@@ -8,7 @@ rule=rename_guard_type
+# follow=uses
+# fallback=syntax
+- pub(crate) struct ScopeGuard
++ pub(crate) struct DropGuard
+@@ -8,7 @@ rule=rename_dropfn_field
+# allow=many
+# follow=uses
+  struct ScopeGuard {
+- dropfn: F
++ drop_fn: F
+@@ -16,7 @@ rule=rename_guard_fn
+- pub(crate) fn guard<T, F>(...) where F: FnMut(&mut T) {
++ pub(crate) fn drop_guard<T, F>(...) where F: FnMut(&mut T) {
+      ...
+  }
+@@ -24,17 @@ rule=rename_into_inner
+  impl<T, F> ScopeGuard<T, F> {
+- pub(crate) fn into_inner(...) {
++ pub(crate) fn into_value(...) {
+      ...
+  }
+@@ -37,1 +37,1 @@
+-            let _ = ptr::read(&raw const guard.dropfn);
++            let _ = ptr::read(&raw const guard.drop_fn);
+@@ -72,0 @@ rule=move_helpers
+# use=Helpers
++ Helpers
+diff --git src/raw.rs
+@@ -1,1 @@ rule=sweep_raw_calls
+# sweep
+- guard(E, F)
++ drop_guard(E, F)
+@@ -3,1 +3,1 @@
+-use crate::scopeguard::{ScopeGuard, guard};
++use crate::scopeguard::{DropGuard, drop_guard};
+@@ -2688,1 +2688,1 @@
+-    ) -> Result<crate::scopeguard::ScopeGuard<Self, impl FnMut(&mut Self) + 'a>, TryReserveError>
++    ) -> Result<crate::scopeguard::DropGuard<Self, impl FnMut(&mut Self) + 'a>, TryReserveError>
+@@ -3387,1 @@ rule=qual_guard_path
+- ScopeGuard::into_inner(E)
++ DropGuard::into_value(E)
+diff --git src/map.rs
+@@ -1,1 @@ rule=sweep_map_calls
+# sweep
+- guard(E, F)
++ drop_guard(E, F)
+@@ -6615,1 +6615,1 @@
+-        use crate::scopeguard::guard;
++        use crate::scopeguard::drop_guard;
+diff --git src/external_trait_impls/rayon/raw.rs
+@@ -1,1 @@ rule=sweep_rayon_calls
+# sweep
+- guard(E, F)
++ drop_guard(E, F)
+@@ -3,1 +3,1 @@
+-use crate::scopeguard::guard;
++use crate::scopeguard::drop_guard;
+diff --git src/util.rs
+@@ -5,33 @@ rule=move_helpers
+# bind=Helpers
+# allow=many
+- I
+@@ -37,0 +38,3 @@
++pub(crate) use crate::scopeguard::invalid_mut;
++#[cfg(not(feature = "nightly"))]
++pub(crate) use crate::scopeguard::{likely, unlikely};

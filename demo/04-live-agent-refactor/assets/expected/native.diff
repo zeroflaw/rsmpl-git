@@ -1,0 +1,278 @@
+diff --git a/src/external_trait_impls/rayon/raw.rs b/src/external_trait_impls/rayon/raw.rs
+index b8fc069d..58876319 100644
+--- a/src/external_trait_impls/rayon/raw.rs
++++ b/src/external_trait_impls/rayon/raw.rs
+@@ -1,6 +1,6 @@
+ use crate::alloc::{Allocator, Global};
+ use crate::raw::{Bucket, RawIter, RawIterRange, RawTable};
+-use crate::scopeguard::guard;
++use crate::scopeguard::drop_guard;
+ use core::marker::PhantomData;
+ use core::mem;
+ use core::ptr::NonNull;
+@@ -95,7 +95,7 @@ impl<T: Send, A: Allocator + Send> ParallelIterator for RawIntoParIter<T, A> {
+         C: UnindexedConsumer<Self::Item>,
+     {
+         let iter = unsafe { self.table.iter().iter };
+-        let _guard = guard(self.table.into_allocation(), |alloc| {
++        let _guard = drop_guard(self.table.into_allocation(), |alloc| {
+             if let Some((ptr, layout, ref alloc)) = *alloc {
+                 unsafe {
+                     alloc.deallocate(ptr, layout);
+@@ -132,7 +132,7 @@ impl<T: Send, A: Allocator> ParallelIterator for RawParDrain<'_, T, A> {
+     where
+         C: UnindexedConsumer<Self::Item>,
+     {
+-        let _guard = guard(self.table, |table| unsafe {
++        let _guard = drop_guard(self.table, |table| unsafe {
+             table.as_mut().clear_no_drop();
+         });
+         let iter = unsafe { self.table.as_ref().iter().iter };
+diff --git a/src/map.rs b/src/map.rs
+index 22cafef5..9597f8b0 100644
+--- a/src/map.rs
++++ b/src/map.rs
+@@ -6612,12 +6612,12 @@ mod test_map {
+         A: Allocator,
+         T: PartialEq + core::fmt::Debug,
+     {
+-        use crate::scopeguard::guard;
++        use crate::scopeguard::drop_guard;
+ 
+         let mut map: HashMap<u64, CheckedCloneDrop<T>, _, A> =
+             HashMap::with_capacity_in(iter.size_hint().0, alloc);
+         {
+-            let mut guard = guard(&mut map, |map| {
++            let mut guard = drop_guard(&mut map, |map| {
+                 for (_, value) in map.iter_mut() {
+                     value.panic_in_drop = false;
+                 }
+diff --git a/src/raw.rs b/src/raw.rs
+index 39f50ef7..8d682d0d 100644
+--- a/src/raw.rs
++++ b/src/raw.rs
+@@ -1,6 +1,6 @@
+ use crate::TryReserveError;
+ use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
+-use crate::scopeguard::{ScopeGuard, guard};
++use crate::scopeguard::{DropGuard, drop_guard};
+ use crate::util::{invalid_mut, likely, unlikely};
+ use core::array;
+ use core::iter::FusedIterator;
+@@ -836,7 +836,7 @@ impl<T, A: Allocator> RawTable<T, A> {
+             return;
+         }
+         // Ensure that the table is reset even if one of the drops panic
+-        let mut self_ = guard(self, |self_| self_.clear_no_drop());
++        let mut self_ = drop_guard(self, |self_| self_.clear_no_drop());
+         unsafe {
+             // SAFETY: ScopeGuard sets to zero the `items` field of the table
+             // even in case of panic during the dropping of the elements so
+@@ -2685,7 +2685,7 @@ impl RawTableInner {
+         table_layout: TableLayout,
+         capacity: usize,
+         fallibility: Fallibility,
+-    ) -> Result<crate::scopeguard::ScopeGuard<Self, impl FnMut(&mut Self) + 'a>, TryReserveError>
++    ) -> Result<crate::scopeguard::DropGuard<Self, impl FnMut(&mut Self) + 'a>, TryReserveError>
+     where
+         A: Allocator,
+     {
+@@ -2701,7 +2701,7 @@ impl RawTableInner {
+         //
+         // This guard is also used to free the old table on success, see
+         // the comment at the bottom of this function.
+-        Ok(guard(new_table, move |self_| {
++        Ok(drop_guard(new_table, move |self_| {
+             if !self_.is_empty_singleton() {
+                 // SAFETY:
+                 // 1. We have checked that our table is allocated.
+@@ -2995,7 +2995,7 @@ impl RawTableInner {
+             self.prepare_rehash_in_place();
+         }
+ 
+-        let mut guard = guard(self, move |self_| {
++        let mut guard = drop_guard(self, move |self_| {
+             for i in 0..self_.num_buckets() {
+                 unsafe {
+                     // Any elements that haven't been rehashed yet have a
+@@ -3339,7 +3339,7 @@ impl<T: Clone, A: Allocator + Clone> Clone for RawTable<T, A> {
+             unsafe {
+                 // Make sure that if any panics occurs, we clear the table and
+                 // leave it in an empty state.
+-                let mut self_ = guard(self, |self_| {
++                let mut self_ = drop_guard(self, |self_| {
+                     self_.clear_no_drop();
+                 });
+ 
+@@ -3384,7 +3384,7 @@ impl<T: Clone, A: Allocator + Clone> Clone for RawTable<T, A> {
+                 self_.clone_from_spec(source);
+ 
+                 // Disarm the scope guard if cloning was successful.
+-                ScopeGuard::into_inner(self_);
++                DropGuard::into_value(self_);
+             }
+         }
+     }
+@@ -3442,7 +3442,7 @@ impl<T: Clone, A: Allocator + Clone> RawTable<T, A> {
+         // The cloning of elements may panic, in which case we need
+         // to make sure we drop only the elements that have been
+         // cloned so far.
+-        let mut guard = guard((0, &mut *self), |(index, self_)| {
++        let mut guard = drop_guard((0, &mut *self), |(index, self_)| {
+             if T::NEEDS_DROP {
+                 for i in 0..*index {
+                     unsafe {
+diff --git a/src/scopeguard.rs b/src/scopeguard.rs
+index 26532b84..d5a8a74b 100644
+--- a/src/scopeguard.rs
++++ b/src/scopeguard.rs
+@@ -5,28 +5,28 @@ use core::{
+     ptr,
+ };
+ 
+-pub(crate) struct ScopeGuard<T, F>
++pub(crate) struct DropGuard<T, F>
+ where
+     F: FnMut(&mut T),
+ {
+-    dropfn: F,
++    drop_fn: F,
+     value: T,
+ }
+ 
+ #[inline]
+-pub(crate) fn guard<T, F>(value: T, dropfn: F) -> ScopeGuard<T, F>
++pub(crate) fn drop_guard<T, F>(value: T, dropfn: F) -> DropGuard<T, F>
+ where
+     F: FnMut(&mut T),
+ {
+-    ScopeGuard { dropfn, value }
++    DropGuard { drop_fn: dropfn, value }
+ }
+ 
+-impl<T, F> ScopeGuard<T, F>
++impl<T, F> DropGuard<T, F>
+ where
+     F: FnMut(&mut T),
+ {
+     #[inline]
+-    pub(crate) fn into_inner(guard: Self) -> T {
++    pub(crate) fn into_value(guard: Self) -> T {
+         // Cannot move out of Drop-implementing types, so
+         // ptr::read the value out of a ManuallyDrop<Self>
+         // Don't use mem::forget as that might invalidate value
+@@ -34,13 +34,13 @@ where
+         unsafe {
+             let value = ptr::read(&raw const guard.value);
+             // read the closure so that it is dropped
+-            let _ = ptr::read(&raw const guard.dropfn);
++            let _ = ptr::read(&raw const guard.drop_fn);
+             value
+         }
+     }
+ }
+ 
+-impl<T, F> Deref for ScopeGuard<T, F>
++impl<T, F> Deref for DropGuard<T, F>
+ where
+     F: FnMut(&mut T),
+ {
+@@ -51,7 +51,7 @@ where
+     }
+ }
+ 
+-impl<T, F> DerefMut for ScopeGuard<T, F>
++impl<T, F> DerefMut for DropGuard<T, F>
+ where
+     F: FnMut(&mut T),
+ {
+@@ -61,12 +61,43 @@ where
+     }
+ }
+ 
+-impl<T, F> Drop for ScopeGuard<T, F>
++impl<T, F> Drop for DropGuard<T, F>
+ where
+     F: FnMut(&mut T),
+ {
+     #[inline]
+     fn drop(&mut self) {
+-        (self.dropfn)(&mut self.value);
++        (self.drop_fn)(&mut self.value);
+     }
+ }
++#[cfg(not(feature = "nightly"))]
++#[inline(always)]
++#[cold]
++fn cold_path() {}
++
++#[cfg(not(feature = "nightly"))]
++#[inline(always)]
++pub(crate) fn likely(b: bool) -> bool {
++    if b {
++        true
++    } else {
++        cold_path();
++        false
++    }
++}
++
++#[cfg(not(feature = "nightly"))]
++#[inline(always)]
++pub(crate) fn unlikely(b: bool) -> bool {
++    if b {
++        cold_path();
++        true
++    } else {
++        false
++    }
++}
++
++#[inline(always)]
++pub(crate) fn invalid_mut<T>(addr: usize) -> *mut T {
++    unsafe { core::mem::transmute(addr) }
++}
+diff --git a/src/util.rs b/src/util.rs
+index 8667f34d..d30ae23c 100644
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -2,36 +2,8 @@
+ #[cfg(feature = "nightly")]
+ pub(crate) use core::intrinsics::{likely, unlikely};
+ 
+-#[cfg(not(feature = "nightly"))]
+-#[inline(always)]
+-#[cold]
+-fn cold_path() {}
+-
+-#[cfg(not(feature = "nightly"))]
+-#[inline(always)]
+-pub(crate) fn likely(b: bool) -> bool {
+-    if b {
+-        true
+-    } else {
+-        cold_path();
+-        false
+-    }
+-}
+-
+-#[cfg(not(feature = "nightly"))]
+-#[inline(always)]
+-pub(crate) fn unlikely(b: bool) -> bool {
+-    if b {
+-        cold_path();
+-        true
+-    } else {
+-        false
+-    }
+-}
+-
+ // FIXME: use strict provenance functions once they are stable.
+ // Implement it with a transmute for now.
+-#[inline(always)]
+-pub(crate) fn invalid_mut<T>(addr: usize) -> *mut T {
+-    unsafe { core::mem::transmute(addr) }
+-}
++pub(crate) use crate::scopeguard::invalid_mut;
++#[cfg(not(feature = "nightly"))]
++pub(crate) use crate::scopeguard::{likely, unlikely};

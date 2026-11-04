@@ -19,9 +19,10 @@ export META_API_KEY="$MUSE_KEY"
 python3 demo/04-live-agent-refactor/run.py --with-gitrs
 ```
 
-Expect: live agent messages answering (1) gitrs skill visible, (2) `which
-gitrs` output, (3) one-line purpose; then a `==== run summary ====` block
-with runtime, event counts, and `compactions: 0`.
+Expect: the harness clones pinned hashbrown into `workspace/`, then the
+agent performs the renames and the helper move via the gitrs skill,
+runs the five `cargo check` variants plus the lib test suite, and finishes
+with a `==== run summary ====` block.
 
 ## 2. Without-gitrs arm
 
@@ -29,26 +30,29 @@ with runtime, event counts, and `compactions: 0`.
 python3 demo/04-live-agent-refactor/run.py --without-gitrs
 ```
 
-Expect: same shape, but answers (1) and (2) should say neither the
-skill nor the binaries are available — the binary dir is left off `PATH`
-in this arm (any inherited entry pointing at it is stripped). Answer (3)
-should state gitrs is unavailable, not describe using it.
+Expect: same task, hand-edited without the skill or binaries (both
+unavailable in this arm). Compare its runtime/token spend against the
+with-arm run.
 
 ## 3. Inspect the artifacts
 
 ```sh
 ls demo/04-live-agent-refactor/runs/
 cat demo/04-live-agent-refactor/runs/*/summary.json
+diff demo/04-live-agent-refactor/assets/expected/native.diff \
+     demo/04-live-agent-refactor/runs/*/agent.diff
 ```
 
-`events.jsonl` holds every stdout line with arrival timestamps (re-mine it
-if `usage_observed` came back empty — the `--json` schema is
-undocumented); `stderr.log` holds the transport trace. `workspace/` is
-removed at the end of the run.
+`events.jsonl` holds every stdout line with arrival timestamps;
+`stderr.log` holds the transport trace; `agent.diff` holds the refactor
+result (compare it against `assets/expected/native.diff` — same end
+state, however the agent got there). `workspace/` is removed at the end
+of the run.
 
 ## 4. Iterate
 
-- Tweak the prompt: edit `assets/prompts/base.txt` (the directive still
-  appends in with-arm).
+- Tweak the task: edit `assets/prompts/base.txt` (the directive still
+  appends in with-arm). If you change the end state, re-derive
+  `assets/expected/` to match.
 - Audit a run later: the printed `session:` id works with
   `muse export --session <uuid>`.

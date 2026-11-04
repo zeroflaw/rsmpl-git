@@ -11,9 +11,19 @@ a directive block appended to the prompt, and the binary dir on `PATH`
 entry pointing at it, so `gitrs` does not resolve). Model, workspace, and
 flags are otherwise identical.
 
-Current stage: smoke test only. The prompt just asks whether the agent can
-see the gitrs skill and binaries. The refactor task (clone a Rust crate
-into `workspace/` and refactor it) comes later.
+The task: a fresh clone of hashbrown v0.17.1 (pinned commit
+`c62a63a6`) lands in `workspace/hashbrown/`, and the agent must rename the
+crate-private scope-guard helper — type `ScopeGuard` → `DropGuard`,
+function `guard` → `drop_guard`, associated function `into_inner` →
+`into_value`, field `dropfn` → `drop_fn` — updating every code use across
+the crate, plus moving the four `util.rs` helpers into `scopeguard.rs`
+behind a re-export shim (5 files, 58+/55-) — then prove `cargo check`
+passes (default, `--features rayon`, `--features raw-entry`, `--tests`,
+and `--features nightly`) plus `cargo test --lib`. The prompt brief is
+derived from the reference patch in `assets/expected/patch.rsmpl` (68
+lines), whose lowered native diff is kept alongside as
+`assets/expected/native.diff`; each run captures the agent's own diff as
+`runs/<stamp>/agent.diff` for comparison.
 
 ## Prerequisites
 
@@ -47,24 +57,33 @@ Useful flags: `--disable-sandbox`, `--contributor-mode on|off`,
   `--verbose` also prints them live.
 - `runs/<stamp>-<mode>/`: `prompt.txt`, `argv.txt`, `events.jsonl` (every
   stdout line, parsed or raw, with arrival timestamps), `stderr.log`
-  (includes the provider transport trace by default), `summary.json`.
+  (includes the provider transport trace by default), `summary.json`,
+  plus `agent.diff` / `agent-status.txt` (the refactor result, captured
+  before `workspace/` is removed — diff it against
+  `assets/expected/native.diff`).
 - End-of-run summary: runtime, exit code, event counts, observed
   token/context fields, compaction count.
 
 Token/context figures come from the run's `run.usage` event (plus any
 other token-ish fields, best-effort); the full record stays in
-`events.jsonl` for re-mining. The smoke prompt is far too small to trigger
-auto-compaction, so expect `compactions: 0`.
+`events.jsonl` for re-mining. The task is small enough that
+auto-compaction is unlikely; `compactions: 0` is the expected reading.
 
 ## Layout
 
 - `run.py` — the harness (single code path; `with_gitrs` gates exactly the
   skill staging and the directive append, nothing else).
-- `assets/prompts/base.txt` — the smoke prompt (shared by both arms).
+- `assets/prompts/base.txt` — the task brief (shared by both arms).
 - `assets/prompts/gitrs-directive.txt` — appended only in `--with-gitrs`.
 - `assets/skills/gitrs/SKILL.md` — verbatim copy of
   `skills/gitrs/SKILL.md` minus the `## Dogfood rule` section (staged to
   `workspace/.agents/skills/gitrs/SKILL.md` in `--with-gitrs` only).
-- `workspace/` — temp agent workspace, reset every run (reserved for the
-  future cloned crate). Gitignored.
+- `assets/expected/patch.rsmpl` — reference semantic patch (68 lines,
+  `--check`-verified; replays byte-identically from a fresh clone).
+- `assets/expected/native.diff` — the ordinary `git diff` the reference
+  patch lowers to (5 files, 58+/55-; `cargo check` passes default +
+  `--features rayon` + `--features raw-entry` + `--tests` +
+  `--features nightly`, and `cargo test --lib` is 105/105).
+- `workspace/` — temp agent workspace, reset every run; holds the pinned
+  `hashbrown/` clone plus the staged skill (with-arm). Gitignored.
 - `runs/` — per-run transcripts and summaries. Gitignored.

@@ -13,7 +13,7 @@ The two arms differ ONLY in:
       additionally strips any inherited entry pointing at it).
 Model, workspace, and flags are otherwise identical.
 
-Temp workspace: demo-dir/workspace/ (reserved for a future cloned crate).
+Temp workspace: demo-dir/workspace/ (holds a fresh clone of pinned hashbrown plus the staged skill).
 It is deleted at the start and at the end of every run.
 
 Needs an LLM key at run time (child env META_API_KEY, never logged):
@@ -43,6 +43,9 @@ RUNS_DIR = DEMO_DIR / "runs"
 ROOT = DEMO_DIR.parent.parent
 
 DEFAULT_MODEL = "muse-spark-1.3"
+HASHBROWN_URL = "https://github.com/rust-lang/hashbrown"
+HASHBROWN_REV = "c62a63a61b7caf2de8f9ecb7b06a66b0ab6bdf3d"  # v0.17.1
+HASHBROWN_DIR = "hashbrown"
 BASE_PROMPT = ASSETS / "prompts" / "base.txt"
 DIRECTIVE_PROMPT = ASSETS / "prompts" / "gitrs-directive.txt"
 STAGED_SKILL_SRC = ASSETS / "skills" / "gitrs" / "SKILL.md"
@@ -173,8 +176,31 @@ def reset_workspace(with_gitrs: bool) -> None:
         dst = WORKSPACE / SKILL_DST_REL
         dst.parent.mkdir(parents=True)
         shutil.copyfile(STAGED_SKILL_SRC, dst)
-    # NOTE: workspace/ is reserved for a future step that clones a Rust crate
-    # here as the refactor target. Nothing else stages files into it today.
+    # NOTE: the pinned hashbrown clone lands here next (clone_hashbrown);
+    # it is the agent's refactor target. Nothing else stages files into it.
+
+
+def clone_hashbrown() -> Path:
+    """Fresh-clone pinned hashbrown into the workspace; prefetch deps best-effort."""
+    dest = WORKSPACE / HASHBROWN_DIR
+    print(f"(cloning hashbrown@{HASHBROWN_REV[:12]} …)", flush=True)
+    r = subprocess.run(["git", "clone", "--quiet", HASHBROWN_URL, str(dest)], check=False)
+    if r.returncode != 0:
+        sys.exit(f"error: git clone {HASHBROWN_URL} failed (exit {r.returncode})")
+    r = subprocess.run(["git", "-C", str(dest), "checkout", "--quiet", HASHBROWN_REV],
+                       check=False)
+    if r.returncode != 0:
+        sys.exit(f"error: git checkout {HASHBROWN_REV[:12]} failed (exit {r.returncode})")
+    # Best-effort prefetch: the agent later runs `cargo check` inside the
+    # sandbox, where registry access may be restricted. Warming the shared
+    # cargo cache here (full network) maximizes the odds plain `cargo check`
+    # succeeds there. Failure only warns; the agent may still manage.
+    r = subprocess.run(["cargo", "fetch", "--quiet"], cwd=str(dest), check=False,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print("(warning: cargo fetch failed; the agent's cargo check may need network)",
+              flush=True)
+    return dest
 
 
 def build_argv(args: argparse.Namespace, prompt_path: Path, session_id: str) -> list[str]:
@@ -269,6 +295,7 @@ def main(argv=None) -> int:
     bindir = ensure_gitrs_bins(args)
     run_dir.mkdir(parents=True)
     reset_workspace(with_gitrs)
+    hb_dir = clone_hashbrown()
     prompt_path.write_text(assemble_prompt(with_gitrs))
     child_argv = build_argv(args, prompt_path, session_id)
     (run_dir / "argv.txt").write_text(shlex.join(child_argv) + "\n")
@@ -392,6 +419,26 @@ def main(argv=None) -> int:
         "".join(json.dumps(e) + "\n" for e in envelopes))
     (run_dir / "stderr.log").write_text(
         "".join(line + "\n" for line in stderr_lines))
+    # Capture the agent's refactor result before workspace cleanup, for
+    # comparison against assets/expected/native.diff. Intent-to-add first so
+    # newly created files (e.g. the extracted test module) appear in the
+    # diff; build output and gitrs history stay out.
+    try:
+        subprocess.run(["git", "-C", str(hb_dir), "add", "-N", "--", ".",
+                        ":!.history", ":!target"],
+                       check=False, capture_output=True, text=True)
+        # NOTE: `diff HEAD`, not bare `diff`: gitrs apply stages old-path
+        # removals on file-rename sections, so bare diff would miss them.
+        diff = subprocess.run(["git", "-C", str(hb_dir), "diff", "HEAD", "--", ".",
+                               ":!.history", ":!target"],
+                              check=False, capture_output=True, text=True)
+        (run_dir / "agent.diff").write_text(diff.stdout if diff.returncode == 0 else "")
+        status = subprocess.run(["git", "-C", str(hb_dir), "status", "--short"], check=False,
+                                capture_output=True, text=True)
+        (run_dir / "agent-status.txt").write_text(
+            status.stdout if status.returncode == 0 else "")
+    except OSError as e:
+        print(f"(warning: could not capture agent diff: {e})", flush=True)
     summary = {
         "demo": "04-live-agent-refactor",
         "mode": mode,
@@ -412,6 +459,8 @@ def main(argv=None) -> int:
         "key_source": key_source,
         "workspace": str(WORKSPACE),
         "run_dir": str(run_dir),
+        "agent_diff": "agent.diff",
+        "agent_status": "agent-status.txt",
         "flags": {
             "disable_sandbox": args.disable_sandbox,
             "contributor_mode": args.contributor_mode,
@@ -432,6 +481,7 @@ def main(argv=None) -> int:
     print(f"events:       {summary['stdout_lines']} lines ({summary['json_events']} json)")
     print(f"usage:        {json.dumps(usage) if usage else '(none observed — see events.jsonl)'!s}")
     print(f"compactions:  {len(compaction_indices)}")
+    print(f"agent diff:   {run_dir / 'agent.diff'}")
     try:
         shutil.rmtree(WORKSPACE)
         print("workspace:    removed")
