@@ -373,6 +373,97 @@ mod tests {
     }
 
     #[test]
+    fn body_joint_vis_add_two_slot_triple_fires() {
+        // WI-14: vis-add + params retype is a two-slot Joint-A-shaped
+        // evolution, so the triple fires as one follow hunk.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+pub fn bar(x: u32) -> i32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("vis-add triple must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(
+            out.contains("+ pub fn bar(x: u32) -> i32 { ... }"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("- x + 1"), "got:\n{out}");
+        assert!(out.contains("+ x + 2"), "got:\n{out}");
+        assert_eq!(out.matches("rule=").count(), 1, "one rule, got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "pub fn bar(x: u32) -> i32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "vis-add triple must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn body_joint_ret_add_triple_fires() {
+        // WI-14: adding `-> T` is a ret evolution, so rename + ret-add
+        // + one body pair fires as one follow hunk.
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) {\n-    x + 1\n+fn bar(x: i32) -> u32 {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("ret-add triple must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(
+            out.contains("+ fn bar(x: i32) -> u32 { ... }"),
+            "got:\n{out}"
+        );
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) -> u32 {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "ret-add triple must round-trip byte-identical"
+        );
+    }
+
+    #[test]
+    fn body_joint_ret_remove_triple_fires() {
+        // WI-14: removing `-> T` is a ret evolution, so rename +
+        // ret-remove + one body pair fires as one follow hunk
+        // (mirrors the Joint-A ret-remove law without a body).
+        let pre = pre_map(&[(
+            "src.rs",
+            "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    foo(1);\n    foo(2);\n}\n",
+        )]);
+        let sections = vec![section(
+            "src.rs",
+            "@@ -1,2 +1,2 @@\n-fn foo(x: i32) -> i32 {\n-    x + 1\n+fn bar(x: i32) {\n+    x + 2\n@@ -5,2 +5,2 @@\n-    foo(1);\n-    foo(2);\n+    bar(1);\n+    bar(2);\n",
+        )];
+        let out =
+            infer_semantic_with_pre_images(&sections, &pre).expect("ret-remove triple must fire");
+        assert!(out.contains("# follow=uses"), "got:\n{out}");
+        assert!(out.contains("+ fn bar(x: i32) { ... }"), "got:\n{out}");
+        validated_live(&out, &pre);
+        let parsed = rsmpl_patch::parse_patch(&out).unwrap();
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).unwrap();
+        assert_eq!(
+            files["src.rs"],
+            "fn bar(x: i32) {\n    x + 2\n}\nfn m() {\n    bar(1);\n    bar(2);\n}\n",
+            "ret-remove triple must round-trip byte-identical"
+        );
+    }
+
+    #[test]
     fn body_joint_generics_evolution_triple_suppresses() {
         // Generics evolution is outside the Joint-A law — the triple
         // declines and the section stays wholly ordinary.

@@ -828,10 +828,12 @@ fn joint_slots_equal_except_name(minus: &FnPattern, plus: &FnPattern) -> bool {
 /// carry (SPEC 14.7) — the pattern-side mirror of the raiser's
 /// `header_fire_gates`: generics/where preserved, evolving ⊆ {vis,
 /// qual, params, ret} with params or ret evolving, at most two evolve.
-/// Only Concrete-vs-Concrete differences count as evolution; mixed
-/// slot kinds (Concrete/Meta/Any) decline — the raiser only ever
-/// emits concrete headers, and exotic hole-evolving triples stay on
-/// the loud single-shape error path.
+/// Concrete-vs-Concrete differences count as evolution, as does
+/// adding/removing `pub` or `-> T` (Absent↔Concrete on the vis/ret
+/// slots, Any↔Concrete on ret — the Joint-A header law the raiser
+/// already emits); all other mixed slot kinds decline — the raiser
+/// only ever emits concrete headers, and exotic hole-evolving
+/// triples stay on the loud single-shape error path.
 fn joint_header_evolution_ok(minus: &FnPattern, plus: &FnPattern) -> bool {
     let gen_eq = match (&minus.generics, &plus.generics) {
         (GenericPat::Absent, GenericPat::Absent) => true,
@@ -855,6 +857,9 @@ fn joint_header_evolution_ok(minus: &FnPattern, plus: &FnPattern) -> bool {
     let vis_evo = match (&minus.visibility, &plus.visibility) {
         (VisPat::Absent, VisPat::Absent) => Some(false),
         (VisPat::Concrete(a), VisPat::Concrete(b)) => Some(!joint_slot_eq(a, b)),
+        // WI-14: adding/removing `pub` is a vis evolution (mirrors the
+        // Joint-A header law the raiser emits via `header_fire_gates`).
+        (VisPat::Absent, VisPat::Concrete(_)) | (VisPat::Concrete(_), VisPat::Absent) => Some(true),
         (VisPat::Meta(a), VisPat::Meta(b)) => {
             if a == b {
                 Some(false)
@@ -884,6 +889,16 @@ fn joint_header_evolution_ok(minus: &FnPattern, plus: &FnPattern) -> bool {
     let ret_evo = match (&minus.ret, &plus.ret) {
         (RetPat::Any, RetPat::Any) | (RetPat::Absent, RetPat::Absent) => Some(false),
         (RetPat::Concrete(a), RetPat::Concrete(b)) => Some(!joint_slot_eq(a, b)),
+        // WI-14: adding/removing `-> T` is a ret evolution (mirrors the
+        // raiser — `header_fire_gates` counts any ret text delta — and
+        // the shipped Joint-A law, which fires ret-add/remove without
+        // a body). `Any` is the no-`->` shorthand, so Any↔Concrete is
+        // the add/remove shape; explicit `# returns=none` Absent pairs
+        // with Concrete the same way. All other mixed kinds decline.
+        (RetPat::Absent, RetPat::Concrete(_))
+        | (RetPat::Concrete(_), RetPat::Absent)
+        | (RetPat::Any, RetPat::Concrete(_))
+        | (RetPat::Concrete(_), RetPat::Any) => Some(true),
         (RetPat::Meta(a), RetPat::Meta(b)) => {
             if a == b {
                 Some(false)
@@ -1589,6 +1604,56 @@ mod tests {
             false,
         )
         .expect("ret-evolution triple must parse");
+    }
+
+    #[test]
+    fn wi14_body_joint_fires_on_vis_ret_add_remove_triple() {
+        // WI-14: adding/removing `pub` or `-> T` is a slot evolution
+        // under the Joint-A header law, so the triple parses. Each
+        // arm keeps params-or-ret evolving within the two-slot budget.
+        let yes = |m: &str, p: &str| {
+            try_parse_fn_body_joint(m, p, &[], &[], &[], &[], &[], &[], false).is_some()
+        };
+        // Vis-add + params retype (two-slot triple).
+        assert!(yes(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "pub fn bar(x: u32) -> i32 { ... }\nx + 2"
+        ));
+        // Vis-remove + ret retype (two-slot triple).
+        assert!(yes(
+            "pub fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: i32) -> u64 { ... }\nx + 2"
+        ));
+        // Ret-add + rename (one-slot triple).
+        assert!(yes(
+            "fn foo(x: i32) { ... }\nx + 1",
+            "fn bar(x: i32) -> u32 { ... }\nx + 2"
+        ));
+        // Ret-remove + params retype (two-slot triple).
+        assert!(yes(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "fn bar(x: u32) { ... }\nx + 2"
+        ));
+        // Vis-only evolution stays the terse intent's domain.
+        assert!(!yes(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "pub fn bar(x: i32) -> i32 { ... }\nx + 2"
+        ));
+        // Vis + params + ret is three evolutions — still over budget.
+        assert!(!yes(
+            "fn foo(x: i32) -> i32 { ... }\nx + 1",
+            "pub fn bar(x: u32) -> u64 { ... }\nx + 2"
+        ));
+        // Explicit `# returns=none` Absent vs the `Any` shorthand is no
+        // evolution signal either way — the joint never claims it,
+        // even with a params retype alongside.
+        let no_absent_any = |m: &str, p: &str| {
+            try_parse_fn_body_joint(m, p, &[], &[], &[], &[], &[], &[], true).is_none()
+        };
+        assert!(no_absent_any(
+            "fn foo(x: i32) { ... }\nx + 1",
+            "fn bar(x: u32) { ... }\nx + 2"
+        ));
     }
 
     #[test]
