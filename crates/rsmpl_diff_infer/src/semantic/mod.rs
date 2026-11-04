@@ -55,6 +55,7 @@ mod macro_rule_body;
 mod macro_rules;
 mod macros;
 mod member;
+mod method_double;
 mod method_subline;
 mod methods;
 mod methods_ref_strip;
@@ -145,6 +146,7 @@ pub(crate) use macros::{
     try_macro_interior_section, try_macro_rename_single, try_macro_rename_sweep,
 };
 pub(crate) use member::{try_member_def_only, try_member_rename};
+pub(crate) use method_double::{try_method_double_single, try_method_double_sweep};
 pub(crate) use method_subline::{
     try_subline_method_fn_single, try_subline_method_literal_single, try_subline_method_single,
     try_subline_method_wrap_single,

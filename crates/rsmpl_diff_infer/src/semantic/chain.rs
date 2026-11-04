@@ -218,6 +218,17 @@ pub(crate) fn run_pair_chain(
     ) {
         return Some((dd, "call_sweep"));
     }
+    // WI-13 residue slice C: N>=2 method+prefix double-delta sweep
+    // (concrete receiver + holed args, same proof as the qualifier
+    // doubles; disjoint by parser — method calls never parse as
+    // qualified calls).
+    if let Some(md) = attempt_counted(
+        declined,
+        "call_sweep",
+        super::try_method_double_sweep(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
+        return Some((md, "call_sweep"));
+    }
     if let Some(qual) = attempt_counted(
         declined,
         "qualified_call",

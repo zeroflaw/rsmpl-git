@@ -655,6 +655,29 @@ pub(crate) fn compress_balanced_pair_body(
             );
             used_rules.truncate(checkpoint);
         }
+        // WI-13 residue slice C: N=1 method+prefix double-delta
+        // single (`old_mod::obj.old_m(1);` -> `new_mod::obj.new_m(1);`,
+        // concrete receiver + holed args, same proof as the qualifier
+        // double single; single-delta pairs decline here).
+        if let Some(single) = attempt_counted(
+            declined,
+            "call_sweep",
+            super::try_method_double_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
+                return Some((body.to_string(), "call_sweep"));
+            }
+            declined_guard_with_numbers(
+                declined,
+                "call_sweep",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
+            used_rules.truncate(checkpoint);
+        }
         // WI-13 residue slice B: typed-let shared-prefix joint
         // (`let w: oldmod::Foo = oldmod::bar(2);` -> shared `newmod`
         // rename in type + init call, two-hunk one-rule factored joint;

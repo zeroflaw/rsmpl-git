@@ -9079,7 +9079,25 @@ every length and the totals stay the default truth at any size.
   the D13 composed scratch-apply (both hunks reproduce the plus line
   byte-identical); `Ty`/callee-changing, prefix-mismatched,
   multi-delta-prefix, leading/`qself`/generic variants stay ordinary.
-  Holed method double-delta sweeps stay ordinary (slice C).
+   Method+prefix double deltas land as slice-27 (WI-13 residue slice
+  C, `method_double.rs` sibling): a method-call line whose qualified
+  receiver and method share one rename (`old_mod::obj.old_m(args);`
+  → `new_mod::obj.new_m(args);`, whole-line or `let`-init framing,
+  receiver a generic-free path with ≥2 segments, base same, exactly
+  one differing receiver prefix segment, real method delta,
+  token-equal args per pair, no `&`/leading/`qself`/turbofish/
+  generics) compresses to one holed hunk
+  (`- old_mod::obj.old_m(E0)` / `+ new_mod::obj.new_m(E0)`,
+  method backticked when uppercase per WI-7-upper, receiver raw):
+  the N=1 single rides the precision guard (frame rule over the call
+  subterm, re-parse guard, `template_pair_counts` + `engine_verdict`
+  at want=1 plus the T361 byte-compare) and the N≥2 shared-class
+  sweep rides `call_sweep` with `# allow=many` (one shared class —
+  old/new receiver vectors, old/new method, uniform arity —
+  per-pair frame rule, same proof at want=N, `CountMismatch`/
+  `OpaqueHit` counted); receiver-only or method-only single deltas
+  decline here (verbatim / method-to-method own them), as do base
+  renames, multi-delta receivers, and bare receivers.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
