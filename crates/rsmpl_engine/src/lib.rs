@@ -320,4 +320,111 @@ mod tests {
             }
         }
     }
+
+    /// WI-19 gate: the 1900-line warning line before the 2000-line hard
+    /// cap. Any production `.rs` file (under `crates/*/src/` or
+    /// `bin/*/src/`, the same scope as the WI-22 scan) over 1900 lines
+    /// fails unless it names its split seam on the allowlist; over 2000
+    /// fails unconditionally (no allowlist excuses the hard cap, which
+    /// `no_rust_file_exceeds_2000_lines` enforces independently).
+    #[test]
+    fn wi19_no_file_exceeds_1900_lines() {
+        // Landing: allowlist empty — WI-19 split the six watch files
+        // (`arg_template` → `arg_template_single`,
+        // `generalized` → `generalized_let`, `macros` →
+        // `macro_rename_single`, `general_expr` → `general_expr_single`,
+        // `methods` → `methods_literal`, `mod` → `item_single`).
+        // Entry format when one is ever needed:
+        //   "crates/foo/src/big.rs" → "seam: <what moves where>; owner: WI-N".
+        let allowed: std::collections::HashMap<&str, &str> = [].into_iter().collect();
+        let root = workspace_root();
+        let mut offenders: Vec<String> = Vec::new();
+        for rel in src_rs_files(&root) {
+            if let Some(offense) = wi19_offender(&rel, file_lines(&root.join(&rel)), &allowed) {
+                offenders.push(offense);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "WI-19: production files over the 1900-line watch line (split verbatim onto a seam first):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Pure WI-19 decision: `None` when the file is within budget,
+    /// `Some(reason)` naming the breach. The allowlist excuses the
+    /// 1900 watch line only; the 2000 hard cap ignores it.
+    fn wi19_offender(
+        rel: &str,
+        lines: usize,
+        allowed: &std::collections::HashMap<&str, &str>,
+    ) -> Option<String> {
+        if lines > 2000 {
+            return Some(format!("{rel} ({lines} lines: over the 2000 hard cap)"));
+        }
+        if lines > 1900 && !allowed.contains_key(rel) {
+            return Some(format!(
+                "{rel} ({lines} lines: over 1900 without an allowlist seam)"
+            ));
+        }
+        None
+    }
+
+    /// WI-19 logic pin: the allowlist passes a listed 1901-line file
+    /// and the hard cap fails even a listed file — no workspace touch.
+    #[test]
+    fn wi19_allowlist_and_hard_cap_logic() {
+        let allowed: std::collections::HashMap<&str, &str> = [(
+            "crates/x/src/big.rs",
+            "seam: single-core split; owner: WI-99",
+        )]
+        .into_iter()
+        .collect();
+        assert!(wi19_offender("crates/x/src/ok.rs", 1900, &allowed).is_none());
+        assert!(wi19_offender("crates/x/src/big.rs", 1901, &allowed).is_none());
+        assert!(wi19_offender("crates/x/src/new.rs", 1901, &allowed).is_some());
+        assert!(wi19_offender("crates/x/src/big.rs", 2001, &allowed).is_some());
+    }
+
+    /// Production `.rs` files: `crates/*/src/**` + `bin/*/src/**`,
+    /// workspace-relative, `/`-joined. Integration `tests/` trees are
+    /// out of scope (WI-20 owns their naming, not their length).
+    fn src_rs_files(root: &std::path::Path) -> Vec<String> {
+        let mut out = Vec::new();
+        for dir in ["crates", "bin"] {
+            let base = root.join(dir);
+            let mut stack = vec![base];
+            while let Some(top) = stack.pop() {
+                let entries = std::fs::read_dir(&top)
+                    .unwrap_or_else(|e| panic!("WI-19 scan cannot read {}: {e}", top.display()));
+                for entry in entries {
+                    let path = entry.expect("dir entry").path();
+                    if path.is_dir() {
+                        if path.file_name().is_some_and(|n| n == "tests") {
+                            continue;
+                        }
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().is_none_or(|e| e != "rs") {
+                        continue;
+                    }
+                    let rel = path.strip_prefix(root).unwrap_or(&path);
+                    if !rel.components().any(|c| c.as_os_str() == "src") {
+                        continue;
+                    }
+                    out.push(rel.display().to_string().replace('\\', "/"));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    fn file_lines(path: &std::path::Path) -> usize {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    }
 }
