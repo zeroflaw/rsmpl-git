@@ -82,6 +82,7 @@ mod per_hunk;
 pub(crate) mod perm_single;
 pub(crate) mod prefix;
 pub(crate) mod prov;
+pub mod prov_summary;
 mod repeat;
 pub(crate) mod shape;
 mod sig_evolution;
@@ -604,6 +605,9 @@ pub(crate) fn unique_rule(used: &mut Vec<String>, _base: &str) -> String {
 pub use prov::HunkDeclined;
 pub use prov::HunkProvenance;
 pub(crate) use prov::{attempt, attempt_counted, declined_guard_with_numbers};
+pub use prov_summary::{
+    declined_weight, sorted_declined, summary_counts, totals_line, DeclinedTotals,
+};
 
 /// True when a `diff --git` header names a rename (differing real
 /// sides, T377) via the shared space-aware splitter.

@@ -453,13 +453,14 @@ fn wi15_partial_subhunk_mix_reports_context_exact_remainder() {
 
 #[test]
 fn wi17_text_parity_matches_json_trial() {
-    // WI-17 slice 1 text parity: the same comment-only input reports
-    // the same ordinary-section trial in text mode (stderr
-    // `declined:` lines, stdout patch untouched) and in JSON mode
-    // (`declined` arrays). The two sets must be equal as
-    // (file, detector, reason) triples. WI-4 slice 1: the patch-level
-    // `pre_pass_declined` array rides the same parity as
-    // `pre-pass <detector> <reason>` text lines.
+    // WI-17 slice 1 text parity (WI-16 diet: `--declined full`
+    // restores the complete trial; default summarizes): the same
+    // comment-only input reports the same ordinary-section trial in
+    // full text mode (stderr `declined:` lines, stdout patch
+    // untouched) and in JSON mode (`declined` arrays). The two sets
+    // must be equal as (file, detector, reason) triples. WI-4 slice
+    // 1: the patch-level `pre_pass_declined` array rides the same
+    // parity as `pre-pass <detector> <reason>` text lines.
     let dir = init_repo();
     write(
         dir.path(),
@@ -507,22 +508,54 @@ fn wi17_text_parity_matches_json_trial() {
         }
     }
     assert!(!want.is_empty(), "got: {v}");
-    let text_out = run(dir.path(), &[]);
+    // WI-16: the full trial rides `--declined full` (byte-identical to
+    // pre-WI-16 output); default summarizes (tested in the WI-16 pins
+    // below). Patch stdout is identical in every mode.
+    let full_out = run(dir.path(), &["--declined", "full"]);
     assert!(
-        text_out.status.success(),
+        full_out.status.success(),
         "stderr: {}",
-        String::from_utf8_lossy(&text_out.stderr)
+        String::from_utf8_lossy(&full_out.stderr)
     );
-    let patch_text = String::from_utf8_lossy(&text_out.stdout).to_string();
+    let patch_full = String::from_utf8_lossy(&full_out.stdout).to_string();
     let patch_json = v["patch"].as_str().unwrap();
-    assert_eq!(patch_text, patch_json, "text stdout must equal JSON patch");
+    assert_eq!(patch_full, patch_json, "full stdout must equal JSON patch");
     let mut got = std::collections::BTreeSet::new();
-    for line in String::from_utf8_lossy(&text_out.stderr).lines() {
+    for line in String::from_utf8_lossy(&full_out.stderr).lines() {
         if let Some(rest) = line.strip_prefix("declined: ") {
             got.insert(rest.to_string());
         }
     }
-    assert_eq!(got, want, "text trial must equal JSON trial");
+    assert_eq!(got, want, "full trial must equal JSON trial");
+    let default_out = run(dir.path(), &[]);
+    assert!(
+        default_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&default_out.stderr)
+    );
+    let patch_default = String::from_utf8_lossy(&default_out.stdout).to_string();
+    assert_eq!(
+        patch_default, patch_json,
+        "default stdout must equal JSON patch"
+    );
+    let mut got_default = std::collections::BTreeSet::new();
+    for line in String::from_utf8_lossy(&default_out.stderr).lines() {
+        if let Some(rest) = line.strip_prefix("declined: ") {
+            // Elision lines (`+N more`) are summary-only, never in JSON.
+            if rest.contains("+") && rest.contains("more") {
+                continue;
+            }
+            got_default.insert(rest.to_string());
+        }
+    }
+    assert!(
+        got_default.is_subset(&want),
+        "default trial must subset the full trial, got: {got_default:?}"
+    );
+    assert!(
+        !got_default.is_empty(),
+        "default trial must name blockers, got: {got_default:?}"
+    );
 }
 
 #[test]
@@ -659,7 +692,7 @@ fn wi17_slice4_twin_single_names_totality_end_to_end() {
         1,
         "got: {declined:?}"
     );
-    let text_out = run(dir.path(), &[]);
+    let text_out = run(dir.path(), &["--declined", "full"]);
     assert!(
         text_out.status.success(),
         "stderr: {}",
@@ -754,7 +787,7 @@ fn wi4_slice2a_general_expr_names_totality_end_to_end() {
                 && d["reason"] == serde_json::json!("totality:6:2")),
         "counted decline named, got: {declined:?}"
     );
-    let text_out = run(dir.path(), &[]);
+    let text_out = run(dir.path(), &["--declined", "full"]);
     assert!(
         String::from_utf8_lossy(&text_out.stderr)
             .lines()
@@ -836,7 +869,7 @@ fn wi4_slice2b1_use_prefix_names_totality_end_to_end() {
                 && d["reason"] == serde_json::json!("totality:3:2")),
         "counted decline named, got: {declined:?}"
     );
-    let text_out = run(dir.path(), &[]);
+    let text_out = run(dir.path(), &["--declined", "full"]);
     assert!(
         String::from_utf8_lossy(&text_out.stderr)
             .lines()
@@ -952,7 +985,7 @@ fn wi4_slice2brest_a_call_arg_template_names_totality_end_to_end() {
                 && d["reason"] == serde_json::json!("totality:4:2")),
         "counted decline named, got: {declined:?}"
     );
-    let text_out = run(dir.path(), &[]);
+    let text_out = run(dir.path(), &["--declined", "full"]);
     assert!(
         String::from_utf8_lossy(&text_out.stderr)
             .lines()
@@ -998,7 +1031,7 @@ fn wi4_slice2brest_b_control_template_names_totality_end_to_end() {
                 && d["reason"] == serde_json::json!("totality:3:2")),
         "counted decline named, got: {declined:?}"
     );
-    let text_out = run(dir.path(), &[]);
+    let text_out = run(dir.path(), &["--declined", "full"]);
     assert!(
         String::from_utf8_lossy(&text_out.stderr)
             .lines()
@@ -1057,11 +1090,178 @@ fn wi4_slice2brest_b_call_perm_split_from_arg_template_end_to_end() {
                 && d["reason"] == serde_json::json!("totality:4:2")),
         "scratch-twin decline named, got: {declined:?}"
     );
-    let text_out = run(dir.path(), &[]);
+    let text_out = run(dir.path(), &["--declined", "full"]);
     let text = String::from_utf8_lossy(&text_out.stderr);
     assert!(
         text.lines()
             .any(|l| l == "declined: src/f.rs literal_frame totality:4:2"),
         "text parity, got: {text}"
     );
+}
+
+#[test]
+fn wi16_default_summary_is_top3_plus_elision_and_totals() {
+    // WI-16 diet: the comment-only probe (nothing countable — all
+    // `no-match`/`not-tried`) summarizes to top-3 chain-order entries
+    // + one elision line + one totals line, with pre-pass lines
+    // verbatim. Full mode restores the complete trial; JSON carries
+    // the full arrays.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    // hello\n    let x = 1;\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    // hello world\n    let x = 1;\n}\n",
+    );
+    let json_out = run(dir.path(), &["--format", "json"]);
+    assert!(json_out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout)).expect("stdout is JSON");
+    let hunks = v["hunks"].as_array().unwrap();
+    assert_eq!(hunks.len(), 1, "got: {v}");
+    let full_len = hunks[0]["declined"].as_array().unwrap().len();
+    assert!(full_len > 3, "got: {v}");
+
+    let default_out = run(dir.path(), &[]);
+    assert!(default_out.status.success());
+    let patch_default = String::from_utf8_lossy(&default_out.stdout).to_string();
+    assert_eq!(patch_default, v["patch"].as_str().unwrap());
+    let stderr = String::from_utf8_lossy(&default_out.stderr).to_string();
+    let entry_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("declined: src/"))
+        .collect();
+    // Exactly top-3 entry lines (elision excluded: it carries `+N more`).
+    let top_lines: Vec<&str> = entry_lines
+        .iter()
+        .copied()
+        .filter(|l| !(l.contains("+") && l.contains("more")))
+        .collect();
+    assert_eq!(top_lines.len(), 3, "got:\n{stderr}");
+    let elision: Vec<&str> = entry_lines
+        .iter()
+        .copied()
+        .filter(|l| l.contains("+") && l.contains("more"))
+        .collect();
+    assert_eq!(elision.len(), 1, "got:\n{stderr}");
+    assert_eq!(
+        elision[0],
+        &format!(
+            "declined: src/f.rs +{} more (use --declined full)",
+            full_len - 3
+        ),
+        "got:\n{stderr}"
+    );
+    // One totals line, and its counts sum to the full-log length.
+    let totals: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("declined totals:"))
+        .collect();
+    assert_eq!(totals.len(), 1, "got:\n{stderr}");
+    let mut sum = 0usize;
+    for slot in totals[0].split_whitespace().skip(2) {
+        let n: usize = slot.split('=').nth(1).unwrap().parse().unwrap();
+        sum += n;
+    }
+    assert_eq!(
+        sum, full_len,
+        "totals must equal full-log counts, got: {}",
+        totals[0]
+    );
+
+    // Full mode restores every entry; its set equals the JSON set.
+    let full_out = run(dir.path(), &["--declined", "full"]);
+    let full_stderr = String::from_utf8_lossy(&full_out.stderr).to_string();
+    let mut full_set = std::collections::BTreeSet::new();
+    for line in full_stderr.lines() {
+        if let Some(rest) = line.strip_prefix("declined: ") {
+            full_set.insert(rest.to_string());
+        }
+    }
+    let mut json_set = std::collections::BTreeSet::new();
+    for e in hunks {
+        if e["detector"] != serde_json::json!("ordinary") {
+            continue;
+        }
+        let file = e["file"].as_str().unwrap();
+        for d in e["declined"].as_array().unwrap() {
+            json_set.insert(format!(
+                "{} {} {}",
+                file,
+                d["detector"].as_str().unwrap(),
+                d["reason"].as_str().unwrap()
+            ));
+        }
+    }
+    for d in v["pre_pass_declined"].as_array().unwrap() {
+        json_set.insert(format!(
+            "pre-pass {} {}",
+            d["detector"].as_str().unwrap(),
+            d["reason"].as_str().unwrap()
+        ));
+    }
+    assert_eq!(full_set, json_set, "full trial must equal JSON trial");
+    // Default entry lines subset the full set.
+    for line in top_lines {
+        let rest = line.strip_prefix("declined: ").unwrap().to_string();
+        assert!(
+            full_set.contains(&rest),
+            "default must subset full, missing: {rest}"
+        );
+    }
+}
+
+#[test]
+fn wi16_counted_blocker_surfaces_first_in_summary_and_json() {
+    // WI-16 ordering: weight-0 counted declines lead both the default
+    // top-3 and the JSON array, so text and JSON name the same
+    // blockers first.
+    let dir = init_repo();
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    a + 1;\n    b + 1;\n    c + 1;\n    d + 1;\n    a + 1;\n    b + 1;\n}\n",
+    );
+    commit_all(dir.path());
+    write(
+        dir.path(),
+        "src/f.rs",
+        "fn m() {\n    a + 2;\n    b + 2;\n    c + 1;\n    d + 1;\n    a + 1;\n    b + 1;\n}\n",
+    );
+    let json_out = run(dir.path(), &["--format", "json"]);
+    assert!(json_out.status.success());
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&json_out.stdout)).expect("stdout is JSON");
+    let declined = v["hunks"].as_array().unwrap()[0]["declined"]
+        .as_array()
+        .unwrap();
+    assert!(
+        declined.len() > 3,
+        "fixture must stay ordinary with a long trial, got: {v}"
+    );
+    // JSON names the counted blockers first (stable within weight).
+    assert_eq!(declined[0]["detector"], serde_json::json!("general_expr"));
+    assert_eq!(declined[0]["reason"], serde_json::json!("totality:6:2"));
+    assert_eq!(declined[1]["reason"], serde_json::json!("totality:6:2"));
+    let default_out = run(dir.path(), &[]);
+    assert!(default_out.status.success());
+    let stderr = String::from_utf8_lossy(&default_out.stderr).to_string();
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l == "declined: src/f.rs general_expr totality:6:2"),
+        "counted blocker must surface in default top-3, got:\n{stderr}"
+    );
+    // Totals line counts the two totalities pre-truncation.
+    let totals = stderr
+        .lines()
+        .find(|l| l.starts_with("declined totals:"))
+        .unwrap()
+        .to_string();
+    assert!(totals.contains("totality=2"), "got: {totals}");
 }

@@ -34,6 +34,18 @@ enum Format {
     Json,
 }
 
+/// WI-16 provenance diet: `summary` (default) prints the top-3
+/// declined entries per ordinary hunk plus elision + totals;
+/// `full` restores the complete per-hunk trial byte-identically to
+/// pre-WI-16 output. JSON always carries the full arrays (reordered so
+/// text and JSON name the same blockers first).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum DeclinedMode {
+    #[default]
+    Summary,
+    Full,
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "diffrs",
@@ -75,6 +87,13 @@ struct Cli {
     /// Report format: text (the patch) or json (default text).
     #[arg(long, value_enum, default_value = "text")]
     format: Format,
+
+    /// Provenance verbosity (text mode; JSON always carries the full
+    /// arrays): `summary` prints the top-3 declined entries per
+    /// ordinary hunk plus elision + totals (default); `full` restores
+    /// the complete trial.
+    #[arg(long, value_enum, default_value = "summary")]
+    declined: DeclinedMode,
 
     /// Single revision forwarded to `git diff [rev]` (e.g. `HEAD`,
     /// `HEAD~1`); omit for pending changes.
@@ -266,7 +285,11 @@ fn run() -> Result<(), CliError> {
                     "saved_bytes": h.saved_bytes, "group": h.group
                 });
                 if h.detector == "ordinary" {
-                    entry["declined"] = serde_json::json!(h.declined.iter().map(|d| serde_json::json!({
+                    // WI-16: full arrays stay (shape unchanged), reordered
+                    // by display weight so text and JSON name the same
+                    // blockers first (stable — ties keep chain order).
+                    let ordered = rsmpl_diff::sorted_declined(&h.declined);
+                    entry["declined"] = serde_json::json!(ordered.iter().map(|d| serde_json::json!({
                         "detector": d.detector, "reason": d.reason,
                     })).collect::<Vec<_>>());
                 }
@@ -303,12 +326,40 @@ fn run() -> Result<(), CliError> {
     // `declined:` line per declined entry (file, detector, reason) —
     // the same set, the same closed taxonomy (SPEC D.2). Like warnings,
     // these lines are outside the JSON `patch`-overhead budget.
-    for h in &patch.hunks {
-        if h.detector == "ordinary" {
-            for d in &h.declined {
-                eprintln!("declined: {} {} {}", h.file, d.detector, d.reason);
+    // WI-16 diet: `summary` (default) prints the top-3 weight-ordered
+    // entries per ordinary hunk plus one elision line and one totals
+    // line; `full` restores the complete trial byte-identically.
+    if cli.declined == DeclinedMode::Full {
+        for h in &patch.hunks {
+            if h.detector == "ordinary" {
+                for d in &h.declined {
+                    eprintln!("declined: {} {} {}", h.file, d.detector, d.reason);
+                }
             }
         }
+        return check_verdict(&check);
+    }
+    let mut ordinary_lists: Vec<&[rsmpl_diff::HunkDeclined]> = Vec::new();
+    for h in &patch.hunks {
+        if h.detector != "ordinary" {
+            continue;
+        }
+        ordinary_lists.push(&h.declined);
+        let ordered = rsmpl_diff::sorted_declined(&h.declined);
+        for d in ordered.iter().take(3) {
+            eprintln!("declined: {} {} {}", h.file, d.detector, d.reason);
+        }
+        if ordered.len() > 3 {
+            eprintln!(
+                "declined: {} +{} more (use --declined full)",
+                h.file,
+                ordered.len() - 3
+            );
+        }
+    }
+    if !ordinary_lists.is_empty() {
+        let totals = rsmpl_diff::summary_counts(&ordinary_lists);
+        eprintln!("{}", rsmpl_diff::totals_line(&totals));
     }
     check_verdict(&check)
 }

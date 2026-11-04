@@ -8043,8 +8043,19 @@ section-gate spellings (`crlf-content`, `stranded-joint`,
 either (WI-17 slice 3 unified every section-gate veto onto the closed
 `veto:` / `precondition:` forms). Detector-internal guard vetoes surface as
 `no-match` — reasons are never detector-inferred. Text mode prints
-the same trial to stderr as one `declined: <file> <detector>
-<reason>` line per entry (stdout stays the patch byte-identical).
+the trial to stderr with the WI-16 diet: by default the top-3
+weight-ordered entries per ordinary hunk (`guard:` / `totality:` /
+`veto:` before `precondition:` before `no-match` before `not-tried`,
+ties in chain order) as one `declined: <file> <detector> <reason>`
+line each, plus one `declined: <file> +N more (use --declined full)`
+elision line when the hunk declined more than three, plus one
+`declined totals: guard=G totality=T veto=V precondition=P
+no-match=M not-tried=U` line counting the full pre-truncation trial;
+`--declined full` restores one line per entry byte-identically to the
+pre-diet output (stdout stays the patch byte-identical in every
+mode). JSON keeps the full `declined` arrays in the same
+weight-ordered sequence, so text and JSON name the same blockers
+first.
 Whole-patch pre-pass declines (moves, item/member/mod
 intents, cross-file intents) are patch-global and never attributed
 per-section: the pre-pass-only detectors (`move`, `item_intent`,

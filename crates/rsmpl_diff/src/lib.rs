@@ -12,7 +12,10 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::process::Command;
 
-pub use rsmpl_diff_infer::{HunkDeclined, HunkProvenance, InferError, InferredPatch};
+pub use rsmpl_diff_infer::{
+    declined_weight, sorted_declined, summary_counts, totals_line, DeclinedTotals, HunkDeclined,
+    HunkProvenance, InferError, InferredPatch,
+};
 pub use rsmpl_diff_source::{CollectedDiff, GitSource, SourceError};
 pub use verify::{FirstDivergence, VerifyError, VerifyReport};
 

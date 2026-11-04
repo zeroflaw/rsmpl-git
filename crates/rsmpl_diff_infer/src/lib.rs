@@ -52,7 +52,10 @@ pub enum InferError {
     Unparseable(String),
 }
 
-pub use semantic::{HunkDeclined, HunkProvenance};
+pub use semantic::{
+    declined_weight, sorted_declined, summary_counts, totals_line, DeclinedTotals, HunkDeclined,
+    HunkProvenance,
+};
 
 /// The v1 inference result: the RSmPL patch plus which binary paths
 /// were stripped (the binary reports them as `warning:` lines).
