@@ -68,7 +68,7 @@ Kinds: identifier, ident, path, symbol, expr, stmt, item, type, pat, lifetime, g
 ```
 
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/generics explicitly (SPEC 14.1). Explicit slots evolve, `...`/same-meta
-  preserved, bodies never rewritten (SPEC 14.7). A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`, SPEC 13.4).
+  preserved, bodies never rewritten; rename+body joints ride one `# follow=uses` hunk (SPEC 14.7). A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`, SPEC 13.4).
 - Call rewrite: add `# repeat` to fold nested same-rule matches in one
   hunk (`Box::new(Box::new(x))` → `x`, SPEC 17.8). General-expression
   rewrites (`E + 1` → `E + 2`) fold the same way; `let`/type/macro
@@ -95,17 +95,17 @@ Kinds: identifier, ident, path, symbol, expr, stmt, item, type, pat, lifetime, g
   `impl Trait for Type` rename states its trait + self-type pairs as two
   `# follow=uses` hunks sharing one rule (trait first); the composed
   `impl` header is follow-rewritten, never written.
-- Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; struct-field/enum-payload/discriminant likewise under their container header; name preserved, SPEC 14.8).
+- Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; struct-field/enum-payload/discriminant likewise under their container header; name preserved, SPEC 14.8). Rename+member evolution, field-add/del, and collection moves compose under one rule with member deltas (SPEC 14.8/20).
 - Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`);
   paste may precede cut; cross-file = two sections (SPEC 20); same-anchor pastes land in doc order with one blank between;
-  `as` paste (`+ fn old as new(...)`) renames fn + self-calls, joint (`+ fn old as new(x: i64) -> i64`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, inherent-`impl` (`+ impl old as new { ... }`) renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto, two slots stay ordinary (SPEC 20.2).
+  `as` paste (`+ fn old as new(...)`) renames fn + self-calls, joint (`+ fn old as new(x: i64) -> i64`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, trait (`+ trait old as new { ... }`) renames trait + self-referential method signatures/bodies, joint-trait (`+ trait old as new { fn m_old as m_new; ... }`) adds one method rename, inherent-`impl` (`+ impl old as new { ... }`)   renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto, two slots stay ordinary; move+attr (E1) / trait-move (E2) ride the same probe with the delta as ordinary leftover (SPEC 20).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many`) moves imports;
   grouped/glob/`as` tails preserved, members at the matched position rewrite too; regroup
   merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` and splits the inverse (same order/vis, no attrs) (SPEC 14.9).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, `- E + 1`, `- Vec<T>` /
   `+ Box<[T]>` (`T` inferred), 2–4-line `let` sequences (per-position
   `P0`/`E0` holes). Bare `P` never matches `x: T` — write `P: T`.
-  Table: SPEC 18.6 (mixed `let-else`/macro-type shapes stay ordinary hunks, permanent scope; macro *statements* match whole-shape opaque and `fn` items header-strict + body-structural inside blocks; `match`/loops/closures/`async`/`try`/`unsafe`/`yield`/`break`/`continue`/`let` match structurally).
+  Table: SPEC 18.6 (mixed `let-else`/macro-type shapes stay ordinary hunks, permanent scope; macro *statements* match whole-shape opaque and `fn` items header-strict + body-structural inside blocks;   `match`/loops/closures/`async`/`try`/`unsafe`/`yield`/`break`/`continue`/`let`, array-repeat `[E; N]`, and `&raw` addr match structurally).
 - Ordinary hunks: text edits with no `#` lines; headers stay two-sided
   (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only, SPEC 10.4/11; blank insertion needs bare `+`, `- foo` removal a `-- ` body line, SPEC 11).
 - Macros: plain call patterns never reach inside macro invocations;

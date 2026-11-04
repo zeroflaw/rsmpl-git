@@ -515,7 +515,7 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
         );
         let context: Vec<&str> = semantic.lines().filter(|l| l.starts_with(' ')).collect();
         assert!(context.is_empty(), "zero-context, got: {context:?}");
-    } else if name == "100-field-rename-fires" {
+    } else if name == "144-field-rename-fires" {
         // WI-9b: 1 field definition + 5 use lines compress to the
         // definition hunk with `# follow=uses`; the harness checks the
         // tree legs (--check + lowered git apply).
@@ -545,7 +545,7 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
-    } else if name == "101-variant-rename-fires" {
+    } else if name == "145-variant-rename-fires" {
         // WI-9b: 1 variant definition + 4 use lines compress to the
         // definition hunk with `# follow=uses`.
         assert!(

@@ -617,3 +617,294 @@ fn generated_inventory_blocks_sync() {
         "SPEC head contract-errors drifts: run `python3 tools/gen_errors.py --write`"
     );
 }
+
+/// WI-10: fixture numbers are unambiguous — numeric prefixes unique
+/// within each corpus (`100`/`101` each named two diffrs dirs before
+/// the renumber to `144`/`145`).
+#[test]
+fn fixture_numbers_unique() {
+    let root = workspace_root();
+    for corpus in ["test-fixtures/diffrs", "test-fixtures/applyrs"] {
+        let mut seen = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir(root.join(corpus)).expect("corpus must list") {
+            let name = entry
+                .expect("entry must read")
+                .file_name()
+                .to_string_lossy()
+                .to_string();
+            let num = name
+                .split('-')
+                .next()
+                .unwrap_or(&name)
+                .parse::<u32>()
+                .unwrap_or_else(|_| panic!("[{corpus}] fixture {name:?} has no numeric prefix"));
+            if let Some(prev) = seen.insert(num, name.clone()) {
+                panic!(
+                    "[{corpus}] duplicate fixture number {num}: {prev:?} vs {name:?} — \
+                     renumber the newer dir (highest free number) and update its harness branch"
+                );
+            }
+        }
+        assert!(!seen.is_empty(), "[{corpus}] no fixtures found");
+    }
+}
+
+/// WI-10: learnability — every catalogue shape has its AGENTS.md row,
+/// its SKILL.md row/example, and a fixture/bench/test pin. Each entry
+/// is `(shape, agents needle, skill needle, proof needle)`; the proof
+/// needle matches a fixture/bench dir name or `.rs` test/crate source
+/// (authored-only spellings such as the `as` pastes pin via e2e/unit
+/// tests, never via a fixture an agent cannot re-apply).
+#[test]
+fn learnability_three_surface_sync() {
+    let root = workspace_root();
+    let agents =
+        std::fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must be readable");
+    let skill = std::fs::read_to_string(root.join("skills/gitrs/SKILL.md"))
+        .expect("SKILL.md must be readable");
+
+    // Proof corpus: fixture/bench dir names plus every `.rs` source
+    // under `bin/` and `crates/` (tests pin authored-only spellings).
+    let mut proof = String::new();
+    for dir in [
+        "test-fixtures/diffrs",
+        "test-fixtures/applyrs",
+        "example-benches/diffrs",
+        "example-benches/applyrs",
+    ] {
+        for entry in std::fs::read_dir(root.join(dir)).expect("proof dir must list") {
+            proof.push_str(
+                &entry
+                    .expect("entry must read")
+                    .file_name()
+                    .to_string_lossy(),
+            );
+            proof.push('\n');
+        }
+    }
+    fn collect_rs(dir: &std::path::Path, out: &mut String) {
+        for entry in std::fs::read_dir(dir).expect("src dir must list") {
+            let entry = entry.expect("entry must read");
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                if name == "target" {
+                    continue;
+                }
+                collect_rs(&path, out);
+            } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                out.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
+                out.push('\n');
+            }
+        }
+    }
+    for tree in ["bin", "crates"] {
+        collect_rs(&root.join(tree), &mut proof);
+    }
+
+    // (shape, AGENTS.md needle, SKILL.md needle, proof needle).
+    // Needles are single-line substrings of hand-owned prose — a row
+    // deletion fails naming the shape (mutation-checked).
+    const SHAPES: &[(&str, &str, &str, &str)] = &[
+        ("fn-rename", "Fn rename", "Fn rename", "01-rename-fn"),
+        (
+            "call-sweep",
+            "Call rewrite",
+            "rule=rename_calls",
+            "01-call-sweep",
+        ),
+        (
+            "method-m2f",
+            "Method-call rewrite",
+            "Method-call rewrite",
+            "method-to-function",
+        ),
+        (
+            "method-m2m",
+            "composite receivers",
+            "bind the receiver",
+            "method-to-method",
+        ),
+        (
+            "use-prefix",
+            "Use-path prefix",
+            "Use-path prefix",
+            "use-prefix",
+        ),
+        ("use-regroup", "regroup", "regroup", "regroup"),
+        (
+            "item-rename",
+            "Other items rename",
+            "Item rename:",
+            "14-item-rename",
+        ),
+        (
+            "member-rename",
+            "Rename + member evolution",
+            "Rename+member evolution",
+            "field-rename-fires",
+        ),
+        (
+            "member-add-del",
+            "field-addition",
+            "field-add/del",
+            "field-add",
+        ),
+        ("assoc-rename", "assoc claims", "assoc", "assoc-rename"),
+        ("trait-method", "trait T", "trait T", "trait-method"),
+        (
+            "mod-rename",
+            "`mod` claims",
+            "`mod` claims",
+            "42-mod-rename",
+        ),
+        (
+            "definition-evolution",
+            "templates its value",
+            "Definition RHS evolution",
+            "106-definition-alias-fires",
+        ),
+        (
+            "sig-evolution",
+            "Slots written",
+            "Explicit slots evolve",
+            "73-sig-evolution-fires",
+        ),
+        ("let-shape", "Beyond calls", "Beyond calls", "20-let-sweep"),
+        ("type-shape", "Box<[T]>", "Box<[T]>", "type-sweep"),
+        (
+            "general-expr",
+            "expressions (`- E + 1`)",
+            "General-expression",
+            "general-expr",
+        ),
+        ("sequence", "2–4-line", "2–4-line", "sequence"),
+        ("macro-shape", "Macros —", "Macros:", "macro-rename"),
+        (
+            "macro-tokentree",
+            "binds one hole",
+            "binds one hole",
+            "macro-sweep",
+        ),
+        (
+            "symbol-shape",
+            "Symbol rewrite —",
+            "Symbol rewrite:",
+            "symbol-single",
+        ),
+        (
+            "symbol-fallback",
+            "# fallback=syntax",
+            "# fallback=syntax",
+            "08-symbol-fallback",
+        ),
+        ("diet-sweep", "# sweep", "# sweep", "call-sweep"),
+        ("diet-repeat", "# repeat", "# repeat", "repeat-fold"),
+        (
+            "diet-optional",
+            "# optional",
+            "# optional",
+            "05-optional-noop",
+        ),
+        (
+            "move-basic",
+            "Move — cut",
+            "Move: cut",
+            "03-deleted-file-move",
+        ),
+        (
+            "move-fn-as",
+            "`as` paste",
+            "`as` paste",
+            "122-move-rename-fires",
+        ),
+        (
+            "move-joint-as",
+            "Joint paste",
+            "adds one sig-slot evolution",
+            "fn old as new(x",
+        ),
+        (
+            "move-container-as",
+            "Container `as` paste",
+            "renames container",
+            "struct Old as New",
+        ),
+        (
+            "move-trait-as",
+            "Trait `as` paste",
+            "renames trait",
+            "trait Old as New",
+        ),
+        (
+            "move-joint-trait-as",
+            "Joint trait paste",
+            "adds one method rename",
+            "m_old as m_new",
+        ),
+        (
+            "move-impl-as",
+            "Inherent-`impl` `as` paste",
+            "renames `impl` block",
+            "impl Old as New",
+        ),
+        (
+            "move-attr-e1",
+            "Move+attr (E1)",
+            "move+attr (E1)",
+            "hunk-interior",
+        ),
+        (
+            "move-trait-e2",
+            "trait-move (E2)",
+            "trait-move (E2)",
+            "m_old as m_new",
+        ),
+        (
+            "rename-body-joint",
+            "Rename+body joint",
+            "rename+body joints",
+            "119-fn-joint-body-fires",
+        ),
+        (
+            "joint-impl",
+            "Joint `impl Trait for Type`",
+            "follow-rewritten, never written",
+            "joint-impl",
+        ),
+        (
+            "collection-move",
+            "binds an ordered collection",
+            "collection moves",
+            "collection-move",
+        ),
+        (
+            "binder-rename",
+            "capture-risk",
+            "capture-risk",
+            "let_binder",
+        ),
+        (
+            "array-repeat-raw",
+            "array-repeat",
+            "array-repeat",
+            "repeat-hole",
+        ),
+        ("qself-call", "qself", "qself", "qself-call"),
+    ];
+    for (shape, a_needle, s_needle, p_needle) in SHAPES {
+        assert!(
+            agents.contains(a_needle),
+            "shape `{shape}` lost its AGENTS.md row (needle {a_needle:?}): restore the row"
+        );
+        assert!(
+            skill.contains(s_needle),
+            "shape `{shape}` lost its SKILL.md row (needle {s_needle:?}): restore the row"
+        );
+        assert!(
+            proof.contains(p_needle),
+            "shape `{shape}` lost its fixture/bench/test pin (needle {p_needle:?}): \
+             add a fixture, bench, or e2e pin naming it"
+        );
+    }
+}

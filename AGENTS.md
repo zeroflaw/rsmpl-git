@@ -99,7 +99,7 @@ Move — cut with `# bind=Helper` + `- I` (`I` infers `item`), paste with
 `# use=Helper` + `+ Helper`; paste hunks may precede cut hunks; cross-file
 moves are two file sections (SPEC 9.3, SPEC 10.5). Same-anchor pastes land
 in document order (first hunk topmost) with one blank line between items
-(SPEC 20.2). `as` paste (`+ fn old as new(...) { ... }`) renames the moved fn + self-calls; shadow/field/macro/attr interiors veto (`RSMPL_PATTERN_CONFLICT`, line named). Joint paste (`+ fn old as new(x: i64) -> i64 { ... }`) adds exactly one signature-slot evolution; two slots stay ordinary. Container `as` paste (`+ struct/enum/union old as new { ... }`) renames a moved container + its self-referential field types / variant payloads (vis/generics/attrs token-equal; field/variant/macro/attr interiors veto). Trait `as` paste (`+ trait old as new { ... }`) renames a moved trait + its self-referential method signatures/bodies (vis/generics/supertraits/attrs token-equal; method/macro/attr interiors veto). Joint trait paste (`+ trait old as new { fn m_old as m_new; ... }`) adds exactly one method rename (double-scan agreement, pairwise-distinct idents; `m_old` macro/attr veto; two renames stay ordinary). Inherent-`impl` `as` paste (`+ impl old as new { ... }`) renames a moved `impl` block + its self-ty self-paths (assoc/macro/attr/shadow veto; trait-impls stay ordinary).
+(SPEC 20.2). `as` paste (`+ fn old as new(...) { ... }`) renames the moved fn + self-calls; shadow/field/macro/attr interiors veto (`RSMPL_PATTERN_CONFLICT`, line named). Joint paste (`+ fn old as new(x: i64) -> i64 { ... }`) adds exactly one signature-slot evolution; two slots stay ordinary. Container `as` paste (`+ struct/enum/union old as new { ... }`) renames a moved container + its self-referential field types / variant payloads (vis/generics/attrs token-equal; field/variant/macro/attr interiors veto). Trait `as` paste (`+ trait old as new { ... }`) renames a moved trait + its self-referential method signatures/bodies (vis/generics/supertraits/attrs token-equal; method/macro/attr interiors veto). Joint trait paste (`+ trait old as new { fn m_old as m_new; ... }`) adds exactly one method rename (double-scan agreement, pairwise-distinct idents; `m_old` macro/attr veto; two renames stay ordinary). Inherent-`impl` `as` paste (`+ impl old as new { ... }`) renames a moved `impl` block + its self-ty self-paths (assoc/macro/attr/shadow veto; trait-impls stay ordinary). Move+attr (E1) and trait-move (E2) compositions ride the same cut/paste probe with the attr/method delta as an ordinary leftover (SPEC 20).
 
 Use-path prefix — after a `mod` rename, move imports with one hunk
 (`- use crate::old` / `+ use crate::new`, `# allow=many` or `# sweep`); plain, grouped,
@@ -115,7 +115,9 @@ set: full supported-vs-rejected table with exact errors is SPEC 18.6
 (mixed `let-else`, concrete-head `P @`, macro types stay ordinary hunks
 (block macros opaque, `fn` items strict-header + body); blocks, `if`, `match`, loops, closures,
 `async`/`try`/`unsafe` blocks, `yield`, `break`/`continue`, `let` expressions, agreed `let-else`,
-and placeholder-head `P @` match structurally); ellipsis positions are SPEC 16.
+and placeholder-head `P @`, array-repeat `[E; N]`, and `&raw` addr match structurally); ellipsis positions are SPEC 16.
+
+Macros — `# macro=token_tree` renames verbatim (`M!(...)`→`N!(...)`) or binds one hole per top-level arg; plain call patterns never enter macro bodies (SPEC 21). Symbol rewrite — `- Old(...)` / `+ New(...)` with bare `# symbol` (crate-index verified) or `# fallback=syntax` (exact text); field types, use-prefix heads, and single-leading-prefix paths follow the same law (SPEC 19).
 
 ## Ranges (file reads, not a CLI listing)
 
