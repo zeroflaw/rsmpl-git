@@ -40,6 +40,7 @@ pub(crate) fn try_precision_definition_single(
         }
         Counted::Totality { found, want } => return Counted::Totality { found, want },
         Counted::Opaque => return Counted::Opaque,
+        Counted::Veto(name) => return Counted::Veto(name),
         Counted::Miss => {}
     }
     match try_sig_evolution_sweep(minuses, pluses, path, file_old, changed, used_rules) {
@@ -49,6 +50,7 @@ pub(crate) fn try_precision_definition_single(
         }
         Counted::Totality { found, want } => return Counted::Totality { found, want },
         Counted::Opaque => return Counted::Opaque,
+        Counted::Veto(name) => return Counted::Veto(name),
         Counted::Miss => {}
     }
     // N=1 bare-item vis single (struct/enum vis singles): same-name

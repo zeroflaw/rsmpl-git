@@ -377,6 +377,21 @@ pub(crate) fn run_pair_chain(
     ) {
         return Some((swap, "let_template"));
     }
+    // WI-5: scoped `let`-binder rename (`let count = E;` → `let n = E;`
+    // plus its in-scope use lines, the engine follow covering the uses)
+    // — after the let-template trio (those own per-site-preserved-pat
+    // classes and decline binder-changing pairs by construction) and
+    // before the window fusers (a `[binder-def + uses]` run is one
+    // binder intent under follow, never a verbatim-ish window): the
+    // shape gate admits only binder-def-first runs, so no other family
+    // can be stolen.
+    if let Some(binder) = attempt_counted(
+        declined,
+        "let_binder",
+        super::try_let_binder_window(minuses, pluses, path, file_old, changed, used_rules),
+    ) {
+        return Some((binder, "let_binder"));
+    }
     // WI-5c: repeated-block `let` sequences (N ≥ 2 blocks × 2–4 stmts,
     // hetero positions ride holes) — after the single-statement let
     // sweeps (those own whole-class templates; this owns multi-line

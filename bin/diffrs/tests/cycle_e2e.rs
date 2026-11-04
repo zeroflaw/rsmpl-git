@@ -381,7 +381,7 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ),
     (
         "12-stmt-rewrite",
-        "hetero (WI-15 slice 1): same-name param-evolution header (Vec<u32> → Box<[u32]>, no rename so no fn-joint def) fused with a binder-change `let count` → `let n` line (D11/D16 capture: no binder-identity machinery) plus a same-binder `let bumped` line. The unproven line is exactly `let count = values.len() as u32;` (binder rename with a live use on the next line); the other two lines re-infer as a type single + a verbatim single. A rename+body twin WITH calls now splits per WI-15 (header follow + verbatim leftovers); this fixture has neither a rename nor calls.",
+        "partial (WI-5): the binder line now raises as one `let_binder` intent (`let count = E;` → `let n = E;` plus the in-block follow covering `let bumped`, D11/D16 proof: count + follow-coverage + scratch-apply). The fused same-name header keeps it divergent: authored states `Vec<T>` → `Box<[T]>` as a holed sweep hunk plus a separate `count` → `n` use hunk (3 hunks), the raiser emits a concrete type single plus the binder-follow hunk (2 hunks) — canonical spellings differ while both tree legs close.",
     ),
     (
         "13-sig-evolution",

@@ -69,7 +69,11 @@ pub struct HunkProvenance {
 /// attr, per-hunk + whole-section singles; `item_rename` stays
 /// `no-match` by design — partition path)), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
-/// anti-unification, joint-territory section gates),
+/// anti-unification, joint-territory section gates; WI-5 adds the
+/// binder-naming vetoes `capture-risk` (shadow/capture/macro-hidden
+/// uses the follow proof cannot own), `unproven-use` (a follow line
+/// the diff did not show — the raiser never invents edits), and
+/// `ambiguous-binder` (engine-apply fallback ambiguity)),
 /// `precondition:<name>` (a stated shape premise failed, incl. the
 /// LF-only section premise), `not-tried` (the detector never ran on
 /// this hunk — absence, not silence). Bare `byte-guard` /
@@ -203,8 +207,17 @@ pub(crate) fn declined_veto(declined: &mut Vec<HunkDeclined>, detector: &str, na
 pub(crate) enum Counted<T> {
     Fire(T),
     Miss,
-    Totality { found: usize, want: usize },
+    Totality {
+        found: usize,
+        want: usize,
+    },
     Opaque,
+    /// WI-5: named veto for shapes that engaged but must not fire
+    /// (`capture-risk`, `unproven-use`, `ambiguous-binder` — SPEC D.2).
+    /// Carries the veto name; [`attempt_counted`] records it via
+    /// [`declined_veto`]. Propagating arms that can never produce it
+    /// forward it unchanged.
+    Veto(&'static str),
 }
 
 impl<T: std::fmt::Debug> Counted<T> {
@@ -253,6 +266,10 @@ pub(crate) fn attempt_counted<T>(
         }
         Counted::Opaque => {
             declined_veto(declined, detector, "opaque-hit");
+            None
+        }
+        Counted::Veto(name) => {
+            declined_veto(declined, detector, name);
             None
         }
     }
@@ -350,6 +367,7 @@ pub(crate) const CHAIN_DETECTORS: &[&str] = &[
     "partial_strip",
     "single_block",
     "literal_frame",
+    "let_binder",
 ];
 
 /// WI-17 slice 1: append `(detector, "not-tried")` for every
@@ -1458,6 +1476,7 @@ mod tests {
             "let_template",
             "let_template",
             "let_template",
+            "let_binder",
             "sequence",
             "repeat_fold",
             "partial_strip",

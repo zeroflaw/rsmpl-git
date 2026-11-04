@@ -41,6 +41,7 @@ pub(crate) mod group;
 pub(crate) mod guard;
 pub(crate) mod header_evolution;
 pub(crate) mod impl_single;
+mod let_binder;
 mod let_framed;
 mod let_single;
 mod literal;
@@ -112,6 +113,7 @@ mod precision_single;
 mod whole_single;
 
 pub(crate) use item_span::item_emission_header;
+pub(crate) use let_binder::{is_binder_def_pair, is_binder_use_pair, try_let_binder_window};
 pub(crate) use let_single::{
     try_hetero_pair_window_single, try_pat_swap_single, try_typed_wrap_single,
     try_untyped_wrap_single,

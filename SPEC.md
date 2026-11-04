@@ -7843,7 +7843,7 @@ the firing detector family (`item_rename`, `fn_slot_sweep`,
 `ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
 `use_prefix`, `call_sweep`, `call_arg_add`,
     `call_literal`, `call_peel`, `call_peel_section`,
-    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `fn_joint`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`)
+    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `fn_joint`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `let_binder`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`)
 or `"ordinary"` for wholly-ordinary sections (empty `rule`, `saved_bytes: 0`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
@@ -7927,25 +7927,35 @@ single: the shape matched and the file-wide count `found` differs
    the real-pair / sequence / repeat engine counts, framed let-fallback
    via the untyped-let count) and scratch-twin families
    (member-rename, assoc-rename, definition-evolution, macro-rules,
-   trait/inherent-method, attr-sweep, and every per-hunk +
-   whole-section single — each records `totality:found:want` when the
-   pre-image holds a twin minus-line elsewhere, else `no-match`;
-   `item_rename` stays `no-match` by design — partition path)),
-  `veto:<name>` (named veto: off-diff
-  use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
-  family when a macro/string twin covers a changed line, WI-4 slice 1
-  extends the same arm to the method and let-add families, WI-4 slice 2a
-  to the method-literal, call-literal, and ref-strip families, WI-4
-  slice 2b-1 to the slot, qualified-call, turbofish, use-prefix, and
-  macro families (engine-probe
-  families carry no opaque arm by construction — the engine never matches
- inside macros/strings, so hidden twins never count) —,
-ambiguous anti-unification, `reprobe-failed` — WI-1b: the infer
-reprobe floor (D18) degraded a semantic section whose scratch-apply
-or post-compare against the pre-image failed; emitted only by the
-floor as `declined: [{detector: reprobe, reason:
-veto:reprobe-failed}]` on the replacement ordinary entry, never by
-detectors), `precondition:<name>` (named
+    trait/inherent-method, attr-sweep, and every per-hunk +
+    whole-section single — each records `totality:found:want` when the
+    pre-image holds a twin minus-line elsewhere, else `no-match`;
+    `item_rename` stays `no-match` by design — partition path); WI-5
+    wires the binder family (`let_binder`: the emitted minus template
+    must match exactly one `let` in the pre-image — an untouched twin
+    def records `totality:2:1`),
+   `veto:<name>` (named veto: off-diff
+   use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
+   family when a macro/string twin covers a changed line, WI-4 slice 1
+   extends the same arm to the method and let-add families, WI-4 slice 2a
+   to the method-literal, call-literal, and ref-strip families, WI-4
+   slice 2b-1 to the slot, qualified-call, turbofish, use-prefix, and
+   macro families (engine-probe
+   families carry no opaque arm by construction — the engine never matches
+  inside macros/strings, so hidden twins never count) —,
+   ambiguous anti-unification, WI-5 binder vetoes
+   (`capture-risk`: a claimed use line the engine follow would not
+   rewrite — shadowed, capturing, macro-hidden, nested-fn, or
+   out-of-scope uses — or a follow divergence on full coverage;
+   `unproven-use`: an engine follow line the native diff did not show —
+   the raiser never invents edits; `ambiguous-binder`: the candidate
+   hunk fails engine-apply, so no single site is proven),
+   `reprobe-failed` — WI-1b: the infer
+   reprobe floor (D18) degraded a semantic section whose scratch-apply
+   or post-compare against the pre-image failed; emitted only by the
+   floor as `declined: [{detector: reprobe, reason:
+   veto:reprobe-failed}]` on the replacement ordinary entry, never by
+   detectors), `precondition:<name>` (named
 failed shape premise, incl. the LF-only section premise); the pre-WI-17 bare `byte-guard` /
 `precision-guard` spellings stay parseable but are no longer emitted
 anywhere (WI-17 slice 2 unified every guard veto path), and the bare
@@ -9243,10 +9253,34 @@ every length and the totals stay the default truth at any size.
   unsupported inits veto, same posture as above. Totality is the same
   real-pair engine-count check. The typed twin
    (`let (P, Q): T = E;`) stays ordinary. Detector name `let_template`
-   (same family). At N = 1 the swap fires allow-one
-   (`- let (P0, P1) = E0;` / `+ let (P1, P0) = E0;`) under the
-   precision guard with the same totality and byte-compare; a per-site
-   init delta is still an untyped-wrap shape, never guessed here.
+    (same family). At N = 1 the swap fires allow-one
+    (`- let (P0, P1) = E0;` / `+ let (P1, P0) = E0;`) under the
+    precision guard with the same totality and byte-compare; a per-site
+    init delta is still an untyped-wrap shape, never guessed here.
+- Binder-rename window (WI-5): one binder-def pair (a plain single-ident
+  `let old = INIT;` → `let new = INIT;`, typed twin with a token-equal
+  ascription, no attrs/`let-else`/macro init) plus 1..N in-scope use
+  pairs (each plus line equals its minus line under whole-ident
+  `old` → `new` replacement) with consecutive changed lines raises as
+  the single allow-one holed pair (`- let old = E;` / `+ let new = E;`,
+  diet inferred — no directives) under the strict byte guard. The
+  engine's in-block follow covers the use lines (the raiser states only
+  the def pair, exactly like the authored `rename_let` spelling it
+  re-infers). Proof is threefold: the emitted minus template matches
+  exactly one `let` in the pre-image (an untouched twin def records
+  `totality:2:1`); every engine-computed follow line is a claimed use
+  line (`veto:unproven-use` otherwise — the raiser never invents an
+  edit the diff did not show); every claimed use line is an
+  engine-computed follow line and the scratch-apply reproduces exactly
+  the native plus lines at the claimed sites with every other line
+  byte-identical (`veto:capture-risk` otherwise — shadowing, capturing,
+  macro-hidden, nested-fn, or out-of-block uses the proof cannot own).
+  Destructuring binders, anti-unified (non-token-equal) inits, shorthand
+  struct-literal uses, and dead binders with no uses in the diff stay
+  ordinary. Detector name `let_binder`. Fused-header sections split one
+  level up: the binder run fuses in the subhunk partition while other
+  runs raise alone (fixture `12-stmt-rewrite` raises as a type single
+  plus one binder intent).
 - Statement-sequence sweep (WI-5c, fourth anti-unification shape): N
   flat `-`/`+` pairs splitting block-major into ≥ 2 blocks × K = 2–4
   `let` statements (each block's changed old lines consecutive — the
@@ -10310,7 +10344,7 @@ KNOWN_DIVERGENT: 11 entries (divergence pinned with the owning reason; a fix mov
 - `04-mixed`: partial (WI-3 slice 4): hunk-2 re-infers as a call_sweep single; hunk-1 one-line col0 fn rename stays ordinary (slot frame ~2x native, precision-guard veto; terse admission reverted — greedy partial would park hunk-2's win; opener is WI-6 free-fn col0 emission + leftover retry)
 - `05-optional-noop`: empty: zero-match optional leaves an empty re-diff
 - `06-insert-use`: by design (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13
-- `12-stmt-rewrite`: hetero (WI-15 slice 1): same-name param-evolution header (Vec<u32> → Box<[u32]>, no rename so no fn-joint def) fused with a binder-change `let count` → `let n` line (D11/D16 capture: no binder-identity machinery) plus a same-binder `let bumped` line. The unproven line is exactly `let count = values.len() as u32;` (binder rename with a live use on the next line); the other two lines re-infer as a type single + a verbatim single. A rename+body twin WITH calls now splits per WI-15 (header follow + verbatim leftovers); this fixture has neither a rename nor calls.
+- `12-stmt-rewrite`: partial (WI-5): the binder line now raises as one `let_binder` intent (`let count = E;` → `let n = E;` plus the in-block follow covering `let bumped`, D11/D16 proof: count + follow-coverage + scratch-apply). The fused same-name header keeps it divergent: authored states `Vec<T>` → `Box<[T]>` as a holed sweep hunk plus a separate `count` → `n` use hunk (3 hunks), the raiser emits a concrete type single plus the binder-follow hunk (2 hunks) — canonical spellings differ while both tree legs close.
 - `13-sig-evolution`: mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)
 - `14-item-rename`: partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)
 - `22-attrs-strip`: two-slot joint (WI-3 slice 5): rename + full attr/doc strip needs the WI-8 composed probe -- no D17 arm admits `Attrs`-carrying hunks by design, so the N=1 pair stays ordinary (the -20B detector half is joint-owned)

@@ -325,14 +325,15 @@ mod tests {
             .expect("emitted patch must apply cleanly");
     }
 
-    /// Fixture-12's let run: one holed init (`E0`) plus one concrete
-    /// rename position. The fn-header pair is excluded (mixed runs
-    /// decline) — this is the pure-let core the detector owns.
+    /// Hetero let run with same-binder init deltas (never a binder
+    /// window: WI-5 owns binder-def-first runs via `let_binder`, so
+    /// this detector's fire pin uses init deltas the binder arm
+    /// declines). The fn-header pair is excluded (mixed runs decline).
     const PRE_TWO: &str =
         "fn scale(values: Vec<u32>) -> u32 {\n    let count = values.len() as u32;\n    let bumped = count + 1;\n    bumped\n}\n";
 
     fn two_let_body() -> String {
-        "@@ -2,2 +2,2 @@\n-    let count = values.len() as u32;\n-    let bumped = count + 1;\n+    let n = values.len() as u32;\n+    let bumped = n + 1;\n"
+        "@@ -2,2 +2,2 @@\n-    let count = values.len() as u32;\n-    let bumped = count + 1;\n+    let count = values.len() as u64;\n+    let bumped = count + 2;\n"
             .to_string()
     }
 
@@ -346,15 +347,20 @@ mod tests {
         // Allow-one: no sweep machinery on a single-window claim.
         assert!(!out.contains("# allow=many"), "got: {out}");
         assert!(!out.contains("# sweep"), "got: {out}");
-        assert!(out.contains("- let count = E0;\n"), "got: {out}");
-        assert!(out.contains("- let P1 = count + 1;\n"), "got: {out}");
-        assert!(out.contains("+ let n = E0;\n"), "got: {out}");
-        assert!(out.contains("+ let P1 = n + 1;\n"), "got: {out}");
-        // Inferred holes need no declarations (SPEC 15.8).
+        // Same binder both pairs: the window states the init deltas,
+        // never a binder rename (`let_binder` owns those, WI-5).
+        assert!(
+            !out.contains("let n = "),
+            "binder must not move, got: {out}"
+        );
         assert!(!out.contains("# expr"), "got: {out}");
         assert!(!out.contains("# pat"), "got: {out}");
-        // Consumed: no native let lines survive.
-        assert!(!out.contains("values.len()"), "got: {out}");
+        // Byte-compare leg: the window applied to pre rebuilds post.
+        let post = "fn scale(values: Vec<u32>) -> u32 {\n    let count = values.len() as u64;\n    let bumped = count + 2;\n    bumped\n}\n";
+        let parsed = rsmpl_patch::parse_patch(&out).expect("emission must parse");
+        let mut files = pre.clone();
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        assert_eq!(files["f.rs"], post, "post tree differs, got:\n{out}");
     }
 
     #[test]
@@ -370,15 +376,14 @@ mod tests {
     }
 
     #[test]
-    fn single_block_header_member_vetoes() {
-        // Mixed runs decline as a fused window (the fn-header pair
+    fn single_block_header_member_splits_binder() {
+        // Mixed runs still decline as a fused window (the fn-header pair
         // cannot join a let window — WI-4 subhunk splits at detector
-        // boundaries instead). The `bumped` line raises as its own
-        // WI-6-slice-1 literal verbatim single; the header and the
-        // `count` line stay ordinary — renaming the `count` binder
-        // literally would drag its live use on the next line along
-        // (binder capture), so the byte probe vetoes it. Each line
-        // lands exactly where soundness allows.
+        // boundaries instead). WI-5: the `[binder-def + use]` run fuses
+        // into one `let_binder` intent (def pair + in-block follow, the
+        // old capture comment below is superseded by the follow proof),
+        // while the header pair raises as its own type single. No
+        // ordinary remainder, no single 3-pair window.
         let raw = section(
             "f.rs",
             "@@ -1,3 +1,3 @@\n-fn scale(values: Vec<u32>) -> u32 {\n-    let count = values.len() as u32;\n-    let bumped = count + 1;\n+fn scale(values: Box<[u32]>) -> u32 {\n+    let n = values.len() as u32;\n+    let bumped = n + 1;\n",
@@ -386,12 +391,18 @@ mod tests {
         let pre = pre_map(&[("f.rs", PRE_TWO)]);
         let out = infer_semantic_with_pre_images(std::slice::from_ref(&raw), &pre)
             .expect("partition must emit");
+        validated_live(&out, &pre);
+        assert_eq!(out.matches("rule=").count(), 2, "got: {out}");
+        assert!(out.contains("- let count = E;\n"), "got: {out}");
+        assert!(out.contains("+ let n = E;\n"), "got: {out}");
         assert!(
-            out.contains("-    let count = values.len() as u32;\n"),
-            "got: {out}"
+            !out.contains("-    let count"),
+            "binder rides follow, got: {out}"
         );
-        assert!(out.contains("- let bumped = count + 1;\n"), "got: {out}");
-        assert!(out.contains("+ let bumped = n + 1;\n"), "got: {out}");
+        assert!(
+            !out.contains("-    let bumped"),
+            "use rides follow, got: {out}"
+        );
     }
 
     #[test]

@@ -148,6 +148,34 @@ pub(crate) fn try_subhunk_partition(
     if joint_territory_veto(pre, &minuses, &pluses, &sites, &keys) {
         return None;
     }
+    // WI-5 binder fusion: maximal contiguous `[binder-def + use*]`
+    // groups relabel to one `let_binder` run. The run offer below
+    // routes the fused group whole to the chain arm, which carries the
+    // full proof (count + follow-coverage + scratch-apply); proof
+    // failure falls back to per-pair singles (today's behavior: the
+    // binder stays ordinary, the use fires alone). The gate is purely
+    // textual (no pre-image); the proof lives in the detector.
+    {
+        let mut i = 0;
+        while i < minuses.len() {
+            if let Some((old, new)) = super::is_binder_def_pair(minuses[i], pluses[i]) {
+                let mut j = i + 1;
+                while j < minuses.len()
+                    && super::is_binder_use_pair(minuses[j], pluses[j], &old, &new)
+                {
+                    j += 1;
+                }
+                if j > i + 1 {
+                    for slot in keys.iter_mut().take(j).skip(i) {
+                        *slot = Some("let_binder");
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
     // Maximal contiguous runs of one key.
     let mut runs: Vec<(Option<&'static str>, usize, usize)> = Vec::new();
     for (i, key) in keys.iter().enumerate() {

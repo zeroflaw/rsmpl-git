@@ -232,6 +232,9 @@ mod tests {
                 crate::semantic::prov::Counted::Totality { found, want }
             }
             crate::semantic::prov::Counted::Opaque => crate::semantic::prov::Counted::Opaque,
+            crate::semantic::prov::Counted::Veto(name) => {
+                crate::semantic::prov::Counted::Veto(name)
+            }
             crate::semantic::prov::Counted::Miss => crate::semantic::prov::Counted::Miss,
         }
     }

@@ -69,6 +69,7 @@ pub(crate) fn try_let_sweep(
         Counted::Fire(s) => Counted::Fire(s),
         Counted::Totality { found, want } => Counted::Totality { found, want },
         Counted::Opaque => Counted::Opaque,
+        Counted::Veto(name) => Counted::Veto(name),
         Counted::Miss => Counted::Miss,
     }
 }
