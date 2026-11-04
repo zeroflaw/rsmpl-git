@@ -16,7 +16,7 @@ Use `gitrs` for every Rust refactoring or modification — never hand-edit what 
 ## Workflow: one patch, few calls
 
 1. Grep every name first (one search per name); note each site's file + line, then read only the spans you will cite.
-2. Compose the ENTIRE refactor as one patch (every file, every hunk) from the complete examples below — standard shapes (item/fn/method/field rename, call sweep, use line, move, ordinary) need NO probe; substitute your names and cite your spans.
+2. Compose the ENTIRE refactor as one patch (every file, every hunk) from the complete examples below — standard shapes (item/fn/method/field rename, call sweep, use line, move, ordinary) need NO probe; substitute your names and cite your spans. If a site matches a complete example, use it verbatim — no analysis needed; resolve remaining doubts via `--check`, not more thinking (the engine verifies for free).
 3. Validate with ONE `gitrs apply --file patch.rsmpl --format json --diff-max-lines 0 --check`; read `matches`/`spans`/`files` from that output — never re-run a check to summarize it.
 4. On a hunk error, fix from the `repair` block and re-check the whole patch (one call). Budget: two attempts per site, then that site becomes an ordinary hunk — never a third probe of the same shape, never a deliberate negative probe (no-fallback after a symbol conflict, bare method after a nearest-fn miss).
 5. Confirm `matches` covers every grepped site, then apply ONCE. A no-match failure on re-apply means it already landed — check `git diff`, don't re-apply.
