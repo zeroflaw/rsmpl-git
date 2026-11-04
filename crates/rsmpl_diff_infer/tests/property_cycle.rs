@@ -108,9 +108,22 @@ fn assert_state_lossless(
 /// replay source bytes),
 /// 5 = WI-3 binary field-anchor sweep (hetero bases ride `E0`, uniform
 /// `&cand.body_text` → `&cand.value_text` anchor delta replays source
-/// bytes on both sides).
+/// bytes on both sides),
+/// 6 = WI-12 method-to-method sweep (`r.old_m(a)` → `r.new_m(a)`),
+/// 7 = WI-12 method-to-function refactor (`r.old_m(a)` →
+/// `new_f(r, a)`, receiver-prepend delta),
+/// 8 = WI-12 qualified-call sweep (`old::foo(a)` → `new::foo(a)`),
+/// 9 = WI-12 use-prefix sweep (`use crate::old::A;` →
+/// `use crate::new::A;`, 2 use lines),
+/// 10 = WI-12 macro rename (`old_m!(a)` → `new_m!(a)`),
+/// 11 = WI-12 turbofish callee sweep (`foo::<u8>(a)` →
+/// `bar::<u8>(a)`, same turbofish args),
+/// 12 = WI-12 header-evolution sweep (2 fn headers, uniform param-type
+/// delta `i32` → `u64` over hetero names),
+/// 13 = WI-12 type-annotation sweep (`let v: Vec<i32>` →
+/// `let v: Box<[i32]>`, same init).
 fn generate(rng: &mut Rng) -> (String, String) {
-    let kind = rng.below(6);
+    let kind = rng.below(14);
     let ncalls = 2 + rng.below(2);
     match kind {
         0 => {
@@ -167,12 +180,96 @@ fn generate(rng: &mut Rng) -> (String, String) {
             post.push_str("}\n");
             (pre, post)
         }
-        _ => {
+        _ if kind == 5 => {
             let mut pre = "fn m() {\n".to_string();
             let mut post = "fn m() {\n".to_string();
             for i in 0..ncalls {
                 pre.push_str(&format!("    let v{i} = base{i} + &cand.body_text;\n"));
                 post.push_str(&format!("    let v{i} = base{i} + &cand.value_text;\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ if kind == 6 => {
+            let mut pre =
+                "struct R;\nimpl R {\n    fn old_m(&self, x: i32) -> i32 {\n        x\n    }\n}\nfn m(r: R) {\n"
+                    .to_string();
+            let mut post = pre.clone();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i} = r.old_m({i});\n"));
+                post.push_str(&format!("    let v{i} = r.new_m({i});\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ if kind == 7 => {
+            let mut pre =
+                "struct R;\nimpl R {\n    fn old_m(&self, x: i32) -> i32 {\n        x\n    }\n}\nfn new_f(r: R, x: i32) -> i32 {\n    x\n}\nfn m(r: R) {\n"
+                    .to_string();
+            let mut post = pre.clone();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i} = r.old_m({i});\n"));
+                post.push_str(&format!("    let v{i} = new_f(r, {i});\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ if kind == 8 => {
+            let mut pre =
+                "mod old {\n    pub fn foo(x: i32) -> i32 {\n        x\n    }\n}\nmod new {\n    pub fn foo(x: i32) -> i32 {\n        x\n    }\n}\nfn m() {\n"
+                    .to_string();
+            let mut post = pre.clone();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i} = old::foo({i});\n"));
+                post.push_str(&format!("    let v{i} = new::foo({i});\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ if kind == 9 => (
+            "use crate::old::Thing;\nuse crate::old::Other;\nfn m() {}\n".to_string(),
+            "use crate::new::Thing;\nuse crate::new::Other;\nfn m() {}\n".to_string(),
+        ),
+        _ if kind == 10 => {
+            let mut pre = "fn m() {\n".to_string();
+            let mut post = "fn m() {\n".to_string();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    old_m!({i});\n"));
+                post.push_str(&format!("    new_m!({i});\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ if kind == 11 => {
+            let mut pre =
+                "fn foo<T>(x: T) -> T {\n    x\n}\nfn bar<T>(x: T) -> T {\n    x\n}\nfn m() {\n"
+                    .to_string();
+            let mut post = pre.clone();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i} = foo::<u8>({i});\n"));
+                post.push_str(&format!("    let v{i} = bar::<u8>({i});\n"));
+            }
+            pre.push_str("}\n");
+            post.push_str("}\n");
+            (pre, post)
+        }
+        _ if kind == 12 => (
+            "fn f0(x: i32) -> i32 {\n    x + 1\n}\nfn f1(y: i32) -> i32 {\n    y + 2\n}\n"
+                .to_string(),
+            "fn f0(x: u64) -> i32 {\n    x + 1\n}\nfn f1(y: u64) -> i32 {\n    y + 2\n}\n"
+                .to_string(),
+        ),
+        _ => {
+            let mut pre = "fn m() {\n".to_string();
+            let mut post = "fn m() {\n".to_string();
+            for i in 0..ncalls {
+                pre.push_str(&format!("    let v{i}: Vec<i32> = Vec::new();\n"));
+                post.push_str(&format!("    let v{i}: Box<[i32]> = Vec::new();\n"));
             }
             pre.push_str("}\n");
             post.push_str("}\n");
@@ -289,6 +386,41 @@ fn property_field_anchor_sweep_fires_and_round_trips() {
 }
 
 #[test]
+fn property_method_sweep_fires_and_round_trips() {
+    // WI-12 historical firing shape (Generator B kind-6 family):
+    // method-to-method rename across sites raises a method sweep and
+    // applies byte-exact.
+    let pre = "struct R;\nimpl R {\n    fn old_m(&self, x: i32) -> i32 {\n        x\n    }\n}\nfn m(r: R) {\n    let a = r.old_m(1);\n    let b = r.old_m(2);\n}\n";
+    let post = "struct R;\nimpl R {\n    fn old_m(&self, x: i32) -> i32 {\n        x\n    }\n}\nfn m(r: R) {\n    let a = r.new_m(1);\n    let b = r.new_m(2);\n}\n";
+    let raw = native_section("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        out.rsmpl.contains("rule="),
+        "method rename must raise semantic, got: {}",
+        out.rsmpl
+    );
+    assert_state_lossless(&out.rsmpl, pre, post, 1006);
+}
+
+#[test]
+fn property_use_prefix_sweep_fires_and_round_trips() {
+    // WI-12 historical firing shape (Generator B kind-9 family):
+    // use-prefix sweep raises semantic and applies byte-exact.
+    let pre = "use crate::old::Thing;\nuse crate::old::Other;\nfn m() {}\n";
+    let post = "use crate::new::Thing;\nuse crate::new::Other;\nfn m() {}\n";
+    let raw = native_section("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        out.rsmpl.contains("rule="),
+        "use-prefix sweep must raise semantic, got: {}",
+        out.rsmpl
+    );
+    assert_state_lossless(&out.rsmpl, pre, post, 1007);
+}
+
+#[test]
 fn property_control_header_veto_rederived() {
     // Historical veto shape (eacce0e/R1): for-loop headers parse as
     // statements, not expressions — no engine shape matches them, so
@@ -378,13 +510,26 @@ fn property_verdict_honesty_orphans_recomputed() {
             "seed {seed}: has_ordinary must agree with patch-text posture"
         );
         // (c) Leftover scan on the applied tree (never on report fields):
-        // call-swap keeps both defs (only `= foo(` calls must go), full
-        // renames must leave no `foo` at all. The control decoy carries no
-        // `foo` either way and passes vacuously.
-        if pre.contains("fn bar(") {
+        // call-swap keeps both defs (only `= foo(` calls must go;
+        // turbofish twins likewise keep both generic defs, so `foo::<`
+        // calls must go too); qualified-call twins keep both module defs
+        // (only `old::foo(` calls must go); full renames must leave no
+        // `foo` at all. The control decoy carries no `foo` either way
+        // and passes vacuously, as do the method/macro/use/sig/type
+        // families (no `foo` in their pre images).
+        if pre.contains("mod new") {
+            assert!(
+                !applied.contains("old::foo("),
+                "seed {seed}: applied post must not retain old qualified calls"
+            );
+        } else if pre.contains("fn bar") {
             assert!(
                 !applied.contains("= foo("),
                 "seed {seed}: applied post must not retain old callee calls"
+            );
+            assert!(
+                !applied.contains("foo::<"),
+                "seed {seed}: applied post must not retain old turbofish calls"
             );
         } else {
             assert!(

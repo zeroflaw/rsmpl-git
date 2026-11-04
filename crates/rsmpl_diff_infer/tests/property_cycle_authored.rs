@@ -95,6 +95,13 @@ fn apply_once(
 
 const BASE_FN: &str = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n    let b = foo(2);\n}\n";
 const BOX_FN: &str = "fn m() {\n    let v = Box::new(Box::new(1));\n}\n";
+const METHOD_FN: &str = "struct R;\nimpl R {\n    fn old_m(&self, x: i32) -> i32 {\n        x\n    }\n}\nfn m(r: R) {\n    let a = r.old_m(1);\n    let b = r.old_m(2);\n}\n";
+const QUAL_FN: &str = "mod old {\n    pub fn foo(x: i32) -> i32 {\n        x\n    }\n}\nmod new {\n    pub fn foo(x: i32) -> i32 {\n        x\n    }\n}\nfn m() {\n    let a = crate::old::foo(1);\n    let b = crate::old::foo(2);\n}\n";
+const USE_FN: &str = "use crate::old::Thing;\nuse crate::old::Other;\nfn m() {}\n";
+const MACRO_FN: &str = "fn m() {\n    old_m!(1);\n    old_m!(2);\n}\n";
+const TURBO_FN: &str = "fn foo<T>(x: T) -> T {\n    x\n}\nfn bar<T>(x: T) -> T {\n    x\n}\nfn m() {\n    let a = foo::<u8>(1);\n    let b = foo::<u8>(2);\n}\n";
+const TYPE_FN: &str =
+    "fn m() {\n    let a: Vec<i32> = Vec::new();\n    let b: Vec<i32> = Vec::new();\n}\n";
 
 fn expected_fn_rename(pre: &str) -> String {
     pre.replacen("fn foo(", "fn bar(", 1)
@@ -104,15 +111,45 @@ fn expected_call_swap(pre: &str) -> String {
     pre.replace("= foo(", "= bar(")
 }
 
+fn expected_method_rename(pre: &str) -> String {
+    pre.replace(".old_m(", ".new_m(")
+}
+
+fn expected_qual_swap(pre: &str) -> String {
+    pre.replace("crate::old::foo(", "crate::new::foo(")
+}
+
+fn expected_use_swap(pre: &str) -> String {
+    pre.replace("crate::old::", "crate::new::")
+}
+
+fn expected_macro_rename(pre: &str) -> String {
+    pre.replace("old_m!(", "new_m!(")
+}
+
+fn expected_turbo_swap(pre: &str) -> String {
+    pre.replace("foo::<u8>(", "bar::<u8>(")
+}
+
+fn expected_type_swap(pre: &str) -> String {
+    pre.replace("Vec<i32>", "Box<[i32]>")
+}
+
 /// Generate one (pre, patch, kind) triple. Kinds:
 /// 0 = fn rename terse (fires, def-only);
 /// 1 = call sweep `# sweep` (fires, calls only);
 /// 2 = `# optional` zero-match (Ok, unchanged);
 /// 3 = `# repeat` nested fold (fires);
 /// 4 = stale range + `# sweep` (Ok-with-expected OR typed Err);
-/// 5 = overlapping hunks (typed Err, never Ok).
+/// 5 = overlapping hunks (typed Err, never Ok);
+/// 6 = WI-12 method-to-method sweep (fires on METHOD_FN);
+/// 7 = WI-12 qualified-call sweep (fires on QUAL_FN);
+/// 8 = WI-12 use-prefix sweep (fires on USE_FN);
+/// 9 = WI-12 macro rename `# macro=token_tree` (fires on MACRO_FN);
+/// 10 = WI-12 turbofish sweep (fires on TURBO_FN);
+/// 11 = WI-12 type sweep (fires on TYPE_FN).
 fn generate(rng: &mut Rng) -> (String, String, usize) {
-    let kind = rng.below(6);
+    let kind = rng.below(12);
     match kind {
         0 => (
             BASE_FN.to_string(),
@@ -139,11 +176,47 @@ fn generate(rng: &mut Rng) -> (String, String, usize) {
             "diff --git f.rs\n@@ -50,3 @@ rule=r4\n# sweep\n- fn foo\n+ fn bar\n".to_string(),
             4,
         ),
-        _ => (
+        _ if kind == 5 => (
             BASE_FN.to_string(),
             "diff --git f.rs\n@@ -1,1 @@ rule=r5a\n# sweep\n- fn foo\n+ fn bar\n@@ -1,1 @@ rule=r5b\n# sweep\n- fn foo\n+ fn baz\n"
                 .to_string(),
             5,
+        ),
+        _ if kind == 6 => (
+            METHOD_FN.to_string(),
+            "diff --git f.rs\n@@ -1,1 @@ rule=r6\n# sweep\n- Receiver.old_m(E0)\n+ Receiver.new_m(E0)\n"
+                .to_string(),
+            6,
+        ),
+        _ if kind == 7 => (
+            QUAL_FN.to_string(),
+            "diff --git f.rs\n@@ -1,1 @@ rule=r7\n# sweep\n- crate::old::foo(E0)\n+ crate::new::foo(E0)\n"
+                .to_string(),
+            7,
+        ),
+        _ if kind == 8 => (
+            USE_FN.to_string(),
+            "diff --git f.rs\n@@ -1,1 @@ rule=r8\n# sweep\n- use crate::old\n+ use crate::new\n"
+                .to_string(),
+            8,
+        ),
+        _ if kind == 9 => (
+            MACRO_FN.to_string(),
+            "diff --git f.rs\n@@ -1,1 @@ rule=r9\n# sweep\n# macro=token_tree\n- old_m!(...)\n+ new_m!(...)\n"
+                .to_string(),
+            9,
+        ),
+        _ if kind == 10 => (
+            TURBO_FN.to_string(),
+            "diff --git f.rs\n@@ -1,1 @@ rule=r10\n# sweep\n- `foo`::<u8>(E0)\n+ `bar`::<u8>(E0)\n"
+                .to_string(),
+            10,
+        ),
+        _ => (
+            TYPE_FN.to_string(),
+            "diff --git f.rs\n@@ -1,1 @@ rule=r11\n# sweep\n- Vec<T>\n+ Box<[T]>\n"
+                .to_string(),
+            11,
         ),
     }
 }
@@ -254,7 +327,7 @@ fn property_authored_side_cycle_holds() {
                     }
                 }
             }
-            _ => {
+            5 => {
                 // Overlapping hunks: typed Err, never Ok, never panic.
                 match first {
                     Ok(_) => panic!("seed {seed}: overlapping hunks must Err, got Ok"),
@@ -264,6 +337,33 @@ fn property_authored_side_cycle_holds() {
                 assert!(
                     second.is_err(),
                     "seed {seed}: overlap veto must be deterministic (got Ok)"
+                );
+            }
+            _ => {
+                // WI-12 catalogue families: each must Ok with the
+                // independently recomputed post, deterministically.
+                let files = first.unwrap_or_else(|e| {
+                    panic!("seed {seed}: kind-{kind} catalogue sweep must Ok, got Err: {e}")
+                });
+                let expected = match kind {
+                    6 => expected_method_rename(&pre),
+                    7 => expected_qual_swap(&pre),
+                    8 => expected_use_swap(&pre),
+                    9 => expected_macro_rename(&pre),
+                    10 => expected_turbo_swap(&pre),
+                    _ => expected_type_swap(&pre),
+                };
+                assert_eq!(
+                    files.get("f.rs").map(String::as_str),
+                    Some(expected.as_str()),
+                    "seed {seed}: kind-{kind} post must equal independent recomputation"
+                );
+                let second = apply_once(&patch_text, &pre, seed).unwrap_or_else(|e| {
+                    panic!("seed {seed}: kind-{kind} second apply must Ok, got: {e}")
+                });
+                assert_eq!(
+                    files, second,
+                    "seed {seed}: kind-{kind} second apply must be byte-identical"
                 );
             }
         }
@@ -323,4 +423,46 @@ fn property_authored_overlap_vetoes() {
         Ok(_) => panic!("overlapping hunks must veto, got Ok"),
         Err(e) => assert_known_err(&e, 1005, "overlap pin"),
     }
+}
+
+#[test]
+fn property_authored_method_sweep_fires() {
+    // WI-12 historical firing shape (Generator A kind-6 family):
+    // method-to-method sweep applies byte-exact.
+    let pre = METHOD_FN;
+    let patch = "diff --git f.rs\n@@ -1,1 @@ rule=m2m\n# sweep\n- Receiver.old_m(E0)\n+ Receiver.new_m(E0)\n";
+    let files = apply_once(patch, pre, 1006)
+        .unwrap_or_else(|e| panic!("method sweep must apply, got: {e}"));
+    assert_eq!(
+        files.get("f.rs").map(String::as_str),
+        Some(expected_method_rename(pre).as_str())
+    );
+}
+
+#[test]
+fn property_authored_macro_rename_fires() {
+    // WI-12 historical firing shape (Generator A kind-9 family):
+    // `# macro=token_tree` verbatim rename applies byte-exact.
+    let pre = MACRO_FN;
+    let patch = "diff --git f.rs\n@@ -1,1 @@ rule=macro_rename\n# sweep\n# macro=token_tree\n- old_m!(...)\n+ new_m!(...)\n";
+    let files = apply_once(patch, pre, 1007)
+        .unwrap_or_else(|e| panic!("macro rename must apply, got: {e}"));
+    assert_eq!(
+        files.get("f.rs").map(String::as_str),
+        Some(expected_macro_rename(pre).as_str())
+    );
+}
+
+#[test]
+fn property_authored_type_sweep_fires() {
+    // WI-12 historical firing shape (Generator A kind-11 family):
+    // type sweep applies byte-exact.
+    let pre = TYPE_FN;
+    let patch = "diff --git f.rs\n@@ -1,1 @@ rule=type_swap\n# sweep\n- Vec<T>\n+ Box<[T]>\n";
+    let files =
+        apply_once(patch, pre, 1008).unwrap_or_else(|e| panic!("type sweep must apply, got: {e}"));
+    assert_eq!(
+        files.get("f.rs").map(String::as_str),
+        Some(expected_type_swap(pre).as_str())
+    );
 }

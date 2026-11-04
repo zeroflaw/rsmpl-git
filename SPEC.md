@@ -10416,10 +10416,17 @@ Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).
 
-Property harness (WI-19 slice 1, `crates/rsmpl_diff_infer/tests/property_cycle.rs`):
-seeded native-side mutations (fn rename, call swap, control-header decoy, N=1 single,
-hetero `&`/field-anchor general-expr sweeps) raised via `infer_rsmpl_with_pre_images`
+Property harness (WI-19 slice 1, WI-12 widened, `crates/rsmpl_diff_infer/tests/property_cycle.rs`):
+seeded native-side mutations drawn from the D.4 catalogue — fn rename,
+call swap, control-header decoy, N=1 single, hetero `&`/field-anchor
+general-expr sweeps (WI-3), plus method-to-method, method-to-function,
+qualified-call, use-prefix, macro-rename, turbofish-callee,
+header-evolution (uniform param-type delta), and type-annotation sweeps
+(WI-12) — raised via `infer_rsmpl_with_pre_images`
 must parse, apply to the native post tree byte-identical, and re-infer byte-identical.
+Cross-file twins, joint compositions, and move+delta stay out of the
+generator (single-file line-preserving pairs only); the full-history
+smoke covers what the generator never imagines.
 Emission is span-sliced verbatim (WI-3 law): every detector emission that replays a
 source subterm copies that subterm's exact source bytes, so `&cand.body_text` never
 renders as `& cand . body_text`.
@@ -10428,8 +10435,8 @@ every lossless semantic raise over the namesake-free generator pre-images must r
 zero orphans plus zero follow skips, and `has_ordinary` must agree with the patch-text
 posture (`rule=` present or not), both cross-checked from the applied tree rather than
 the report's own fields.
-Property harness (WI-19 slice 2, `crates/rsmpl_diff_infer/tests/property_cycle_authored.rs`):
-seeded authored-side mutations (fn rename, call sweep, `# optional` zero-match, `# repeat` fold, stale-range, overlap veto) applied via `apply_patch_to_tree` must never panic, Ok must deterministically reach the independently recomputed post, Err must carry a known SPEC 25 code.
+Property harness (WI-19 slice 2, WI-12 widened, `crates/rsmpl_diff_infer/tests/property_cycle_authored.rs`):
+seeded authored-side mutations (fn rename, call sweep, `# optional` zero-match, `# repeat` fold, stale-range, overlap veto, plus WI-12 method-to-method, qualified-call, use-prefix, `# macro=token_tree` rename, turbofish, and type sweeps) applied via `apply_patch_to_tree` must never panic, Ok must deterministically reach the independently recomputed post, Err must carry a known SPEC 25 code.
 History smoke (D19, `python3 tools/history_sweep.py`): with no rev-range the
 runner sweeps the entire HEAD history, reusing the sweep implementation
 unchanged (T346 convert + T361 `applyrs --check` + real-apply byte-compare):
