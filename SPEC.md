@@ -9065,8 +9065,21 @@ every length and the totals stay the default truth at any size.
   (A-B-A interleaves veto whole by the order law; shared-minus-
   template hetero pairs veto each holed single by occurrence
   totality with framed literal singles owning the lines instead).
-  Typed-let two-template joints and holed method double-delta
-  sweeps stay ordinary (slices B/C).
+  Typed-let two-template joints land as slice-26 (WI-13 residue slice
+  B, `typed_let_joint.rs` sibling — `general_expr.rs` stays under the
+  D5 gate): a single `let PAT: P_old::Ty = P_old::callee(args);` line
+  whose type and init call share one prefix rename (`P_old` → `P_new`
+  in exactly one prefix segment, `Ty` same, callee same, token-equal
+  binder pattern and args, no leading `::`/`qself`/generics/turbofish)
+  compresses to the factored two-hunk one-rule joint (type pair first
+  = source order, second hunk bare per WI-8 diet) under `call_sweep`;
+  the type template proves file-unique (`template_type_counts` == 1)
+  and the call proves at want=1 (`template_pair_counts` +
+  `engine_verdict`), both `CountMismatch`/`OpaqueHit` counted, plus
+  the D13 composed scratch-apply (both hunks reproduce the plus line
+  byte-identical); `Ty`/callee-changing, prefix-mismatched,
+  multi-delta-prefix, leading/`qself`/generic variants stay ordinary.
+  Holed method double-delta sweeps stay ordinary (slice C).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)

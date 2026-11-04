@@ -1060,10 +1060,11 @@ mod tests {
 
     #[test]
     fn hetero_double_delta_with_foreign_pair_claims_partial() {
-        // The typed-let line (slice-B territory: no N=1 shape) stays
-        // ordinary verbatim in place while the provable double-delta
-        // neighbor fires its holed single — foreign lines never veto
-        // firing neighbors.
+        // WI-13 residue slice B: the typed-let line now fires its
+        // shared-prefix joint (type + init call, two-hunk one-rule
+        // factored) beside the provable double-delta neighbor — foreign
+        // lines never veto firing neighbors, and joint lines are no
+        // longer foreign.
         let pre =
             "fn m() {\n    let a = oldmod::foo(1);\n    let w: oldmod::Foo = oldmod::bar(2);\n}\n";
         let hunk = "@@ -2,2 +2,2 @@\n-    let a = oldmod::foo(1);\n-    let w: oldmod::Foo = oldmod::bar(2);\n+    let a = newmod::bar(1);\n+    let w: newmod::Foo = newmod::bar(2);\n";
@@ -1077,12 +1078,20 @@ mod tests {
             &mut prov,
             &std::collections::HashSet::new(),
         )
-        .expect("provable run must claim beside ordinary remainder");
-        assert_eq!(out.matches("rule=").count(), 1, "got:\n{out}");
+        .expect("both runs must claim");
+        assert_eq!(out.matches("rule=").count(), 2, "got:\n{out}");
         assert!(out.contains("- oldmod::foo(E0)\n"), "got:\n{out}");
         assert!(
-            out.contains("-    let w: oldmod::Foo = oldmod::bar(2);\n"),
-            "typed-let remainder verbatim, got:\n{out}"
+            out.contains("- oldmod::Foo\n"),
+            "joint type half, got:\n{out}"
+        );
+        assert!(
+            out.contains("- oldmod::bar(E0)\n"),
+            "joint call half, got:\n{out}"
+        );
+        assert!(
+            !out.contains("let w: oldmod::Foo"),
+            "no ordinary remainder: {out}"
         );
         assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
     }
@@ -1125,9 +1134,12 @@ mod tests {
         // Same-key double-delta runs on both sides of a foreign line
         // (A B A) stay ordinary — order is never manufactured, even
         // though each flank proves alone. The order law owns this
-        // shape, not a future detector.
+        // shape, not a future detector. The middle line here is truly
+        // foreign (Ty AND callee change — the slice-B joint declines
+        // both), so the A-B-A key pattern (call_sweep, None,
+        // call_sweep) still vetoes after slice B.
         let pre = "fn m() {\n    let a = oldmod::foo(1);\n    let w: oldmod::Foo = oldmod::bar(2);\n    let c = othermod::qux(3);\n}\n";
-        let hunk = "@@ -2,3 +2,3 @@\n-    let a = oldmod::foo(1);\n-    let w: oldmod::Foo = oldmod::bar(2);\n-    let c = othermod::qux(3);\n+    let a = newmod::bar(1);\n+    let w: newmod::Foo = newmod::bar(2);\n+    let c = newmod::quux(3);\n";
+        let hunk = "@@ -2,3 +2,3 @@\n-    let a = oldmod::foo(1);\n-    let w: oldmod::Foo = oldmod::bar(2);\n-    let c = othermod::qux(3);\n+    let a = newmod::bar(1);\n+    let w: newmod::Qux = newmod::qux(2);\n+    let c = newmod::quux(3);\n";
         let mut used = Vec::new();
         let mut prov = Vec::new();
         assert!(

@@ -92,6 +92,7 @@ mod subhunk;
 pub(crate) mod subline;
 mod trait_methods;
 mod type_single;
+mod typed_let_joint;
 mod use_regroup;
 mod verbatim;
 // WI-3c: covering-span helpers live in `item_span` (this file was over
@@ -156,6 +157,7 @@ pub(crate) use methods_ref_strip::try_ref_method_strip_sweep;
 pub(crate) use paths::{
     try_qual_double_single, try_qual_double_sweep, try_qualified_call_sweep, try_turbofish_sweep,
 };
+pub(crate) use typed_let_joint::try_typed_let_joint_single;
 
 pub(crate) use assoc::{try_assoc_def_only, try_assoc_rename};
 pub(crate) use attr_sweep::{try_attr_replace_sweep, try_attr_sweep_section};

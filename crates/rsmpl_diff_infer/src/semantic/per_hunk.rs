@@ -655,6 +655,29 @@ pub(crate) fn compress_balanced_pair_body(
             );
             used_rules.truncate(checkpoint);
         }
+        // WI-13 residue slice B: typed-let shared-prefix joint
+        // (`let w: oldmod::Foo = oldmod::bar(2);` -> shared `newmod`
+        // rename in type + init call, two-hunk one-rule factored joint;
+        // both totalities want=1 plus the D13 composed byte-compare).
+        if let Some(single) = attempt_counted(
+            declined,
+            "call_sweep",
+            super::try_typed_let_joint_single(minuses, pluses, path, file_old, changed, used_rules),
+        ) {
+            let body = single.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+            if super::guard::within_precision(body.len(), hunk_len, 1, 0) {
+                return Some((body.to_string(), "call_sweep"));
+            }
+            declined_guard_with_numbers(
+                declined,
+                "call_sweep",
+                "precision",
+                body.len(),
+                hunk_len,
+                super::guard::precision_allowance(1, 0),
+            );
+            used_rules.truncate(checkpoint);
+        }
         // WI-7 slice-1 (repeat family): single-pair full-strip fold
         // under the precision guard (uniqueness proved by
         // `template_repeat_holds` at n=1 plus the T361 byte-compare with
