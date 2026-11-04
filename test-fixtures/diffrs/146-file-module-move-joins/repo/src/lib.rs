@@ -1,0 +1,2 @@
+mod old;
+fn main() {}

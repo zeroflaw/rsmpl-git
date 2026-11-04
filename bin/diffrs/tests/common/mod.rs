@@ -231,6 +231,14 @@ pub fn run_all(label: &str, filter: impl Fn(&str) -> bool, pins: impl Fn(&str, &
         // Deleted-file post-states: drop worktree files absent from expected/
         // (full-tree fixture convention; identical sets are a no-op).
         sync_expected_deletions(work.path(), &dir.join("repo"), &dir.join("expected"));
+        // WI-15 slice 1: fixtures carrying a `no-renames` marker suppress
+        // git rename detection (repo-local, so both the harness native
+        // diff and diffrs's own collection see delete+create): identical
+        // file contents would otherwise collapse to a headers-only rename
+        // section that never reaches the move pairing.
+        if dir.join("no-renames").exists() {
+            git_ok(work.path(), &["config", "diff.renames", "false"], &name);
+        }
 
         // T477: stage the post-state so new-file additions ride the index:
         // unstaged `git diff` never shows untracked files (and plain

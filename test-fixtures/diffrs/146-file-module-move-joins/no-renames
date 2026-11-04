@@ -1,0 +1,1 @@
+WI-15 slice 1: suppress git rename detection so the file-module move arrives as delete+create (identical contents would collapse to a headers-only rename section that never reaches the move pairing).

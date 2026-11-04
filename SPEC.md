@@ -4826,6 +4826,47 @@ diff --git src/new.rs
  fn main() {}
 ```
 
+### 20.6 File-module moves
+
+Renaming a file-module (`old.rs` → `new.rs` beside `mod old;` →
+`mod new;` in the parent) raises as cut/paste across the file
+sections with the `mod` pair under the same rule (WI-15 slice 1) —
+contents never restated, file creation/deletion carried by the
+sections themselves:
+
+```diff
+diff --git src/lib.rs
+@@ -1,1 @@ rule=r1
+- mod old
++ mod new
+
+diff --git src/old.rs
+deleted file mode 100644
+--- a/src/old.rs
++++ /dev/null
+@@ -1,42 @@ rule=r1
+# bind=M1
+- I
+
+diff --git src/new.rs
+new file mode 100644
+--- /dev/null
++++ b/src/new.rs
+@@ -0,0 @@ rule=r1
+# use=M1
++ M1
+```
+
+Narrowing: exactly one moved item, deleted-file source + created-file
+target in the same directory with stems naming the `mod` idents,
+exactly one lone `mod old;` → `mod new;` declaration pair (no use
+lines — those belong to the `mod` intent, never stolen), a unique
+`mod old;` declaration workspace-wide, and the cited site verified;
+the joined T375 must pass or the emission falls back to today's split
+(a separate `mod` single beside the move). Rename sections,
+multi-item/fan-out moves, mixed-hunk claims, stem mismatches, and twin
+declarations stay split by design.
+
 ---
 
 ## 21. Macros
@@ -9977,6 +10018,17 @@ every length and the totals stay the default truth at any size.
        `140-container-body-evolve-fires`) and inherent-`impl`
        body-evolving `as` pastes (diffrs fixture
        `141-impl-body-evolve-fires`).
+    WI-15 slice 1 joins a file-module move with its lone `mod` pair: a
+    deleted-file → created-file single-item move (same dir, file stems
+    naming the `mod` idents) beside exactly one adjacent-run `mod old;`
+    → `mod new;` declaration pair (no use lines, unique workspace
+    declaration, cited site verified) raises the pair as `- mod old` /
+    `+ mod new` under the move cut's rule — contents never restated,
+    file creation/deletion carried by the sections. Rename sections,
+    multi-item/fan-out moves, mixed-hunk claims, `mod` + use lines
+    (`mod_rename` territory), stem mismatches, twin declarations, and
+    a failing joined T375 (falls back to today's split) stay split by
+    design.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -10426,7 +10478,7 @@ stripping is deliberate. Equalities per origin close the contract:
   keep different directives and stay divergent.
 
 Corpus in scope: all applyrs fixtures (121), all diffrs fixtures
-(144), all example benches (32 applyrs, 50 diffrs), plus the history_e2e pins. Out of scope
+(145), all example benches (32 applyrs, 50 diffrs), plus the history_e2e pins. Out of scope
 (declared lossy): binary/gitlink sections (stripped with a warning),
 non-UTF-8 sections, and CRLF semantic compression (whose passthrough
 cycle must still be tree-lossless).

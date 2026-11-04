@@ -1701,5 +1701,39 @@ fn pins_late(name: &str, native_input: &str, semantic: &str) {
             semantic.len(),
             native_input.len()
         );
+    } else if name == "146-file-module-move-joins" {
+        // WI-15 slice 1: deleted-file + created-file single-item move
+        // (delete+create via the `no-renames` marker — identical
+        // contents would rename-detect) beside a lone `mod` pair joins
+        // the pair under the cut's rule; the harness checks the tree
+        // legs (--check + lowered git apply, incl. file deletion).
+        let rules: std::collections::HashSet<&str> = semantic
+            .lines()
+            .filter_map(|l| l.split_once("rule=").map(|(_, r)| r))
+            .collect();
+        assert_eq!(
+            rules.len(),
+            1,
+            "cut + paste + mod pair must share one rule, got: {semantic}"
+        );
+        assert_eq!(
+            semantic.matches("rule=").count(),
+            3,
+            "three hunks under the shared rule, got: {semantic}"
+        );
+        assert!(
+            semantic.contains("- mod old\n+ mod new\n"),
+            "mod pair must ride the shared rule, got: {semantic}"
+        );
+        assert!(
+            !semantic.contains("-fn foo() {"),
+            "moved contents must be unstated, got: {semantic}"
+        );
+        assert!(
+            semantic.len() < native_input.len(),
+            "file-module join must beat native bytes ({} vs {})",
+            semantic.len(),
+            native_input.len()
+        );
     }
 }

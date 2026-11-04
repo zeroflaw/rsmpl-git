@@ -331,6 +331,23 @@ pub(crate) fn try_move_sweep(
     }
     // Emission (naming + section rebuild + T375 guard) lives in the
     // `move_rebuild` sibling (D5: this file sat at 2013/2000).
+    // WI-15 slice 1: a proved file-module + lone-`mod` join rides the
+    // cut's rule; when the joined T375 fails, fall back to today's
+    // split (the unjoined rebuild) — the join can never regress a
+    // firing move.
+    if let Some(join) = super::move_mod_join::find_mod_join(&parsed, sections, &final_pairs, pre) {
+        if let Some(out) = super::move_rebuild::rebuild_sections(
+            final_pairs.clone(),
+            &parsed,
+            sections,
+            pre,
+            used_rules,
+            checkpoint,
+            Some(&join),
+        ) {
+            return Some(out);
+        }
+    }
     super::move_rebuild::rebuild_sections(
         final_pairs,
         &parsed,
@@ -338,6 +355,7 @@ pub(crate) fn try_move_sweep(
         pre,
         used_rules,
         checkpoint,
+        None,
     )
 }
 

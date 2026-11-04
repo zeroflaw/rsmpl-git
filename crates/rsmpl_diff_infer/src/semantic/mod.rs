@@ -66,6 +66,7 @@ mod move_evolve_container;
 mod move_evolve_impl;
 mod move_evolve_sig;
 mod move_evolve_tail;
+mod move_mod_join;
 mod move_pair_evolve;
 mod move_parts;
 mod move_rebuild;
