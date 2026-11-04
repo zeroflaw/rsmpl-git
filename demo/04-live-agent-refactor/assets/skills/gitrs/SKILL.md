@@ -78,6 +78,16 @@ diff --git src/lib.rs
 + pub struct Bar
 ```
 
+Impl-header sweep (one bare pair covers `impl Foo`, `impl Bar for Foo`, and `impl Foo for Other`):
+
+```diff rsmpl
+diff --git src/lib.rs
+@@ -1,1 @@ rule=rename_impl
+# sweep
+- impl Foo
++ impl Bar
+```
+
 Fn rename, full form (untouched slots elided; `...` and `}` keep the one-space marker):
 
 ```diff rsmpl
@@ -146,8 +156,23 @@ diff --git src/lib.rs
 +appended
 ```
 
+Same shared line, both ways (pick one — ordinary one-liner, or one two-delta semantic hunk):
+
+```diff rsmpl
+@@ -3,1 +3,1 @@
+-    Foo::foo(x);
++    Bar::bar(x);
+```
+
+```diff rsmpl
+@@ -1,1 @@ rule=rename_qual
+# sweep
+- Foo::foo(E)
++ Bar::bar(E)
+```
+
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/`unsafe`/generics/`where` explicitly to match them. Explicit slots evolve, `...`/same-metavar slots are preserved, bodies are never rewritten; rename+body joints (one to three `- E`/`+ E` pairs inside the renamed body) ride the same `# follow=uses` hunk. A braced body is an `...` context line plus the closing `}` context line — both keep the one-space hunk marker (`    ...`, ` }`); a bare unprefixed `}` never enters the hunk and fails as an unbalanced body block. A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`); an `impl S {` header + fn pair rewrites inherent methods the same way. A bare pair matches free functions only, never methods — the header line is what converts one to the other (see the example above). Slots run `fn name<generics>(params) -> ret where...` — elide what you don't touch (`(...)`, no return); container headers spell generics exactly as written (`impl<T, F> S<T, F> {`).
-- Call rewrite: needs `# allow=many` for multiple sites, `# optional` to tolerate zero. Multi-argument calls just add holes (`- foo(E, F)` / `+ bar(E, F)`); no declaration is needed for any hole. Add `# repeat` to fold nested matches (`Box::new(Box::new(x))` → `x`; general-expr shapes fold too, `let`/type/macro hunks reject it). Metavars bind once and repeats must match structurally. A qualified line with exactly two disjoint deltas (`old::foo(E)` → `new::bar(E)`, or shared receiver+method `old_mod::obj.old_m(E)` → `new_mod::obj.new_m(E)`) composes under one rule; three deltas stay ordinary, and hetero fused hunks partition per contiguous run (declining runs stay ordinary). File-scoped sweeps mix freely with ordinary hunks in one file — the call-sweep plus use-line pairing is the standard shape; just keep ordinary hunks off lines the sweep rewrites. Sweeps change tokens, never line counts, so neighboring ordinary hunk counts are unaffected.
+- Call rewrite: needs `# allow=many` for multiple sites, `# optional` to tolerate zero. Multi-argument calls just add holes (`- foo(E, F)` / `+ bar(E, F)`); no declaration is needed for any hole. Add `# repeat` to fold nested matches (`Box::new(Box::new(x))` → `x`; general-expr shapes fold too, `let`/type/macro hunks reject it). Metavars bind once and repeats must match structurally. A qualified line with exactly two disjoint deltas (`old::foo(E)` → `new::bar(E)`, or shared receiver+method `old_mod::obj.old_m(E)` → `new_mod::obj.new_m(E)`) composes under one rule; three deltas stay ordinary, and hetero fused hunks partition per contiguous run (declining runs stay ordinary). File-scoped sweeps mix freely with ordinary hunks in one file — the call-sweep plus use-line pairing is the standard shape; just keep ordinary hunks off lines the sweep rewrites. Sweeps change tokens, never line counts, so neighboring ordinary hunk counts are unaffected. A sweep's edited span is its whole match: single-line matches rewrite one line, multiline matches cover all of theirs — so keep ordinary hunks off matched lines, not just changed tokens.
 - Method-call rewrite: bind the receiver with one bare metavar (binds the whole receiver chain) (`E.to_string()`); composite receivers never match — except a leading `&`, which routes to general-expr matching (`- &E.path()` / `+ E.path()`).
 - Symbol rewrite: `- Old(...)` / `+ New(...)` with bare `# symbol` (crate-index verified, vendored copies never match) or `# fallback=syntax` (exact text), or `# symbol Old=crate::old_api` + `# symbol New=crate::new_api`; `use crate::old_api;` lets bare `old_api(...)` match; general positions take whole paths and single-leading prefixes (`Old::foo`), field types take the same law (`x: Old`, `x: Vec<Old>`), use-prefixes take a symbol head (`use Old::sub`).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/`const`/`static`/`mod`/`union`/`impl`), one ident edit — or one ident edit plus one closed-set vis step (`- pub struct Old` / `+ pub(crate) struct New`; same-name plus vis-only is a pure vis evolution, `- struct S` / `+ pub struct S`; uniform N≥2 steps sweep as `- struct N` / `+ pub struct N` with `# allow=many`). File, inline-mod, and block-level (fn bodies) items all match. A bare `impl Old` pair renames self-ty + trait-side path (definition only — follow up use sites individually, or one `# follow=uses` hunk). A joint `impl Trait for Type` rename states trait + self-type pairs as two `# follow=uses` hunks sharing one rule (trait first); the composed `impl` header is follow-rewritten, never written.
