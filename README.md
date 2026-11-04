@@ -28,6 +28,23 @@ humans and agents can understand.
 - **muse-spark** — Empower smaller, faster models to handle complex refactors. Compress the intended change into a semantic patch, then apply it locally to avoid mistakes.
 - **muse-wonder** — Reserve frontier models for the decisions that matter. Let them focus on design and reasoning without paying frontier rates for mechanical work.
 
+## Showcase
+
+These numbers come from demo 04-live-agent-refactor, using model muse-spark-1.3
+
+| metric | without gitrs | with gitrs |
+|---|---|---|
+| runtime | 286.4s | 328.4s |
+| calls | 47 | 18 |
+| input_tokens | 2404403 | 1293138 |
+| output_tokens | 18583 | 37437 |
+| cached_tokens | 2336462 | 1200769 |
+| reasoning_tokens | 11411 | 32929 |
+
+Even on the small refactoring task in the live demo, gitrs shows modest increase in runtime, reasoning, and output tokens for far fewer model calls and much less input. Clearer SKILL.md wording may bring runtime and reasoning down further, through iterative improvements.
+
+On a larger refactor, gitrs would likely show a much bigger efficiency lead — but that needs some engine bug fixes before it can be tested.
+
 ## Install
 
 ```sh
