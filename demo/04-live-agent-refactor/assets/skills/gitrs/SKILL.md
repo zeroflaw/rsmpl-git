@@ -17,10 +17,11 @@ Use `gitrs` for every Rust refactoring or modification — never hand-edit what 
 
 1. Grep every name first (one search per name); note each site's file + line, then read only the spans you will cite.
 2. Compose the ENTIRE refactor as one patch (every file, every hunk) from the complete examples below — standard shapes (item/fn/method/field rename, call sweep, use line, move, ordinary) need NO probe; substitute your names and cite your spans. If a site matches a complete example, use it verbatim — no analysis needed; resolve remaining doubts via `--check`, not more thinking (the engine verifies for free). When two renames touch one line (import lists, single-line signatures), cover it with a single ordinary hunk — or one two-delta semantic hunk — never two semantic hunks. One-off line → ordinary; repeating shape → semantic (sweep it).
-3. Validate with ONE `gitrs apply --file patch.rsmpl --format json --diff-max-lines 0 --check`; read `matches`/`spans`/`files` from that output — never re-run a check to summarize it.
+3. Validate with ONE `gitrs apply --file patch.rsmpl --format json --diff-max-lines 0 --check`; confirm from that output: (a) every rule's `matches` equals your grepped sites, (b) `files[]` shows the expected paths and counts, (c) `partial` is fine when ordinaries or orphans remain — never re-run a check to summarize it.
 4. On a hunk error, fix from the `repair` block and re-check the whole patch (one call). Budget: two attempts per site, then that site becomes an ordinary hunk — never a third probe of the same shape, never a deliberate negative probe (no-fallback after a symbol conflict, bare method after a nearest-fn miss).
 5. Confirm `matches` covers every grepped site, then apply ONCE. A no-match failure on re-apply means it already landed — check `git diff`, don't re-apply. Definition-only renames paired with separate use-site hunks intentionally report orphans and `partial` semantics — that verdict is expected in the mixed workflow, not a failure.
-6. Verify the build (`cargo check` plus whatever tests the task names).
+6. After a successful apply, verify with `git diff --stat` (one call) — the apply report already proves what landed, so never re-open source files to re-confirm it.
+7. Verify the build (`cargo check` plus whatever tests the task names).
 
 ## Minimal patch
 
@@ -32,6 +33,14 @@ diff --git src/lib.rs
 ```
 
 Single path suffices (`a/X b/X` is the same section); `---`/`+++`/`index` are optional metadata; differing `a/old b/new` paths are a file-rename section applied via old-side content, and `/dev/null` halves create/delete files. `rule=` may be omitted when a `#` directive line is present (diagnostics show `<unnamed>`; add `rule=name` when a patch has several hunks); elide the `+new,len` side (ignored for RSMPL hunks). Every `@@ -old,len @@` cites ORIGINAL pre-patch lines, never rebased, and doc/attr lines count in the span. A hunk is RSmPL iff the header carries `rule=` or at least one `#` directive line follows it; directive-free renames use the terse form plus `rule=`. Factored diet: later hunks of a shared-rule run go bare — `@@ -old,len @@` with no `rule=`/`#` lines inherits the section's most-recent RSmPL hunk (same file+rule+directives only; never across files/rules). Ordinary hunks may mix in but must not overlap semantic ranges. Batching: one refactor = one patch (every file, every hunk) validated by a single `--check` — original-file ranges never shift each other, so per-sub-task applies only multiply round trips; compose from the complete examples below and probe only genuinely novel shapes.
+
+Overlap rules, consolidated:
+
+| Pair | Rule |
+|---|---|
+| ordinary vs ranged-semantic | ranges must not overlap |
+| ordinary vs file-sweep | keep off matched lines (dummy ranges never conflict) |
+| semantic vs semantic | matched spans must be disjoint |
 
 ## Directives
 
@@ -94,6 +103,16 @@ Fn rename, full form (untouched slots elided; `...` and `}` keep the one-space m
 @@ -10,7 @@ rule=rename_foo
 - pub fn foo<T>(...) where T: Clone {
 + pub fn bar<T>(...) where T: Clone {
+    ...
+ }
+```
+
+Joint evolution (name + return in one hunk; `where` follows the return):
+
+```diff rsmpl
+@@ -10,7 @@ rule=evolve_foo
+- pub fn foo<T>(...) -> Old where T: Clone {
++ pub fn bar<T>(...) -> New where T: Clone {
     ...
  }
 ```
@@ -182,7 +201,7 @@ Same shared line, both ways (pick one — ordinary one-liner, or one two-delta s
 + Bar::bar(E)
 ```
 
-Mixed file (sweep plus ordinary hunks on disjoint lines):
+Mixed two-file patch (sweeps plus ordinaries per file — the one-patch template):
 
 ```diff rsmpl
 diff --git src/lib.rs
@@ -193,6 +212,14 @@ diff --git src/lib.rs
 @@ -3,1 +3,1 @@
 -use crate::old;
 +use crate::new;
+diff --git src/other.rs
+@@ -1,1 @@ rule=rename_calls_other
+# sweep
+- foo(E)
++ bar(E)
+@@ -5,1 +5,1 @@
+-    let x = 1;
++    let x = 2;
 ```
 
 Deletion plus insertion in one file (new-side counts cumulatively: `+5` = old 6 minus 1 deleted above):
@@ -206,7 +233,7 @@ diff --git src/lib.rs
 +added
 ```
 
-Collection move (cut binds items verbatim in order — attrs and docs ride along, other lines stay; paste lands directly at the anchor, items joined with one blank between):
+Collection move leaving re-exports behind (cut binds items verbatim in order — attrs and docs ride along, other lines stay; paste lands directly at the anchor, items joined with one blank between; keep the cut range and the shim anchor disjoint; shims may anchor before the cut span as well as after it):
 
 ```diff rsmpl
 diff --git src/old.rs
@@ -214,22 +241,39 @@ diff --git src/old.rs
 # bind=Helpers
 # allow=many
 - I
+@@ -14,0 +15,1 @@
++pub(crate) use crate::new::{m1, m2};
+@@ -20,1 @@ rule=move_helpers2
+# bind=Helpers2
+- I
 diff --git src/new.rs
 @@ -72,0 @@ rule=move_helpers
 # use=Helpers
 + Helpers
+@@ -72,0 @@ rule=move_helpers2
+# use=Helpers2
++ Helpers2
+```
+
+End-of-file paste result (anchor `}` is the last line; no leading blank, one blank between):
+
+```text
+}
+fn m1() {}
+
+fn m2() {}
 ```
 
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/`unsafe`/generics/`where` explicitly to match them. Explicit slots evolve, `...`/same-metavar slots are preserved, bodies are never rewritten; rename+body joints (one to three `- E`/`+ E` pairs inside the renamed body) ride the same `# follow=uses` hunk. A braced body is an `...` context line plus the closing `}` context line — both keep the one-space hunk marker (`    ...`, ` }`); a bare unprefixed `}` never enters the hunk and fails as an unbalanced body block. A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`); an `impl S {` header + fn pair rewrites inherent methods the same way. A bare pair matches free functions only, never methods — the header line is what converts one to the other (see the example above). Slots run `fn name<generics>(params) -> ret where...` — elide what you don't touch (`(...)`, no return); container headers spell generics exactly as written (`impl<T, F> S<T, F> {`).
-- Call rewrite: needs `# allow=many` for multiple sites, `# optional` to tolerate zero. Multi-argument calls just add holes (`- foo(E, F)` / `+ bar(E, F)`); no declaration is needed for any hole. Add `# repeat` to fold nested matches (`Box::new(Box::new(x))` → `x`; general-expr shapes fold too, `let`/type/macro hunks reject it). Metavars bind once and repeats must match structurally. A qualified line with exactly two disjoint deltas (`old::foo(E)` → `new::bar(E)`, or shared receiver+method `old_mod::obj.old_m(E)` → `new_mod::obj.new_m(E)`) composes under one rule. Concrete names stay bare in call position (`Old::foo(E)`); type position needs backticks (`` `Old`<T> ``). Three deltas stay ordinary, and hetero fused hunks partition per contiguous run (declining runs stay ordinary). File-scoped sweeps mix freely with ordinary hunks in one file — the call-sweep plus use-line pairing is the standard shape; just keep ordinary hunks off lines the sweep rewrites. Sweeps change tokens, never line counts, so neighboring ordinary hunk counts are unaffected. A sweep's edited span is its whole match: single-line matches rewrite one line, multiline matches cover all of theirs — so keep ordinary hunks off matched lines, not just changed tokens. Multiple file-scoped sweeps share one file freely — dummy `@@ -1,1 @@` ranges never conflict; only overlapping matched lines do.
+- Call rewrite: needs `# allow=many` for multiple sites, `# optional` to tolerate zero. Multi-argument calls just add holes (`- foo(E, F)` / `+ bar(E, F)`); no declaration is needed for any hole. Add `# repeat` to fold nested matches (`Box::new(Box::new(x))` → `x`; general-expr shapes fold too, `let`/type/macro hunks reject it). Metavars bind once and repeats must match structurally. A qualified line with exactly two disjoint deltas (`old::foo(E)` → `new::bar(E)`, or shared receiver+method `old_mod::obj.old_m(E)` → `new_mod::obj.new_m(E)`) composes under one rule. Concrete names stay bare in call position (`Old::foo(E)`); type position needs backticks (`` `Old`<T> ``). Three deltas stay ordinary, and hetero fused hunks partition per contiguous run (declining runs stay ordinary). File-scoped sweeps mix freely with ordinary hunks in one file — the call-sweep plus use-line pairing is the standard shape; just keep ordinary hunks off lines the sweep rewrites. Sweeps change tokens, never line counts, so neighboring ordinary hunk counts are unaffected. A sweep's edited span is its whole match: single-line matches rewrite one line, multiline matches cover all of theirs — so keep ordinary hunks off matched lines, not just changed tokens. Item matches (bare or braced pairs) rewrite the header line only, so ordinaries on body lines alongside them are fine; expression matches claim their whole span. Multiple file-scoped sweeps share one file freely — dummy `@@ -1,1 @@` ranges never conflict; only overlapping matched lines do. A match spanning lines N–M rewrites all of N–M — a call with arguments over 3 lines blocks ordinaries on all 3.
 - Method-call rewrite: bind the receiver with one bare metavar (binds the whole receiver chain) (`E.to_string()`); composite receivers never match — except a leading `&`, which routes to general-expr matching (`- &E.path()` / `+ E.path()`).
 - Symbol rewrite: `- Old(...)` / `+ New(...)` with bare `# symbol` (crate-index verified, vendored copies never match) or `# fallback=syntax` (exact text), or `# symbol Old=crate::old_api` + `# symbol New=crate::new_api`; `use crate::old_api;` lets bare `old_api(...)` match; general positions take whole paths and single-leading prefixes (`Old::foo`), field types take the same law (`x: Old`, `x: Vec<Old>`), use-prefixes take a symbol head (`use Old::sub`).
 - Item rename: `- struct Old` / `+ struct New` (also `enum`/`trait`/`type`/`const`/`static`/`mod`/`union`/`impl`), one ident edit — or one ident edit plus one closed-set vis step (`- pub struct Old` / `+ pub(crate) struct New`; same-name plus vis-only is a pure vis evolution, `- struct S` / `+ pub struct S`; uniform N≥2 steps sweep as `- struct N` / `+ pub struct N` with `# allow=many`). File, inline-mod, and block-level (fn bodies) items all match. A bare `impl Old` pair renames self-ty + trait-side path (definition only — follow up use sites individually, or one `# follow=uses` hunk). A joint `impl Trait for Type` rename states trait + self-type pairs as two `# follow=uses` hunks sharing one rule (trait first); the composed `impl` header is follow-rewritten, never written.
 - Definition RHS evolution: `- type A = Vec<T>;` / `+ type A = Box<[T]>;` (const/static likewise; struct-field/enum-payload/discriminant likewise under their container header; name preserved). Rename+member evolution (def pair above member pair, no header), field-add/del and variant add/del (one member, shared-rule two-hunk emission), and collection moves compose under one rule.
-- Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`); paste may precede cut; cross-file = two sections; same-anchor pastes land in document order with one blank line between items; pastes land directly at the anchor with no blanks added around them; `as` paste (`+ fn old as new(...)`) renames the moved fn + self-calls, joint (`+ fn old as new(x: i64) -> i64 { ... }`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, trait (`+ trait old as new { ... }`) renames trait + self-referential method signatures/bodies, joint-trait (`+ trait old as new { fn m_old as m_new; ... }`) adds one method rename, inherent-`impl` (`+ impl old as new { ... }`) renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto (`RSMPL_PATTERN_CONFLICT`), two evolution slots stay ordinary; move+attr (E1) / trait-move (E2) ride the same cut/paste probe with the delta as ordinary leftover; file-module move (deleted+created file pair, N≥1 items, stems match) joins its `mod old;`→`mod new;` pair under the first cut's rule. Decision rule: long or numerous items → cut/paste (constant lines, verbatim carry, no retyping slips); exact blank/placement control → ordinary delete-plus-insert.
+- Move: cut `- I` (`# bind=N`; `I` infers `item`), paste `+ N` (`# use=N`); paste may precede cut; cross-file = two sections; same-anchor pastes land in document order with one blank line between items; pastes land directly at the anchor with no blanks added around them; `as` paste (`+ fn old as new(...)`) renames the moved fn + self-calls, joint (`+ fn old as new(x: i64) -> i64 { ... }`) adds one sig-slot evolution, container (`+ struct/enum/union old as new { ... }`) renames container + self-referential field types / variant payloads, trait (`+ trait old as new { ... }`) renames trait + self-referential method signatures/bodies, joint-trait (`+ trait old as new { fn m_old as m_new; ... }`) adds one method rename, inherent-`impl` (`+ impl old as new { ... }`) renames `impl` block + self-ty self-paths; shadow/field/macro/attr interiors veto (`RSMPL_PATTERN_CONFLICT`), two evolution slots stay ordinary; move+attr (E1) / trait-move (E2) ride the same cut/paste probe with the delta as ordinary leftover; file-module move (deleted+created file pair, N≥1 items, stems match) joins its `mod old;`→`mod new;` pair under the first cut's rule. Decision rule: long or numerous items → cut/paste (constant lines, verbatim carry, no retyping slips); exact blank/placement control → ordinary delete-plus-insert. Split moves: when kept-behind lines interrupt the span, cut each contiguous group under a unique name (captures must be unique per patch) and paste each; anchor shims on lines outside every cut span; cite cuts with or without their separator blanks (the scar heals to a single blank).
 - Use-path prefix: `- use crate::old` / `+ use crate::new` (`# allow=many` or `# sweep`) moves imports after a `mod` rename; plain/grouped/glob/`as`/`pub use` tails preserved, segment-wise; members at the matched position rewrite too (`crate::{old, x}` → `crate::{new, x}`), never by suffix; regroup merges N≥2 `- use a::b::X;` into `+ use a::b::{X, Y};` and splits the inverse (same order/vis, no attrs; `as`/glob/nested stay ordinary).
 - Beyond calls: `- let x = E;`/`+ let y = E;`, General-expression rewrites (`- E + 1`), types (`` - `Vec`<T> `` / `` + `Box`<[T]> ``, `T` inferred — the backticks are required, a bare `Box` reads as an unbound hole), 2–4-line `let` sequences (per-position `P0`/`E0` holes). A bare `P` never matches annotated `x: T` — write `P: T`. Ellipsis `...` is legal only in fn/arg/body/path slots. Supported-vs-rejected summary (mixed `let-else`, concrete-head `P @`, macro types stay ordinary hunks; block macros opaque, `fn` items strict-header + body; blocks, `if`, `match`, loops, closures, `async`/`try`/`unsafe` blocks, `yield`, `break`/`continue`, `let` expressions, agreed `let-else`, placeholder-head `P @`, array-repeat `[E; N]`, and `&raw` addr match structurally).
-- Ordinary hunks: text edits with no `#` lines; headers stay two-sided (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only; blank insertion is bare `+`, blank removal is bare `-`); content starts immediately after the `+`/`-` marker — a space there becomes part of the line; old length counts context + `-` lines and new length counts context + `+` lines (see the example above); they may mix with semantic hunks but must not overlap semantic ranges.
+- Ordinary hunks: text edits with no `#` lines; headers stay two-sided (`@@ -1,4 +1,5 @@` — new-side elision is RSmPL-only; blank insertion is bare `+`, blank removal is bare `-`); content starts immediately after the `+`/`-` marker — a space there becomes part of the line; old length counts context + `-` lines and new length counts context + `+` lines (see the example above); old-side ranges and both lengths must be exact, but new-side starts are forgiven; they may mix with semantic hunks but must not overlap semantic ranges.
 - Macros: plain call patterns never enter macro bodies; `# macro=token_tree` renames verbatim (`M!(...)`→`N!(...)`) or binds one hole per top-level arg; shared-enclosing lines raise as one sweep.
 
 ## CLI: apply (`gitrs apply` = `applyrs`)
