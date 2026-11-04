@@ -218,13 +218,17 @@ fn doc_fences_lint_clean_or_marked() {
     // Pairing guard: one stray bare ``` line collapses every later pair
     // (the cascade this lint was built to catch), so the total must not
     // silently shrink; every marker must earn its keep.
+    // WI-18 pins the exact counts (SPEC 361 total / 133 candidates /
+    // 7 marked + AGENTS 6/3/0 + SKILL 4/3/0 = 139 candidates, 7 marked):
+    // the SPEC diet moves no fence, so any drift names the edit that
+    // added or dropped one.
     assert!(
-        total >= 100,
-        "expected at least 100 doc fences, got {total}"
+        total == 139,
+        "expected exactly 139 candidate doc fences (WI-18 pin), got {total}"
     );
     assert!(
-        marked >= 7,
-        "expected at least 7 invalid markers, got {marked}"
+        marked == 7,
+        "expected exactly 7 invalid markers (WI-18 pin), got {marked}"
     );
 }
 

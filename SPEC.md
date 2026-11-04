@@ -7830,19 +7830,18 @@ arm head textually at the first `=>`; a one-line `if`/`else` branch
 body after stripping at the first `{` (the head must name `if` or
 `else`). Multi-statement bodies, macro bodies, and item declarations
 never unwrap and stay ordinary. Emitted hunks carry no frame text —
-the frame is byte-identical on both sides so the subterm rewrite
-reproduces the post-image. Frame equality is proved per pair on the
-full line text: the plus line must equal the minus line under
-sequential subterm replacement of the extracted (rendered) subterms —
+the frame is byte-identical on both sides; frame equality is proved per
+pair on the full line text (the plus line must equal the minus line
+under sequential subterm replacement of the extracted subterms) —
 any frame delta (renamed `fn`, rebound closure parameter, changed arm
 pattern, changed branch keyword, changed `let` wrapper) or unchanged
 same-line twin vetoes. The same per-pair check guards the whole-line
 general-expression sweep (framed lines included) and the control
 positions (guard, arm body, closure body, condition, iterable,
 diverge, await/`?` base), whose templates likewise rewrite only the
-subterm. Totality then counts occurrences of the minus
+subterm. Totality counts occurrences of the minus
 subterm in the pre-image (engine-count probe, as verbatim does), not
-changed lines — two calls per line count twice. The emission is the
+changed lines — two calls per line count twice; the emission is the
 same bare-subterm hunk as the whole-line shape. Single-pair sections stay ordinary for
 call/method/use shapes even with two sites (T375: one pair never wins
 as a sweep) — except whole-arg permutation with ≥ 2 subterm sites
@@ -7915,13 +7914,8 @@ wholly-ordinary section (WI-15c — the list is never bare `"hunks":
 `{rule, file, detector, sites, sites_exact, totality, proven,
 saved_bytes, group}` plus `declined` on ordinary entries only.
 `detector` is
-the firing detector family (`item_rename`, `fn_slot_sweep`,
-`method_to_fn`, `method_to_method`, `method_same_literal`,
-`method_arg_template`, `call_arg_template`, `general_expr`,
-`ref_strip`, `qualified_call`, `turbofish`, `macro_rename`,
-`use_prefix`, `call_sweep`, `call_arg_add`,
-    `call_literal`, `call_peel`, `call_peel_section`,
-    `call_literal_section`, `let_type_add`, `type_sweep`, `let_template`, `sequence`, `sig_evolution`, `trait_method_rename`, `inherent_method_rename`, `item_intent`, `fn_joint`, `member_rename`, `mod_rename`, `assoc_rename`, `repeat_fold`, `partial_strip`, `single_block`, `literal_frame`, `let_binder`, `macro_interior`, `macro_rule_body`, `macro_enclosing`, `verbatim`, `delete`, `move`)
+the firing detector family (the registry name — one of the families
+named by the D.4 cells below)
 or `"ordinary"` for wholly-ordinary sections (empty `rule`, `saved_bytes: 0`). `sites` are
 the section's changed old-side lines covered by the hunk's emitted
 range (anchor-only move pastes report `[]`, exactly — there is
@@ -7977,48 +7971,37 @@ out by the byte guard — `kind` is `byte` under strict T375 with
 `allow == 0`, `precision` under the WI-7 allowance; `sem` is the
 losing emission bytes, `ord` the normalized ordinary span, `allow`
 the precision allowance, so the overflow `sem > ord + allow` is
-computable from the report alone), `totality:<found>:<want>`
-(site-count mismatch — WI-17 slice 4 wires the call family first
-(`call_sweep` / `call_arg_add` whole-section, per-hunk `call_sweep`
-single: the shape matched and the file-wide count `found` differs
- from the diff pair count `want`; WI-4 slice 1 wires the method family
- (`method_to_fn` / `method_to_method` whole-section), the let-add family
- (chain name `let_type_add` — the emitted name, no aliasing — via the
- untyped-let count), and the type
-  family (`type_sweep` via the engine self-rewrite count); WI-4 slice 2a
-  wires the general-expr family (whole-line + `let`-init fallback via
-  the real-pair engine count), the method-literal family, the
-  call-literal family, the ref-strip family, and the sig-evolution
-  family (free-fn + per-block counts); WI-4 slice 2b-1 wires the
-  fn-slot family (free + per-block counts), the header-evolution
-   family (free + per-block counts), the qualified-call family, the
-   turbofish family (call + method), the use-prefix family, and the
-   macro-rename family (bare + qualified); WI-4 slice 2b-rest-a wires
-   the call-perm family (sub-line perm, detector name `call_perm`
-   distinct from the whole-line `call_arg_template` arm), the
-   call-arg-template family, and the
-   method-arg-template family (all via the real-pair engine count);
-   WI-4 slice 2b-rest-b wires every remaining chain detector:
-   engine-count families (control-template via the real-pair count,
-   call-peel via the syntax-walk count, let-template ×3 + sequence +
-   single-block ×2 + repeat-fold + partial-strip + literal-frame via
-   the real-pair / sequence / repeat engine counts, framed let-fallback
-   via the untyped-let count) and scratch-twin families
-   (member-rename, assoc-rename, definition-evolution, macro-rules,
-    trait/inherent-method, attr-sweep, and every per-hunk +
-    whole-section single — each records `totality:found:want` when the
-    pre-image holds a twin minus-line elsewhere, else `no-match`;
-    `item_rename` stays `no-match` by design — partition path); WI-5
-    wires the binder family (`let_binder`: the emitted minus template
-    must match exactly one `let` in the pre-image — an untouched twin
-    def records `totality:2:1`),
+ computable from the report alone), `totality:<found>:<want>`
+(site-count mismatch: the shape matched and the file-wide count `found`
+differs from the diff pair count `want`). Count source per family
+(wiring history WI-4 slices 1/2a/2b-1/2b-rest-a/2b-rest-b, WI-17 slice 4,
+WI-5): call (`call_sweep` / `call_arg_add` whole-section, per-hunk
+`call_sweep` single), method (`method_to_fn` / `method_to_method`),
+let-add (`let_type_add`, untyped-let count), type (`type_sweep`, engine
+self-rewrite count), general-expr (whole-line + `let`-init fallback,
+real-pair engine count), method-literal, call-literal, ref-strip,
+sig-evolution (free-fn + per-block counts), fn-slot (free + per-block),
+header-evolution (free + per-block), qualified-call, turbofish (call +
+method), use-prefix, macro-rename (bare + qualified), call-perm
+(sub-line perm; detector `call_perm`, distinct from the whole-line
+`call_arg_template` arm), call-arg-template, method-arg-template (all
+real-pair engine count), control-template (real-pair count), call-peel
+(syntax-walk count), let-template ×3, sequence, single-block ×2,
+repeat-fold, partial-strip, literal-frame (real-pair / sequence / repeat
+engine counts; framed let-fallback via the untyped-let count),
+scratch-twin families (member-rename, assoc-rename,
+definition-evolution, macro-rules, trait/inherent-method, attr-sweep,
+every per-hunk + whole-section single — each records
+`totality:found:want` when the pre-image holds a twin minus-line
+elsewhere, else `no-match`; `item_rename` stays `no-match` by design —
+partition path), binder (`let_binder`: the emitted minus template must
+match exactly one `let` in the pre-image — an untouched twin def records
+`totality:2:1`),
    `veto:<name>` (named veto: off-diff
-   use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
-   family when a macro/string twin covers a changed line, WI-4 slice 1
-   extends the same arm to the method and let-add families, WI-4 slice 2a
-   to the method-literal, call-literal, and ref-strip families, WI-4
-   slice 2b-1 to the slot, qualified-call, turbofish, use-prefix, and
-   macro families (engine-probe
+   use, opaque hit — `veto:opaque-hit` when a macro/string twin covers a
+   changed line (call, method, let-add, method-literal, call-literal,
+   ref-strip, slot, qualified-call, turbofish, use-prefix, macro
+   families; wiring WI-17 slice 4 + WI-4 slices 1/2a/2b-1; engine-probe
    families carry no opaque arm by construction — the engine never matches
   inside macros/strings, so hidden twins never count) —,
    ambiguous anti-unification, WI-5 binder vetoes
@@ -8104,6 +8087,35 @@ gate, and registry completion, deduped, plus one per pre-pass stage),
 so the `75·D + 75·P` term prices
 every length and the totals stay the default truth at any size.
 
+D.4 shared laws (every cell below inherits these; a cell states only its
+delta): totality is the D13 scratch-apply probe — the composed emission
+applied to an in-memory pre-image clone must reproduce exactly the native
+plus lines at the claimed sites with every other line byte-identical —
+plus the byte-win guard (strict T375, or the WI-7 precision allowance
+`sem ≤ ordinary + 16` where the cell names Precision). Unless a cell states
+otherwise: off-diff same-name uses, twin definitions, and missing
+pre-images veto the whole intent (never a partial claim); unbalanced
+sections decline; engine-probe families never match inside
+macros/strings, so those sites never count. Single-file shapes raise per
+section; multi-section / cross-file shapes raise via the whole-patch
+pre-pass with file/section-pure partial (proven files collapse, unproven
+files stay ordinary, mixed hunks veto). N = 1 def-only shapes emit the
+follow-free concrete spelling under the precision guard. Recurrent gates
+(named once here, never restated below): the T422 verbatim-precedence law
+(all-identical classes stay for the tighter verbatim sweep); the WI-9e
+hunk-atomicity fixed point (a class fires only if every balanced hunk
+holding a member pair is fully covered by passing classes — cascade drops
+uncover hunks, rules reserve only for survivors); the real-pair totality
+(`template_pair_holds` — the emitted pair must match exactly N sites, an
+untouched twin vetoes); the T449 `let`-init unwrap (call sites inside
+`let` inits unwrap to their init call, the emission staying a bare
+pattern; cross-hunk classes compress non-whole sections); the N = 1
+precision-single posture (uniqueness via the named holds-fn at n = 1 plus
+the T361 real-apply byte-compare pre-reservation); the uppercase-backtick
+rule (uppercase callee/method/last-segment spellings ride backticks per
+the call-sweep law, SPEC 15.4/15.8). `History:`
+lines map the landing slices; the code is the behavior truth.
+
 - Fn/item rename: exactly one `-`/`+` line pair in the section,
   column-0, same kind/vis/suffix with one ident delta. Plain
   top-level `fn` (no `pub`/`async`/generics/return-type/where —
@@ -8116,160 +8128,117 @@ every length and the totals stay the default truth at any size.
 - Item-intent raising (WI-15a, detector `item_intent`): exactly one
   `split_item` definition pair (`struct`/`enum`/`trait`/`type`/`const`/
   `static`/terse-`fn`; `macro_rules!` declines to its own detector and
-  `mod` joins its file move via `mod_rename` below) joined with N-1 same-delta use lines (`impl Old`, `s: Old`,
-  `-> Old`, `Old { … }`, …) across one or more files compresses to the
-  single definition hunk with `# sweep` + `# follow=uses`. The
-  cross-file scratch-apply probe is the totality (the emission applied
-  to an in-memory pre-image clone must reproduce exactly the native
-  plus lines at the claimed sites with every other line byte-identical;
-  twin definitions, missing pre-images, and unbalanced sections
-  decline). The byte-win guard compares the one hunk against the
-  replaced native sections. WI-1 vis-qualified `fn` arm: a top-level `fn`
-  pure-rename definition with a concrete vis from the closed set
-  (empty, `pub`, `pub(crate)`, `pub(super)`, `pub(in <path>)` with
-  `::`-separated ident segments) and equal qualifier/signature
-  suffixes (any signature) joined with N-1 call-callee use lines of
-  the old name (bare, qualified, turbofish; `let`-wrapped included)
-  or `use`-tail deltas (`use crate::a::old;` → `use crate::a::new;`,
-  direct group members, `as`-preserving, `pub use` re-export forms)
-  emits the terse `- [vis] fn Old` / `+ [vis] fn New` diet form with
-  `# sweep` + `# follow=uses` (never a `V` hole — the intent proved
-  one concrete vis; `# sweep` already carries file scope at any
-  spread). WI-5 name-only widening: the vis/qualifier run may carry
-  token-equal `const`/`async`/`unsafe`/`extern ["ABI"]` qualifiers
-  (name-only delta over the full slot vector — vis, qualifier-list,
-  generics, params, return, `where` all token-equal); the emission
-  carries the qualifiers concretely (`- async fn foo` /
-  `+ async fn bar`, never a `Q` hole). One-line definitions (`fn foo(x: i32) -> i32 { x }`) join
-  the same way when the bodies are token-identical (the suffix covers
-   the body). `pub(…)` paths naming the old ident itself, signature
-   evolutions, method calls, fields, bare value paths, macro heads,
-   glob `use` shapes, nested member paths (`crate::{x::old}`
-   suffixes), intermediate-segment changes, and second-hop re-exports
-   veto the whole intent (never a partial claim; a vis/qual evolution
-   alongside the rename is the joint paragraph below, never this pure
-   arm); the probe doubles as the uniqueness guard (an off-diff
-   same-name call or same-tail `use` fails the unchanged-leg).
-  Item rename+attr joint (WI-5 slice 1, same detector): one definition
-  rename pair plus exactly one attached attr-delta pair (same file,
-  attr line directly above the def line) joined with at least one
-  claimable use emits the follow hunk with the attr delta carried
-  above the def pair (the authored Preserve-delta spelling). Double
-  attr deltas, detached attr hunks, non-attr co-residents, `fn` defs
-  (WI-4 B2 owns those), and attr+def without a use stay ordinary
- (a detached attr hunk falls back to the pure rename intent with the
- attr left ordinary). Variant-add, multi-addition, and cross-file-member
- joints stay ordinary (future slices).
-  Item rename+vis/qual joint (WI-5 slice 1, same detector): a
-  top-level `fn` definition pair differing in the name plus exactly
-  one of {visibility, qualifier-list} (`pub fn foo` →
-  `pub(crate) fn bar`, `fn foo` → `async fn bar`, `fn foo` →
-  `extern "C" fn bar`; generics/params/return/`where` token-equal)
-  joined with at least one claimable use from the pure arm's domain
-  (call-callee lines, `use`-tail deltas) emits the follow hunk with
-  the concrete evolved terse pair (`- pub fn foo` /
-  `+ pub(crate) fn bar` — never a `V`/`Q` hole: the intent proved one
-  concrete evolution, and the engine lowers rename+vis/qual
-  simultaneously). Qualifiers span `const`/`async`/`unsafe`/
-  `extern ["ABI"]` (WI-5-R1). Multi-line headers classify on their
-  first line (WI-5-R3): same one-slot law with the post-name first-line
-  tails token-equal instead of the full signature slots (the joint probe
-  owns the remainder lines). Two evolving slots, unknown future
-  qualifier tokens, self-referential vis (`pub(in old)`), indented
-  (method) headers, `;` decls, reflowed headers (brace parity mixed),
-  signature deltas on later header lines, twin definitions (counted over
-  every vis/qual spelling of `fn old`, single-line or first-line),
-  unbalanced sections, and missing pre-images veto the whole intent (the
-  joint probe doubles as the uniqueness guard). Bare-item rename+vis joint
-  (WI-5-R2, same detector; `struct`/`enum`/`trait`/`union`/`type`/
-  `const`/`static`): a definition pair differing in the name plus
-  exactly one closed-set vis step (`pub struct Old` →
-  `pub(crate) struct New`, suffix token-equal) joined with at least
-  one claimable use from the pure arm's domain emits the follow hunk
-  with the concrete evolved terse pair (`- pub struct Old` /
-  `+ pub(crate) struct New` — never a hole; the engine rewrites the
-  vis slot alongside the name, preserving generics/bodies/attrs).
-  Qualifier-bearing lines (`unsafe trait`, `static mut`) never parse
-  as a bare vis prefix, so vis joints over them stay ordinary; `mod`
-  joints decline (WI-15c owns mod intents); same-name vis evolution,
-  vis+attribute double slots, unknown vis, self-referential vis, and
-  suffix (generics/`where`/body-shape) deltas stay ordinary (multi-line
-  bare headers classify on their first line when the suffix is token-equal,
-  like their `fn` twins).
+  `mod` joins its file move) joined with N-1 same-delta use lines
+  (`impl Old`, `s: Old`, `-> Old`, `Old { … }`, …) across one or more
+  files compresses to the single definition hunk with `# sweep` +
+  `# follow=uses` (shared probe/guard/partial laws above; the byte-win
+  guard compares the one hunk against the replaced native sections).
+  History (WI-1 vis-qualified `fn` arm): top-level `fn` pure rename with
+  concrete vis from the closed set (empty, `pub`, `pub(crate)`,
+  `pub(super)`, `pub(in <path>)` with `::`-separated idents) and equal
+  qualifier/signature suffixes, joined with N-1 call-callee uses (bare,
+  qualified, turbofish, `let`-wrapped) or `use`-tail deltas (direct
+  members, `as`-preserving, `pub use` re-exports) emits terse
+  `- [vis] fn Old` / `+ [vis] fn New` (never a `V` hole — one concrete
+  vis proved; `# sweep` already carries file scope). Vetoes (whole
+  intent): `pub(…)` paths naming the old ident, signature evolutions,
+  method calls, fields, bare value paths, macro heads, glob `use`,
+  nested member paths, intermediate-segment changes, second-hop
+  re-exports (a vis/qual evolution alongside is the joint below, never
+  this pure arm); an off-diff same-name call or same-tail `use` fails
+  the unchanged leg. One-line definitions join when bodies are
+  token-identical. History (WI-5 name-only widening): the vis/qualifier
+  run may carry token-equal `const`/`async`/`unsafe`/`extern ["ABI"]`
+  (name-only delta; vis, qualifier-list, generics, params, return,
+  `where` otherwise token-equal); emission carries qualifiers concretely
+  (never a `Q` hole).
+  History (WI-5 slice-1 attr joint, same detector): one def rename pair
+  + exactly one attached attr-delta pair (same file, directly above) +
+  ≥1 claimable use emits the follow hunk with the attr delta above the
+  def pair (authored Preserve-delta spelling). Double attr deltas,
+  detached attr hunks, non-attr co-residents, `fn` defs (WI-4 B2 owns
+  those), and attr+def without a use stay ordinary (a detached attr hunk
+  falls back to the pure rename intent with the attr left ordinary).
+  History (WI-5 slice-1 vis/qual joint, same detector): top-level `fn`
+  pair differing in name + exactly one of {visibility, qualifier-list}
+  (`pub fn foo` → `pub(crate) fn bar`, `fn foo` → `async fn bar`, `fn
+  foo` → `extern "C" fn bar`; generics/params/return/`where`
+  token-equal) + ≥1 claimable use (call-callee, `use`-tail) emits the
+  follow hunk with the concrete evolved terse pair (never a `V`/`Q`
+  hole; the engine lowers rename+vis/qual together). Qualifiers span
+  `const`/`async`/`unsafe`/`extern ["ABI"]` (WI-5-R1). Multi-line headers
+  classify on the first line (WI-5-R3; post-name first-line tails
+  token-equal, the joint probe owns the remainder). Vetoes: two evolving
+  slots, unknown qualifier tokens, self-referential vis, indented
+  headers, `;` decls, reflowed headers, later-line signature deltas, twin
+  defs (counted over every vis/qual spelling), unbalanced sections,
+  missing pre-images.
+  History (WI-5-R2 bare-item rename+vis joint, same detector;
+  `struct`/`enum`/`trait`/`union`/`type`/`const`/`static`): def pair with
+  name + exactly one closed-set vis step + ≥1 claimable use emits the
+  follow hunk with the concrete evolved pair (generics/bodies/attrs
+  preserved). `mod` joints decline (WI-15c owns mod intents);
+  qualifier-bearing lines, same-name vis evolution, vis+attr doubles,
+  unknown/self-referential vis, and suffix (generics/`where`/body-shape)
+  deltas stay ordinary (multi-line bare headers classify on the first
+  line when the suffix is token-equal).
 - Joint `impl Trait for Type` raising (WI-3, WI-3b, detector `item_joint_impl`):
   exactly one `trait` definition rename pair plus exactly one self-type
   definition rename pair (`struct`/`enum`/`union`/`type` alias with equal
   RHS) plus exactly one composed `impl` header pair (`impl OldTr for
-  OldTy<sfx>` → `impl NewTr for NewTy<same sfx>`, each side either a
-  single unqualified ident or a qualified path with a byte-equal prefix
-  and a renamed tail; a generic `impl<…>` prefix composes when byte-equal
-  across the pair, WI-12 slice 4) in one file, plus zero or more
-  follow-use lines (each renaming at least one full half
+  OldTy<sfx>` → `impl NewTr for NewTy<same sfx>`, each side a single
+  unqualified ident or a qualified path with byte-equal prefix and renamed
+  tail; a byte-equal generic `impl<…>` prefix composes) in one file, plus
+  zero or more follow-use lines (each renaming at least one full half
   ident-boundary, no dedicated call-callee/macro-head position, no
   def-shaped third delta — the `extra_claimable` gate), compresses to
   two hunks under one shared rule (`# sweep` + `# follow=uses` each,
-  trait pair first per the def-before-member law). The composed header
-  and the extras are never stated: the two follows rewrite them at
-  apply time. Totality is the D13 joint scratch-apply probe (composed
-  emission on a `pre` clone must reproduce the plus lines at every
-  claimed site with every other line of every file byte-identical —
-  off-diff same-name uses fail the unchanged leg) plus twin-definition
-  vetoes and the T375 byte-win guard. Cross-file groups (WI-12 slice
-  1) raise the same way with one section per def file sharing the
-  rule (both hunks carry the follow — the composed header needs both
-  halves rewritten); single-section-pure shapes stay with the
-  single-file arm byte-identically. A use-only section mixing claimed
-  and unclaimed pairs declines at section level even across hunks
-  (WI-12 slice 3): a file keeping an ordinary remainder is never
-  Rust-parsed, so no cross-file follow can reach into it — only
-  fully-collapsed (follow-owned) use-only files compose; def files
-  stay pure (any unclaimed pair in a def path vetoes).
-- Rename+body joint (WI-20, `let`-single widened WI-13 slice 1, two-pair widened WI-13 slice 2, three-pair widened WI-13 slice 3, slot-evolution triple widened WI-13 slice 4, detector `fn_joint`): a rename-only header (slices 1–3) or a Joint-A-shaped evolving header (slice 4: evolving ⊆ {vis, qual, params, ret} with params or ret evolving, at most two evolve, generics/where preserved) plus one to three body line pairs (each pair both sides one `syn::Expr`, or both sides one plain same-binder `let` with an init and no attributes, differing text) plus callee-only calls raises to the single follow hunk carrying the header `...` pair plus the raw body pair lines (`- x + 1` / `+ x + 2`, `- let y = 1;` / `+ let y = 2;`); the engine applies the header evolution through the shared splice and each body pair span-scoped inside the renamed body (one `body`-labelled edit per pair, hard `RSMPL_MATCH_CONFLICT` per pair on zero/multiple/out-of-body hits, never a sweep). Non-Joint-A slot evolutions (generics evolution, three slot evolutions, vis-only evolution, B1-shaped arg evolutions), attr deltas, binder-changing `let` pairs (per-pair veto), init-less `let` pairs, four-or-more body pairs, multi-line bodies, and twin in-body hits suppress as today; totality is the same scratch-apply probe plus the byte-win guard. WI-15 slice 1: a body pair the joint declines (binder-changing `let`, init-less `let`) no longer sinks a provable header+calls intent when fused in the def hunk — the def-hunk split (see the Joint-A cell) fires the header+calls as a plain follow hunk with the declined bodies as verbatim leftovers.
+  trait pair first). The composed header and the extras are never stated.
+  History: cross-file groups (WI-12 slice 1) raise the same way with one
+  section per def file sharing the rule (both hunks carry the follow);
+  single-section-pure shapes stay with the single-file arm
+  byte-identically. A use-only section mixing claimed and unclaimed pairs
+  declines at section level even across hunks (WI-12 slice 3) — only
+  fully-collapsed use-only files compose; def files stay pure (any
+  unclaimed pair in a def path vetoes).
+- Rename+body joint (WI-20; `let`-single WI-13 slice 1; two-pair slice 2; three-pair slice 3; slot-evolution triple slice 4; detector `fn_joint`): a rename-only header (slices 1–3) or a Joint-A-shaped evolving header (slice 4: evolving ⊆ {vis, qual, params, ret} with params or ret evolving, at most two evolve, generics/where preserved) + one to three body line pairs (each pair both sides one `syn::Expr`, or both sides one plain same-binder `let` with init and no attributes, differing text) + callee-only calls → the single follow hunk carrying the header `...` pair plus the raw body pair lines; each body pair span-scoped inside the renamed body (one `body`-labelled edit per pair, hard `RSMPL_MATCH_CONFLICT` per pair on zero/multiple/out-of-body hits, never a sweep). Vetoes: non-Joint-A slot evolutions (generics, three slots, vis-only, B1-shaped arg evolutions), attr deltas, binder-changing `let` pairs (per-pair veto), init-less `let` pairs, four-or-more body pairs, multi-line bodies, twin in-body hits. History (WI-15 slice 1 def-hunk split, see Joint-A cell): declined body pairs (binder-changing, init-less) park as verbatim leftovers while header+calls fire as a plain follow hunk.
 - Joint rename+evolution raising (WI-4a, detector `fn_joint`; two-slot
   widened WI-8 slice 1): exactly
   one column-0 `fn`-header pair with a name delta *plus* a params or
-  return slot delta (a pure rename is `item_intent`'s, never joint;
-  a vis-only rename stays the terse intent's too)
+  return slot delta (a pure rename is `item_intent`'s; a vis-only rename
+  stays the terse intent's)
    joined with N-1 call-callee use lines of the old name (bare,
    qualified, turbofish, `let`-wrapped) in the same file — or across
    files (WI-4c: the def in one file with callee-only calls across
    files raises to the same one follow hunk at the def; Joint-B
-   cross-file shapes stay ordinary, see below) — compresses to
+   cross-file shapes stay ordinary) — compresses to
   the single header-pair hunk with `# sweep` + `# follow=uses`, the
-  pair carrying both deltas (`- fn foo(x: i32) { ... }` /
- `+ fn bar(x: u32) { ... }`, native spacing preserved). The vis stays
- in the WI-1 closed set and may now evolve alongside the
- params/return delta (two slots: vis+params, vis+return; the check
- normalizes `syn` pretty spacing, so `pub ( crate )` admits like
- `pub(crate)`); qual/generics/where are
- preserved and a third evolving slot (vis+params+return) vetoes;
- only the call-callee-only class fires (arguments
- token-identical — the follow pass never adds arguments, so a hunk
- claiming otherwise would fail its own probe). Totality is the same
- scratch-apply probe plus the unique-definition guard and the
- byte-win guard. WI-15 slice 1 (def-hunk split): when the def hunk
- fuses the header pair with one to three body statement pairs (each
- side a `syn::Stmt` or `syn::Expr` — binder-changing lets, init-less
- lets, plain expressions) that the body joint declines, the header
- plus call-site pairs still fire as this follow hunk while each body
- pair parks as a tight verbatim leftover hunk in the same section
- (original coordinates; the chain pass may re-harvest admittable
- bodies as singles afterwards). The split needs a Joint-A-shaped or
- rename-only header (rename-only admission is disjoint from
- `item_intent`: it requires a nonempty parked set), at most three
- parked pairs, no attr/doc/item lines in the def hunk, no
- attr-shaped unbalanced hunk in the group, and a reduced callee-only
- claim; B1-shaped headers with in-hunk bodies still suppress
- (slice-2 residue). The parked bytes leave the claimed side of the
- gate while the synthesized header overhead prices emission-side
- under the precision allowance. Claim-then-veto suppresses instead of fragmenting:
-  a joint shape that fails any fire gate (non-single-expr body delta,
-  attr delta, arg-delta
-  calls, generics/where/qual delta, vis-only or triple-slot delta,
-  twin defs, probe or byte-win fail)
+  pair carrying both deltas (native spacing preserved). The vis stays
+  in the WI-1 closed set and may evolve alongside the params/return
+  delta (two slots: vis+params, vis+return; `syn` pretty spacing is
+  normalized, so `pub ( crate )` admits like `pub(crate)`);
+  qual/generics/where are preserved and a third evolving slot
+  (vis+params+return) vetoes; only the call-callee-only class fires
+  (arguments token-identical — the follow never adds arguments).
+  History (WI-15 slice 1 def-hunk split): when the def hunk fuses the
+  header pair with one to three declined body statement pairs (each side
+  a `syn::Stmt`/`syn::Expr`: binder-changing lets, init-less lets, plain
+  expressions), header plus call sites still fire as this follow hunk
+  while each body pair parks as a tight verbatim leftover in the same
+  section (the chain pass may re-harvest admittable bodies as singles
+  afterwards). The split needs a Joint-A-shaped or rename-only header
+  (rename-only admission requires a nonempty parked set), at most three
+  parked pairs, no attr/doc/item lines in the def hunk, no attr-shaped
+  unbalanced hunk in the group, and a reduced callee-only claim;
+  B1-shaped headers with in-hunk bodies still suppress (slice-2 residue);
+  parked bytes leave the claimed side while synthesized header overhead
+  prices emission-side under the precision allowance. Claim-then-veto
+  (no fragmentation): a joint shape failing any fire gate (non-single-expr
+  body delta, attr delta, arg-delta calls, generics/where/qual delta,
+  vis-only or triple-slot delta, twin defs, probe or byte-win fail)
   suppresses its old callee name for each involved file, so the call
-  hunks stay wholly ordinary instead of emitting a rename-claiming
-  sweep over a definition delta they cannot see.
+  hunks stay wholly ordinary instead of emitting a rename-claiming sweep
+  over an unseen definition delta.
 - Joint-B composition raising (WI-4b, detector `fn_joint`): the two
   vetoed classes above that compose under one probe raise as two
   hunks under one shared rule with `# sweep` and no follow. B1
@@ -8284,184 +8253,131 @@ every length and the totals stay the default truth at any size.
   `#[…]` attr add/remove (all other header slots preserved) and every
   call pair is a uniform callee-only site (N≥2, one arity/qualifier/
   turbofish). The whole-composition scratch-apply probe is
-  authoritative (for B2 a splice-aware probe: the attr insertion
-  shifts lines); each fired shape also clears the byte-win guard, and
+  authoritative (for B2 splice-aware: the attr insertion shifts lines);
   N=1 joints suppress (the two-hunk emission never beats the byte-win
-  guard at N=1 — pinned; pre-pass emissions skip per-section
-  re-processing (WI-4d), so N≥2 survival is structural and the
-  unique-single detector never sees the call-template hunk). The
-  composed report is `partial` with the def hunk's orphans naming
-  exactly the sibling call sites (sibling-covered by construction —
-  the agent's next action is the sibling hunk under the same rule).
-   Out of scope (stays ordinary): Joint-B multi-file groups (a
-   cross-file rename+arg-add/attr shape suppresses to ordinary via the
-   involved-path set — the call-template sweep is file-scoped, so no
-   two-section emission; never a fragment — WI-4c), return-plus-
-  arg-add doubles, slot-plus-attr doubles, and hetero call shapes.
+  guard at N=1 — pinned); pre-pass emissions skip per-section
+  re-processing (WI-4d), so N≥2 survival is structural. The composed
+  report is `partial` with the def hunk's orphans naming exactly the
+  sibling call sites (sibling-covered by construction).
+  Out of scope (stays ordinary): Joint-B multi-file groups (the
+  call-template sweep is file-scoped, so no two-section emission; never
+  a fragment — WI-4c), return-plus-arg-add doubles, slot-plus-attr
+  doubles, and hetero call shapes.
 - Mod-intent raising (WI-15c, detector `mod_rename`): exactly one
   `mod old;` → `mod new;` declaration pair (inline `mod old {` bodies
-  decline — there is no file to join) joined with N-1 same-delta
-  `old::` path-use lines (`use crate::old::…`, bare `old::…` uses and
-  expression paths) across one or more files compresses to the single
-  definition hunk with `# sweep` + `# follow=uses`. An accompanying
-  headers-only `rename from/to` section (flat `old.rs`→`new.rs` or
-  `old/mod.rs`→`new/mod.rs` layouts, dirs otherwise equal) is preserved
-  verbatim as the native file-move prelude — it carries no pairs and
-  never counts toward the byte-win guard. Totality is the cross-file
-  scratch-apply probe (def proven plus ≥1 use proven, every other line
-  byte-identical); twin `mod` definitions, missing pre-images,
-  unbalanced sections, basename-mismatched or multiple renames, and
-  mixed proven/unproven sections decline. File/section-pure partial:
-  proven files collapse to the one hunk, unproven files stay ordinary
-  (call-callee and macro-head uses belong to their own detectors and
-  veto the join; the per-section `use_prefix` chain may still compress
-  the unclaimed remainder, each hunk independently totality-checked).
-- Field/variant member rename (WI-9a authored, WI-9b raised single-file, WI-15b raised cross-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes). The plus-instantiation postcondition carries the same span-local posture as item renames (the new ident must appear at the reported spans). Raising (detector `member_rename`): exactly one definition pair plus N-1 use-site lines sharing the ident delta compress to the definition hunk *with* `# follow=uses`; the scratch-apply line-equality probe is the totality (the authored emission applied to the pre-image must reproduce exactly the native plus lines at the changed sites with every other line byte-identical). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto raising (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe and stay ordinary; twin definitions stay ordinary. Single-section shapes raise per section; multi-section / cross-file shapes raise via the whole-patch `member_rename` pre-pass (one def pair joined with same-delta use lines across files, file/section-pure partial: proven files collapse to the one hunk, unproven files stay ordinary, mixed hunks veto the intent (no partial-hunk claim — a def hunk carrying an unclaimable pair declines the whole intent), mixed sections partial (proven hunks collapse, leftover hunks stay verbatim in the same section)). Def-only singles (WI-19b, N = 1 definition pair, no use sites): the definition hunk alone with no `# follow=uses` (a follow would rewrite uses the diff did not touch) in the concrete directive-free spelling, under the precision guard; same container recovery + scratch probe.
-- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised single-file, WI-12 raised cross-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) plus use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). WI-3 emits the single document-first def hunk with `# follow=uses` (WI-1 claims the sibling impl definitions, so one hunk suffices); the scratch-apply line-equality probe is the totality, falling back to one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges, follow on the first) when the single-hunk probe fails. Bare-`Old` spellings, two-trait same-name classes, hetero kinds, and multi-def blocks decline the whole-section follow to ordinary; cross-file intents raise via the whole-patch `assoc_rename` pre-pass (WI-12: K ≥ 1 def pairs across files, one section per def file with one hunk per block sharing the rule, `# follow=uses` on the document-first hunk only; the workspace scratch-apply probe is the totality — an off-diff same-name `::Old` use anywhere vetoes; single-section pure shapes stay with the per-section detector). Def-only singles (WI-19b, N = 1 definition pair, no use sites, no follow, concrete directive-free spelling, precision guard) still compress per hunk with the opaque remainder left ordinary verbatim in the same section (disjoint ranges) — the WI-28 whole-section veto owns the follow intent, not the follow-free def hunk. Detector name `assoc_rename`.
+  decline) joined with N-1 same-delta `old::` path-use lines (`use
+  crate::old::…`, bare `old::…` uses, expression paths) across one or
+  more files compresses to the single definition hunk with `# sweep` +
+  `# follow=uses`. An accompanying headers-only `rename from/to` section
+  (flat `old.rs`→`new.rs` or `old/mod.rs`→`new/mod.rs` layouts, dirs
+  otherwise equal) is preserved verbatim as the native file-move prelude
+  (no pairs, never counts toward the guard). Totality is the cross-file
+  probe (def proven plus ≥1 use proven). Vetoes: twin `mod`
+  definitions, missing pre-images, unbalanced sections,
+  basename-mismatched or multiple renames, mixed proven/unproven
+  sections. File/section-pure partial (shared law); call-callee and
+  macro-head uses veto the join (their own detectors), while the
+  per-section `use_prefix` chain may still compress the unclaimed
+  remainder.
+- Field/variant member rename (WI-9a authored, WI-9b raised single-file, WI-15b raised cross-file; WI-14 anchored follow): a `struct S {` / `enum E {` context header plus a member pair (`- old: T` / `+ new: T` with equal types; bare `- Old` / `+ New` with equal suffixes); the new ident must appear at the reported spans (span-local postcondition, as item renames). Raising (detector `member_rename`): exactly one definition pair + N-1 use-site lines sharing the ident delta → the definition hunk *with* `# follow=uses` (shared probe). The probe runs the WI-14 anchored follow, so sibling same-named definitions no longer veto (unproven uses fail the probe instead); bare-`Old` without a glob anchor, qself paths, and macro interiors fail the probe; twin definitions stay ordinary (shared laws otherwise). Def-only singles (WI-19b, N = 1, no use sites): the follow-free concrete spelling under the precision guard.
+- Associated-item rename (WI-13 slice 1 authored, WI-27 follow, WI-28 raised single-file, WI-12 raised cross-file): K ≥ 1 `type`/`const` definition pairs in `trait`/`impl` blocks (one per block, same kind and ident delta) + use-site lines sharing the delta through a `::Old` tail (`Self::Old`, `S::Old`, `Tr::Old`, `<S as Tr>::Old`). WI-3 emits the single document-first def hunk with `# follow=uses` (WI-1 claims the sibling impl definitions), falling back to one hunk per enclosing block (verbatim headers, shared rule, covering-block ranges, follow on the first) when the single-hunk probe fails. Vetoes: bare-`Old` spellings, two-trait same-name classes, hetero kinds, multi-def blocks; cross-file via the whole-patch `assoc_rename` pre-pass (WI-12: K ≥ 1 def pairs across files, one section per def file with one hunk per block sharing the rule, follow on the document-first hunk only; an off-diff same-name `::Old` use anywhere vetoes). Def-only singles (WI-19b, N = 1, no follow, concrete spelling, precision guard) still compress per hunk with the opaque remainder left ordinary verbatim in the same section — the WI-28 whole-section veto owns the follow intent, not the follow-free def hunk. Detector name `assoc_rename`.
 - Pair partition: N ≥ 2 `-`/`+` pairs in a whole balanced section whose
   pair chain declined (heterogeneous deltas share no template) but
-  every pair is a single-pair item rename above (including the plain
-  `fn` arm, whose gates apply per pair) or a single-delta `impl`
-  header rename below (WI-19c: self-ty `impl Old` → `impl New` with no
-  `for`, or trait-side `impl OldTr for SameTy` → `impl NewTr for
-  SameTy` with the self-ty byte-equal; a byte-equal `impl<…>` generic
-  prefix and byte-equal-prefix qualified trait tails compose like the
-  bare header; the double-delta line, both
-  sides changed, is never a single). Nested `struct`/`enum`/`union`/
-  `mod` items (mod-nested, block-level) classify like top-level ones
+  every pair is a single-pair item rename above (the plain `fn` arm's
+  gates apply per pair) or a single-delta `impl` header rename (WI-19c:
+  self-ty `impl Old` → `impl New` without `for`, or trait-side `impl
+  OldTr for SameTy` → `impl NewTr for SameTy` with byte-equal self-ty; a
+  byte-equal `impl<…>` prefix and byte-equal-prefix qualified trait tails
+  compose; a both-sides-changed double-delta line is never a single).
+  Nested `struct`/`enum`/`union`/`mod` items classify like top-level ones
   (WI-19c: leading whitespace tolerated; the bare spelling is
-  indent-insensitive in the engine); indented `fn` lines are methods
-  (slot sweep owns them) and indented `type`/`const`/`static`/
-  `macro_rules!` lines stay with their own detectors. All-or-nothing:
-  one unclaimable pair vetoes the whole section (a mixed hunk stays
-  ordinary whole, never half-semantic), as do duplicate minus lines
-  (identical pairs belong to the verbatim sweep). Emission is one file
-  section with one hunk per pair (per-pair covering ranges, positional
-  `rN` rules; distinct deltas never group; nested-item ranges may nest
-  inside their enclosing-item ranges — edits are disjoint spans, so
-  nesting is sound under Section 10.6). The section-level byte-win
-  guard applies (the combined section must beat the ordinary section);
-  a losing partition falls back to the per-hunk path. Detector name
-  `item_rename`.
+  indent-insensitive); indented `fn` lines are methods (slot sweep owns
+  them) and indented `type`/`const`/`static`/`macro_rules!` lines stay
+  with their own detectors. All-or-nothing: one unclaimable pair vetoes
+  the whole section (a mixed hunk stays ordinary whole), as do duplicate
+  minus lines (verbatim territory). Emission is one file section with one
+  hunk per pair (per-pair covering ranges, positional `rN` rules;
+  distinct deltas never group; nested-item ranges may nest inside
+  enclosing-item ranges — disjoint spans, sound under Section 10.6). The
+  section-level byte-win guard applies; a losing partition falls back to
+  the per-hunk path. Detector name `item_rename`.
 - Partial partition (WI-19): the all-or-nothing gate above is kept
   per native hunk, not per section. When ≥ 1 hunk is fully claimable
-  (every pair in it a single-pair item rename or WI-19c `impl` single
-  under the same duplicate/totality gates) and ≥ 1 hunk is not, the
-  section emits the claimed hunks as semantic per-pair hunks and keeps
-  the rest ordinary verbatim in the same file section (hunk ranges are
-  disjoint, so mixing is sound under Section 10.6). A single mixed
-  native hunk splits per the WI-4 sub-hunk law below; what remains a
-  non-goal is splitting a single pair across two semantics, regrouping
-  non-adjacent same-class pairs, and splitting container-joint shapes.
-   Guard is the scaled precision guard (semantic ≤ ordinary
-   + 16 × claimed pairs). Detector name `item_rename`.
+  (every pair a single-pair item rename or WI-19c `impl` single) and ≥ 1
+  hunk is not, the section emits the claimed hunks as semantic per-pair
+  hunks and keeps the rest ordinary verbatim (disjoint ranges; sound
+  under Section 10.6). A single mixed native hunk splits per the WI-4
+  sub-hunk law below; splitting a single pair, regrouping non-adjacent
+  same-class pairs, and splitting container-joint shapes stay non-goals.
+  Scaled precision guard (semantic ≤ ordinary + 16 × claimed pairs).
+  Detector name `item_rename`.
  - Sub-hunk partition (WI-4): a single balanced native hunk with N ≥ 2
    pairs whose whole-hunk detectors decline splits at detector-class
    boundaries. Maximal contiguous runs of one single-pair classification
-   (the detector the shared chain picks for the pair alone, proven
-   without reserving rules) are each offered to the shared chain —
-   whole multi first, then per-pair singles, all-or-nothing per run —
-   while runs that decline stay ordinary verbatim in place (document
-   order preserved, never reordered; hunk ranges are disjoint, so mixing
-   is sound under Section 10.6). An all-unproven run may still split
-   into two firing multi halves (bounded split-search, both halves ≥ 2
-   pairs, no recursion). An interleaved key (A B A) vetoes the whole
-   hunk (order is never manufactured); duplicate minus lines veto
-   (verbatim territory); duplicate emitted minus patterns veto (terse
-   shapes would overlap-match); any suppressed-callee mention vetoes
-   (WI-4a suppression posture); a `struct`/`enum` rename beside a member
-   line of that same container vetoes, proven by the carrier
-   exactly-one-container law (WI-5/WI-21 joint territory is never
-   split). Totality is the D13 composed scratch-apply (the emission
-   applied to a `pre` clone must reproduce the native post tree
-   byte-identically) plus the scaled precision guard (semantic ≤
-   ordinary + 16 × claimed pairs). `None` pre-image stays ordinary.
-   Detector names are the firing groups' own (provenance one entry per
-   semantic hunk); diffrs fixture `129-subhunk-partition-fires`.
-   Stranded-use veto (WI-5 slice 2a): when a native hunk holds both an
-   evolution pair (any `definition_evolution` shape) and the rename's
-   use while the definition sits in another hunk, the whole section
-   stays ordinary — the bare definition single would otherwise claim
-   the rename while an ordinary hunk rewrites the stranded use (the
-   item analogue of the WI-4 claim-then-veto suppression). Pure
-   definition + pure evolution hunks (no stranded use) still partition;
+   are each offered to the shared chain (whole multi first, then
+   per-pair singles, all-or-nothing per run); declining runs stay
+   ordinary verbatim in place (document order preserved; disjoint
+   ranges). An all-unproven run may still split into two firing multi
+   halves (bounded split-search, both halves ≥ 2 pairs, no recursion).
+   Vetoes: interleaved keys (A B A), duplicate minus lines (verbatim
+   territory), duplicate emitted minus patterns (terse overlap), any
+   suppressed-callee mention (WI-4a), a `struct`/`enum` rename beside a
+   member line of that container (WI-5/WI-21 joint territory; carrier
+   exactly-one-container law). Shared D13 probe + scaled precision guard;
+   `None` pre-image stays ordinary. Detector names are the firing
+   groups' own; fixture `129-subhunk-partition-fires`.
+   History (WI-5 slice 2a stranded-use veto): a hunk holding both an
+   evolution pair and the rename's use while the definition sits in
+   another hunk keeps the whole section ordinary (the bare def single
+   would otherwise claim the rename while an ordinary hunk rewrites the
+   stranded use); pure definition + pure evolution hunks still partition;
    `fn` definitions never trigger this veto.
-    Struct rename + field-type joint (WI-5 slice 2b, first): a def hunk
-    holding the `struct` rename plus exactly one attached field-type
-    evolution pair (same file/section, field's pre-image carrier is the
-    renamed struct) plus claimable uses (in any file — WI-12 slice 5:
-    the follow is workspace-wide and the D13 probe counts every touched
-    file; the member itself stays same file/section by the container
-    law) raises as one follow hunk with
-    the member pair below the def pair, proved by the one scratch-apply
-    probe (D13) under strict T375. Two evolutions, another container's
-    evolution, field-type lines beside an enum rename (cross-kind),
-    variant lines beside a struct rename (cross-kind), and alias/const
-    shapes never joint; multi-addition insertions never joint (field or
-    variant); a member in another file than its container cannot joint
-    (container law non-goal). Field-addition joints raise per
-    2b-next2b-first, variant-addition joints per 2b-next2b-next.
-    Struct rename + field-deletion joint (WI-21 slices 1 + 3): a def
-    hunk holding the `struct` rename plus exactly one attached
-    field-deletion line (same file/section — either a distant
-    pure-deletion hunk or a hunk adjacent to the def change; the
-    holder's pre-image carrier is the renamed struct) plus claimable
-    uses (in any file — WI-12 slice 2: the follow is workspace-wide and
-    the D13 probe counts every touched file, so a touched file leaving
-    an `Old` use unrewritten vetoes the joint) raises as a shared-rule
-    two-hunk emission (the field-deletion
-    hunk naming the old container, then the terse rename follow hunk),
-    proved by the one multi-file full-post probe (D13) under strict
-    T375; diffrs fixture `142-struct-rename-field-delete-fires`. Uses
-    of the deleted field the native leaves untouched surface as
-    `off-target`/`shadowed`/`second-hop`/`macro-hidden` orphans of the
-    deletion hunk (capping at `partial`); uses the native
-     deletes/rewrites fail the probe and the joint declines. Two
-     deletions and attr+deletion combos never joint-fire (slice 5,
-     probed): distant deletions partition — the rename/attr joint
-     still fires alone with the deletions riding one ordinary
-     remainder hunk (stranded lines in remainder sites) — while
-     adjacent multi-deletion hunks stay wholly ordinary via the
-     shape-B trap. Cross-kind members (WI-21 slice 4): a field-shaped
-    deletion under an `enum` rename, or a variant-shaped deletion under a
-    `struct` rename, vetoes the joint AND suppresses the bare rename single —
-    the section stays wholly ordinary with the stranded delta named in declined
-    provenance (`section` / `cross-kind-member`, sites carry the deletion line).
-    Enum rename + variant-deletion joint (WI-21 slices 2 + 3): a def
-    hunk holding the `enum` rename plus exactly one attached
-    variant-deletion line (same file/section — either a distant
-    pure-deletion hunk or a hunk adjacent to the def change; the
-    holder's pre-image carrier is the renamed enum) plus claimable uses
-    (in any file — WI-12 slice 2: same workspace follow and D13 probe
-    law as the struct half; a touched file leaving an `Old` use
-    unrewritten vetoes the joint) raises as a shared-rule two-hunk
-    emission (the variant-deletion
-    hunk naming the old container, then the terse rename follow hunk),
-    proved by the one multi-file full-post probe (D13) under strict
-    T375; diffrs fixture `143-enum-rename-variant-delete-fires`. Same
-    orphan law as the struct half (a rewritten `Old::B` → `New::B`
-    pair rides as a claimable rename use; the dangling `New::B`
-     orphans). Two deletions and attr+deletion combos never
-     joint-fire: same partition law as the struct half (slice 5;
-     cross-kind suppression above).
-    Enum rename + variant-evolution joint (WI-5 slice 2b-next, first):
-    the enum half of the same law — a def hunk holding the `enum`
-    rename plus exactly one attached variant-evolution pair (tuple
-    payload with equal arity and ≥1 differing type, struct payload with
-    equal field names and ≥1 differing type, or discriminant with
-    differing exprs; same file/section, variant's pre-image carrier is
-    the renamed enum) plus claimable uses (in any file — WI-12 slice 5:
-    workspace-wide follow like the struct half; the member itself stays
-    same file/section by the container law) raises as one follow hunk
-    with the member pair below the def pair, proved by the one
-    scratch-apply probe (D13) under strict T375. At most one joint fires
-    per def hunk (attr, field, and variant joints are mutually
-    exclusive). Bare variant renames, field-type lines, another
-    container's evolution, two evolutions, and alias/const shapes never
-    joint; multi-addition insertions never joint (field or variant);
-    a member in another file than its container cannot joint (container
-    law non-goal). Single-addition joints raise per 2b-next2b-first
-    (field) and 2b-next2b-next (variant).
+   History (struct rename + field-type joint, WI-5 slice 2b): def hunk
+   with the `struct` rename + exactly one attached field-type evolution
+   pair (same file/section; carrier is the renamed struct) + claimable
+   uses (any file — WI-12 slice 5 workspace-wide follow; the member
+   stays same file/section by the container law) → one follow hunk with
+   the member pair below the def pair, one D13 probe, strict T375. Never
+   joint: two evolutions, another container's evolution, cross-kind
+   member lines, alias/const shapes, multi-addition insertions,
+   cross-file members. Field-addition joints per 2b-next2b-first,
+   variant-addition per 2b-next2b-next.
+   History (struct rename + field-deletion joint, WI-21 slices 1+3):
+   def hunk + exactly one attached field-deletion line (same
+   file/section: distant pure-deletion or adjacent hunk; carrier is the
+   renamed struct) + claimable uses (any file — WI-12 slice 2 workspace
+   follow; a touched file leaving an `Old` use unrewritten vetoes) →
+   shared-rule two-hunk emission (deletion hunk naming the old container,
+   then the terse rename follow), one multi-file full-post D13 probe,
+   strict T375; fixture `142-struct-rename-field-delete-fires`.
+   Untouched uses of the deleted field surface as orphans
+   (`off-target`/`shadowed`/`second-hop`/`macro-hidden`, capping at
+   `partial`); deleted/rewritten uses fail the probe. Two deletions and
+   attr+deletion combos never joint-fire (distant deletions partition
+   with the joint firing alone + one ordinary remainder; adjacent
+   multi-deletion hunks stay wholly ordinary via the shape-B trap).
+   History (cross-kind members, WI-21 slice 4): a field-shaped deletion
+   under an `enum` rename (or variant-shaped under `struct`) vetoes the
+   joint AND suppresses the bare rename single — wholly ordinary with
+   the stranded delta in declined provenance
+   (`section`/`cross-kind-member`).
+   History (enum rename + variant-deletion joint, WI-21 slices 2+3):
+   same law as the struct-deletion half (carrier is the renamed enum;
+   fixture `143-enum-rename-variant-delete-fires`; a rewritten `Old::B`
+   → `New::B` pair rides as a claimable rename use, the dangling
+   `New::B` orphans; same two-deletion/attr-combo partition law).
+   History (enum rename + variant-evolution joint, WI-5 slice 2b-next):
+   def hunk + exactly one attached variant-evolution pair (tuple payload
+   equal arity with ≥1 differing type; struct payload equal field names
+   with ≥1 differing type; differing discriminant exprs; same
+   file/section; carrier is the renamed enum) + claimable uses (any
+   file, WI-12 slice 5) → one follow hunk with the member pair below the
+   def pair, one D13 probe, strict T375. At most one joint per def hunk
+   (attr, field, variant joints mutually exclusive). Never joint: bare
+   variant renames, field-type lines, another container's evolution, two
+   evolutions, alias/const shapes, multi-addition insertions, cross-file
+   members. Single-addition joints per 2b-next2b-first (field) and
+   2b-next2b-next (variant).
 - Slot sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header (`syn`-validated as `ItemFn`/`ImplItemFn`)
   differing in exactly the fn ident (per-site vis/qual/generics/
@@ -8470,31 +8386,26 @@ every length and the totals stay the default truth at any size.
   free-fn sweep (`- V Q fn Old G (...) W {` /
   `+ V Q fn New G (...) W {`); uniformly indented sites emit one
   hunk per enclosing `impl` block with the block's verbatim header
-  line from the pre-image (Section 13.4: the engine filter matches
-  only the named block), all sharing one positional rule (`rN`)
+  line from the pre-image, all sharing one positional rule (`rN`)
   within the section (cross-file intents share `rename_Old_to_New`
-  after WI-7 grouping); each hunk clears its own engine probe
-  (twin headers veto to
-  ordinary). Mixed indent or divergent deltas stay
-   passthrough. The slot sweep is the zero-delta (rename-only) special
-   case of the signature-evolution sweep below; both detectors run, slot
-   first, and rename-only classes never reach evolution.
-   Rename-only header singles (WI-19b, N = 1): a lone
-   vis-prefixed / generic / `->` / `where` header pair the terse
-   item-rename declines compresses to the same sweep spelling under
-   the precision guard. Same `slot_holds` totality; a pre-image is
-   required (the wide wildcard minus has no section-visible
-   evidence without an occurrence count).
-  One-line (`}`-terminated, brace-balanced by whole-item parse,
-  rename-only with byte-identical body) lone method definitions in
-  `impl` blocks — and lone default-body definitions in `trait` blocks
-  (WI-6 slice 2, same spelling with the verbatim trait header as the
-  filter) — compress instead to the compact filtered single
-  (verbatim filter header plus one inline-body
-  `V Q fn Old G (...) W { ... }` pair, no frame, no directives)
-  under the same guard with the four-guard filter-block budget; the
-  file-wide count degrades to the opaque-only veto there (the filter
-  names the block), proved by a scratch-apply of the exact emission.
+  after WI-7 grouping; per-hunk engine probes — shared laws otherwise).
+  Mixed indent or divergent deltas stay passthrough. The slot sweep is
+  the rename-only special case of the signature-evolution sweep below;
+  both detectors run, slot first, and rename-only classes never reach
+  evolution.
+  History (rename-only header singles, WI-19b, N = 1): a lone
+  vis-prefixed / generic / `->` / `where` header pair the terse
+  item-rename declines compresses to the same sweep spelling under the
+  precision guard (same `slot_holds` totality; a pre-image is required —
+  the wide wildcard minus has no section-visible evidence).
+  History (one-line compact single): lone `}`-terminated rename-only
+  method definitions in `impl` blocks — and lone default-body
+  definitions in `trait` blocks (WI-6 slice 2, verbatim trait header as
+  filter) — compress to the compact filtered single (verbatim filter
+  header plus one inline-body `V Q fn Old G (...) W { ... }` pair, no
+  frame, no directives) under the same guard with the four-guard
+  filter-block budget; the file-wide count degrades to the opaque-only
+  veto there (the filter names the block).
 - Signature-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   `{`-terminated fn header, where the name plus any of
   vis/qualifiers/generics/params/return/where carry one uniform delta
@@ -8505,152 +8416,121 @@ every length and the totals stay the default truth at any size.
   (`V`/`Q`/`G`/`W`, params `(...)`, return omitted = `Any`); hetero
   evolving bases wildcard the minus side while the plus side sets the
   slot wholesale; removals emit minus-concrete/plus-omitted. Two
-  engine-spelling laws are enforced at emission: `V`/`Q` only ever
-  appear as the pair (a lone `V`/`Q` is inference-ambiguous and
-  concrete+wildcard mixes are rejected), and a concrete plus-side
-  return drops the `where` wildcard (`-> T W` is unparsable — the
-   minus side keeps `W` and widens the return to omission instead).
-   Divergent plus sides and hetero-base removals stay ordinary (the
-   engine's slots are all-or-nothing: `...`, concrete, or omitted).
-   Pre-image totality is the generic engine-count check: the emitted
-   minus header must match exactly N fn items in the pre-image
-   (macro/string twins never count — the engine never enters them);
-   indented classes emit one verbatim-header hunk per enclosing `impl`
-   block, each probed separately. Detector name `sig_evolution`.
-   The signature-evolution detector owns shared-name classes (one
-   uniform name delta plus slot deltas); hetero-name slot-only
-   classes belong to the header-evolution sweep below — the two are
-   disjoint by construction (uniform names vs hetero preserved names).
-     Vis/qual/return evolution singles (WI-19b, N = 1, WI-14 slice 3):
-     a lone vis/qual-evolving header pair compresses as a precision
-     single (uniform-by-construction) under default `one` (no
-     `# allow=many`: exactly-one-set proof via the engine-count probe).
-     Empty preserved long slots stay concrete (`()`/omission, never
-     `G (...) W` — the diet fix for short headers); non-empty preserved
-     longs keep the wildcard (concrete pretty-printing would re-render
-     types like `&str`/`Option<String>` and fail the byte-compare) with
-     the `-> T W` law unchanged (a preserved return keeps the minus
-     omission plus `W`). Single-line `}`-terminated items parse via
-     their header prefix (text up to the first `{`); the scaffold
-     emission rewrites the header only (engine preserves the body
-     verbatim, including single-line bodies). A lone
-     params/generics/where evolution stays ordinary — the sig
-     rewrite would re-render the type with pretty spacing (`Box<[i32]>`
-     to `Box <[ i32 ]>`, 117 precedent), so those shapes belong to the
-     type-sweep family (strict N ≥ 2) instead — except a lone
-     single-type-delta line, which raises as a WI-2 bare-type literal
-     single (`- Vec<i32>` / `+ Box<[i32]>`, exactly-one-type-subterm
-     proof) rather than through the sig rewrite. A vis evolution joined
-     with a formatting-stable return evolution (WI-2 slice 3: both
-     return texts single-token, e.g. `-> i32` → `-> i64`, 113 shape —
-     composite returns decline and ride the bare-type single instead),
-     and a lone formatting-stable return evolution, raise as precision
-     singles likewise (the evolving return rides concrete on both
-     sides; omitted-return twins veto via the engine-count totality).
-     Tree-canonical equality unifies the authored bare-minus spelling
-     (`- fn helper(...)`) with the inferred concrete-minus spelling
-     (`- fn helper(...) -> i32`) under the D17 single-site + re-prove
-     discipline (WI-1s1 return-slot arm): wide-range bare templates
-     proving two same-name sites stay divergent. An N = 1 sig single
-     requires a pre-image (same wide-minus doctrine as the slot sweep).
-     Method (indented) N = 1 vis/qual/return singles emit the canonical
-    verbatim-header block hunk and pay a 64-byte method-run price (four
-    guards) for the mandatory WI-4a filter block (a proof anchor, D10,
-    not bloat): the whole-section arm allows 32 over its
-    prelude-carrying section, the per-hunk fallback allows 64 over the
-    bare pair hunk (measured ~41: filter + rule tag), and the subhunk
-    scaled guard prices three extra guards per method run beyond its
-    base (extra header + filter + tag, ~53 measured). Each budget prices
-    the verbatim filter header per emission: headers longer than the
-    measured baseline (`impl Svc {`) contribute exactly their surplus,
-    so a long enclosing block never vetoes a proved single on bytes
-    alone. Totality is the
-    engine-count check plus the scratch-apply byte-compare in every
-    path, so mixed-section method singles fire beside ordinary or
-    other-class pairs; in-scope twins, params/generics/where-involving
-    two-slots, and trait-context vis deltas still decline.
-    Bare-item N = 1 vis singles (`struct S;` → `pub struct S;`,
-    same kind/name/suffix, closed-set vis step; `fn` rides the sig sweep,
-    `mod` stays ordinary, `impl`/`macro_rules!` take no visibility) raise
-    as the concrete directive-free terse pair (`- struct S` /
-    `+ pub struct S`, bare like renames — the engine preserves
-    generics/body/RHS) under default `one` and the 16-byte precision
-    guard; totality is the scratch-apply byte-compare probe, so the
-    hunk claims only its covered site. Bare-item N ≥ 2 vis sweeps (one
-    uniform closed-set vis step over same-kind items with per-site
-    preserved names and suffixes; divergent plus sides, two-slot pairs,
-    mixed kinds, and duplicate minus lines decline) raise as a single
-    N-holed terse pair (`- struct N` / `+ pub struct N`) under
-    `# allow=many`; the engine binds each name per site and replays it
-    while rewriting the vis slot, and totality is the same scratch-apply
-    probe at N sites (an in-scope twin vetoes to singles). Same-hole
-    visibility evolution is allowed in authored patches (`- struct N` /
-    `+ pub struct N`); differing holes stay a pattern error (rename+vis
-    joints with holes are concrete-only).
+  engine-spelling laws at emission: `V`/`Q` only ever appear as the pair
+  (a lone `V`/`Q` is inference-ambiguous; concrete+wildcard mixes
+  rejected), and a concrete plus-side return drops the `where` wildcard
+  (`-> T W` is unparsable — the minus side keeps `W` and widens the
+  return to omission). Divergent plus sides and hetero-base removals stay
+  ordinary (slots are all-or-nothing: `...`, concrete, or omitted).
+  Pre-image totality is the generic engine-count check: the emitted
+  minus header must match exactly N fn items (macro/string twins never
+  count); indented classes emit one verbatim-header hunk per enclosing
+  `impl` block, each probed separately. The detector owns shared-name
+  classes (one uniform name delta plus slot deltas); hetero-name
+  slot-only classes belong to the header-evolution sweep below — disjoint
+  by construction. Detector name `sig_evolution`.
+  History (vis/qual/return evolution singles, WI-19b N = 1, WI-14 slice
+  3): a lone vis/qual-evolving header pair compresses as a precision
+  single (uniform-by-construction) under default `one` (exactly-one-set
+  proof via the engine-count probe). Empty preserved long slots stay
+  concrete (`()`/omission, never `G (...) W`); non-empty preserved longs
+  keep the wildcard (concrete pretty-printing would re-render types and
+  fail the byte-compare) with the `-> T W` law unchanged. Single-line
+  `}`-terminated items parse via their header prefix (text up to the
+  first `{`); the scaffold emission rewrites the header only. A lone
+  params/generics/where evolution stays ordinary — the sig rewrite would
+  re-render the type with pretty spacing, so those shapes belong to the
+  type-sweep family (strict N ≥ 2) — except a lone single-type-delta
+  line, which raises as a WI-2 bare-type literal single (`-
+  Vec<i32>` / `+ Box<[i32]>`, exactly-one-type-subterm proof). A vis
+  evolution joined with a formatting-stable return evolution (WI-2 slice
+  3: both return texts single-token, e.g. `-> i32` → `-> i64`; composite
+  returns decline and ride the bare-type single instead), and a lone
+  formatting-stable return evolution, raise as precision singles likewise
+  (return rides concrete on both sides; omitted-return twins veto via
+  the engine-count totality). Tree-canonical equality unifies the
+  authored bare-minus spelling (`- fn helper(...)`) with the inferred
+  concrete-minus spelling (`- fn helper(...) -> i32`) under the D17
+  single-site + re-prove discipline (WI-1s1 return-slot arm):
+  wide-range bare templates proving two same-name sites stay divergent.
+  An N = 1 sig single requires a pre-image (same wide-minus doctrine as
+  the slot sweep). Method (indented) N = 1 vis/qual/return singles emit
+  the canonical verbatim-header block hunk and pay a 64-byte method-run
+  price (four guards) for the mandatory WI-4a filter block (shared D10
+  proof anchor): the whole-section arm allows 32 over its
+  prelude-carrying section, the per-hunk fallback 64 over the bare pair
+  hunk, and the subhunk scaled guard three extra guards per method run;
+  headers longer than the measured baseline contribute exactly their
+  surplus, so a long enclosing block never vetoes a proved single on
+  bytes alone. Totality is the engine-count check plus the scratch-apply
+  byte-compare in every path, so mixed-section method singles fire beside
+  ordinary or other-class pairs; in-scope twins, params/generics/where
+  two-slots, and trait-context vis deltas still decline.
+  History (bare-item N = 1 vis singles): `struct S;` → `pub struct S;`
+  (same kind/name/suffix, closed-set vis step; `fn` rides the sig sweep,
+  `mod` stays ordinary, `impl`/`macro_rules!` take no visibility) raises
+  as the concrete directive-free terse pair under default `one` and the
+  16-byte precision guard (scratch-apply byte-compare probe, claims only
+  its covered site). Bare-item N ≥ 2 vis sweeps (one uniform closed-set
+  vis step over same-kind items with per-site preserved names and
+  suffixes; divergent plus sides, two-slot pairs, mixed kinds, duplicate
+  minus lines decline) raise as a single N-holed terse pair (`- struct
+  N` / `+ pub struct N`) under `# allow=many` (engine binds each name
+  per site; an in-scope twin vetoes to singles). Same-hole visibility
+  evolution is allowed in authored patches; differing holes stay a
+  pattern error (rename+vis joints with holes are concrete-only).
 - Header-evolution sweep: N ≥ 2 `-`/`+` pairs, each a single-line
    `{`-terminated fn header, where every name is preserved per site
-   (`minus name == plus name`) but names differ across sites (≥ 2
-   distinct), and exactly one non-name slot
-   (vis/qualifiers/generics/params/return/where) carries one uniform
-   delta. Slot classification and emission ride the
-   signature-evolution laws above (concrete uniform bases,
-   wildcarded hetero bases, the `V Q` pairing rule, the
-   `-> T W` fixup). The header sweep keeps N ≥ 2 (every N = 1
-   name-preserving evolution is the sig sweep's concrete-name
-   class below); the emitted name is the WI-5 name hole
-   `N` (`- fn N(...) {` / `+ pub fn N(...) {`). Zero evolving slots
-   is nothing to raise; two or more stay ordinary (never
-   half-claimed under one rule); any name delta stays with the
+   but names differ across sites (≥ 2 distinct), and exactly one
+   non-name slot (vis/qualifiers/generics/params/return/where) carries
+   one uniform delta. Slot classification and emission ride the
+   signature-evolution laws above. The header sweep keeps N ≥ 2 (every
+   N = 1 name-preserving evolution is the sig sweep's concrete-name
+   class); the emitted name is the WI-5 name hole `N` (`- fn N(...) {` /
+   `+ pub fn N(...) {`). Zero evolving slots is nothing to raise; two or
+   more stay ordinary (never half-claimed); any name delta stays with the
    rename/evolution siblings. Trait-context `vis` deltas decline at
-   emission (`pub` is illegal in traits). Pre-image totality is the
-   same engine-count check over the `N`-holed minus header (free fns)
-   or per-`impl`-block probes (methods) — an untouched same-shape
-   header vetoes to ordinary. Detector name `header_evolution`.
+   emission (`pub` is illegal in traits). Pre-image totality is the same
+   engine-count check over the `N`-holed minus header (free fns) or
+   per-`impl`-block probes (methods) — an untouched same-shape header
+   vetoes. Detector name `header_evolution`.
 - Attribute-delta sweep: N ≥ 1 pure-attr hunks (bare `+#[...]`
   insertions, bare `-#[...]` deletions, or balanced attr-line
   replacements) sharing one uniform attr-line delta over hetero items.
-  Owners come from the pre-image (`syn` walk: the innermost item
-  containing the changed line, or the line after an insertion point);
-  `None` pre-image, method/`impl` owners, mixed attr+code hunks, and
-  multi-line attr spellings decline. Emission is one hunk per class in
-  the WI-10a authored spelling with header tiers for fns (bare
-  `- fn N(...) {`, then `- fn N(...) W {`, then the full
-  `- V Q fn N G (...) W {` wildcard set) and bare pairs for items
-  (`- struct N`); hetero names ride `N`, uniform names stay concrete.
-  Pre-image totality is the scratch-apply byte-compare probe: the
-  emitted hunk must apply to the pre-image with `matches == class
-  size` and reproduce byte-identically the result of applying the
-  claimed ordinary hunks (count equality alone can coincide wrongly).
-    Per-class T375 (each body beats its covered hunks); N = 1 fires
-    under the precision posture (`body <= ordinary + 16` — the
-    definition-shape guard, WI-19b doctrine: the concrete owner header
-    anchors the single site and the probe demands `matches == 1`, so
-    proof replaces bytes; Fn-family singles stay ordinary on bytes).
-    The whole-balanced single-pair replace rides the chain whole-block
-    single-pair arm (same guard over the full section, prelude
-    included); N = 1 emits the ranged owner-span diet (`@@ -s,len @@`
-    with no directive — default `one` over the `syn` owner span, which
-    always contains both the changed attr and the owner header), never
-    the sweep dummy (whose 8 bytes kept the live short-hunk section 1
-    byte over the guard); the sweep-based probe (`matches == 1`) still
-    proves it, conservatively vetoing same-name twins.
-   A losing class declines alone, never vetoing a winning one.
-   Detector name `attr_sweep`.
+  Owners come from the pre-image (`syn` walk: innermost item containing
+  the changed line, or the line after an insertion point); `None`
+  pre-image, method/`impl` owners, mixed attr+code hunks, and multi-line
+  attr spellings decline. Emission is one hunk per class in the WI-10a
+  authored spelling with header tiers for fns (bare `- fn N(...) {`,
+  then `- fn N(...) W {`, then the full `- V Q fn N G (...) W {`
+  wildcard set) and bare pairs for items (`- struct N`); hetero names
+  ride `N`, uniform names stay concrete. Totality is the scratch-apply
+  byte-compare probe (`matches == class size`, post-tree
+  byte-identical — count equality alone can coincide wrongly).
+  Per-class T375; N = 1 fires under the precision posture (`body ≤
+  ordinary + 16` — definition-shape guard, WI-19b doctrine: the concrete
+  owner header anchors the single site and the probe demands `matches ==
+  1`; Fn-family singles stay ordinary on bytes). The whole-balanced
+  single-pair replace rides the chain whole-block single-pair arm (same
+  guard over the full section, prelude included); N = 1 emits the ranged
+  owner-span diet (`@@ -s,len @@`, no directive — default `one` over the
+  `syn` owner span), never the sweep dummy (whose 8 bytes kept the live
+  short-hunk section 1 byte over the guard); the sweep-based probe
+  (`matches == 1`) still proves it, conservatively vetoing same-name
+  twins. A losing class declines alone, never vetoing a winning one.
+  Detector name `attr_sweep`.
 - Definition-value evolution (WI-12 slice 1): one balanced pair
-  (N == 1) — or N ≥ 2 uniform pairs sharing one shape class,
-  identity, and exact RHS delta — compresses to the WI-11 authored
-  spelling (bare `- type A = RHS;` / `- const/static … = EXPR;`
-  pairs; member pairs under a recovered `struct S {` / `enum E {`
-  container header). Generics-bearing aliases, vis/mut/kind/type
-  mismatches, hetero deltas, and hetero containers (member N ≥ 2)
-  decline; `None` pre-image declines (containers are unprovable
-  without it). Totality is the scratch-apply byte-compare probe:
-  the emitted hunk must apply with `matches == n` and reproduce
-  byte-identically the native post lines at the changed sites.
-  Guard is the precision guard (semantic ≤ ordinary + 16 bytes);
-  sweep shapes keep strict T375. Field/variant single-insertion
-  addition is `definition_addition` (below); construction
-  follow-through is WI-12c (stays ordinary here).
+  (N == 1) — or N ≥ 2 uniform pairs sharing one shape class, identity,
+  and exact RHS delta — compresses to the WI-11 authored spelling (bare
+  `- type A = RHS;` / `- const/static … = EXPR;` pairs; member pairs
+  under a recovered `struct S {` / `enum E {` container header).
+  Generics-bearing aliases, vis/mut/kind/type mismatches, hetero deltas,
+  hetero member containers (N ≥ 2), and `None` pre-images decline
+  (containers are unprovable without one). Totality is the scratch-apply
+  byte-compare probe (`matches == n`, post lines byte-identical at the
+  changed sites). Precision guard; sweep shapes keep strict T375.
+  Field/variant single-insertion addition is `definition_addition`
+  (below); construction follow-through is WI-12c (stays ordinary here).
   Detector name `definition_evolution`.
 - Definition-member addition (WI-12b slice 1): one pure-insertion
   hunk (`-N,0` with a single `+ member` line) inside a proven
@@ -8658,21 +8538,17 @@ every length and the totals stay the default truth at any size.
   / `enum E {` context plus the one `+` member line, no minus
   member). `+ b: Ty` must parse as a field side (`name: Ty`,
   `syn::Type`-validated); `+ C` / `+ C(..)` / `+ C { .. }` /
-  `+ C = ..` must parse as a variant (`syn::Variant`-validated,
-  bare unit names accepted). The container is recovered from the
-  pre-image (the `struct`/`enum` spanning the insertion point and
-  lacking the member); `None` pre-image, outside-container points,
-  duplicate members, two-plus lines, balanced pairs, and hetero
-  containers decline. Totality is the scratch-apply byte-compare
-  probe: the emitted hunk must apply with `matches == 1` and
-  reproduce byte-identically the native post (insertion after line
-  N, everything else untouched). Guard is the precision guard
-  (semantic ≤ ordinary + 16 bytes). Unverified insertions report
-  `reparse-only` (no structural plus re-match for insertions); verified
-  pure insertions and member additions report `postcondition`
-  (Section 24.6).
-  Construction follow-through is the next bullet (WI-12c slice 1).
-  Detector name `definition_addition`.
+  `+ C = ..` must parse as a variant (`syn::Variant`-validated).
+  The container is recovered from the pre-image (the `struct`/`enum`
+  spanning the insertion point and lacking the member); `None`
+  pre-image, outside-container points, duplicate members, two-plus
+  lines, balanced pairs, and hetero containers decline. Totality is the
+  scratch-apply byte-compare probe (`matches == 1`, post byte-identical).
+  Precision guard. Unverified insertions report `reparse-only` (no
+  structural plus re-match); verified pure insertions and member
+  additions report `postcondition` (Section 24.6).
+  Construction follow-through is the next bullet. Detector name
+  `definition_addition`.
 - Definition-addition struct-literal follow-through (WI-12c slice 1):
   a file section holding exactly one pure-insertion *field* addition
   (the bullet above) plus K ≥ 1 balanced single-pair hunks whose only
@@ -8681,426 +8557,217 @@ every length and the totals stay the default truth at any size.
   with a token-equal pattern, semi-ness equal) compresses to the
   definition hunk plus K per-site concrete ranged construction hunks
   (`@@ -L,1 @@` citing each changed line). Hetero added values stay
-  per-site concrete (a plus-only hole would be `unbound` under
-  Section 18.6, and ranges pin each value to its line so values cannot
-  cross-apply). Either side carrying `..` rest, a renamed path, a
-  changed sibling field, a second extra field, a variant insertion,
-  multi-line pairs, or any unrelated hunk declines the whole group
-  (all-or-nothing over the section's hunks — the per-hunk fallback
-  then still compresses the definition insertion alone; `..`-rest
-  sites with no diff are untouched by construction of the compare).
-  Totality is the joint scratch-apply byte-compare probe: the emitted
-  hunks must apply with one match each AND reproduce byte-identically
-  the native post. Guard is the precision guard scaled per emitted
-  hunk (semantic ≤ ordinary + 16 × hunks). Variant/match-arm
-  follow-through is the next bullet. Detector names `definition_addition` (def
-  hunk) and `definition_addition_follow` (construction hunks).
+  per-site concrete (a plus-only hole would be `unbound` under Section
+  18.6, and ranges pin each value to its line). Any `..` rest, renamed
+  path, changed sibling field, second extra field, variant insertion,
+  multi-line pair, or unrelated hunk declines the whole group
+  (all-or-nothing — the per-hunk fallback still compresses the
+  definition insertion alone). Totality is the joint scratch-apply probe
+  (one match each, post byte-identical); scaled precision guard (≤
+  ordinary + 16 × hunks). Variant/match-arm follow-through is the next
+  bullet. Detector names `definition_addition` (def) and
+  `definition_addition_follow` (construction hunks).
 - Definition-addition variant/match-arm follow-through (WI-12d):
   a file section holding exactly one pure-insertion *variant* addition
-  (the bullet above) plus K ≥ 1 pure-insertion arm hunks (`-M,0` with
-  one `+ <arm>,` line) whose arms name the added variant compresses to
-  the definition hunk plus K per-site concrete ranged arm hunks
-  (`@@ -M,1 @@` + `  match <scrut> {` + `+ <arm>,`). Each arm's path
-  must name the variant: a qualified prefix must equal the definition
-  enum (`E::C`), or a bare `C` needs a `use …E::*` glob line in the
-  pre-image (unanchored bare arms decline the group). Hetero bodies
-  ride per-site concrete. Any balanced pair, second insertion, variant
-  mismatch, unanchored bare, or unrelated hunk declines the whole
-  group (all-or-nothing — the per-hunk fallback still compresses the
-  definition insertion alone). Totality is the joint scratch-apply
-  byte-compare probe and the guard is the scaled precision guard
-  (`≤ ordinary + 16 × hunks`). Emission always appends before the
-  closing brace (native arms sorted into the middle decline via the
-  probe); cross-file arms stay ordinary. Detector names
-  `definition_addition` (def hunk) and `definition_addition_follow`
-  (arm hunks).
+  plus K ≥ 1 pure-insertion arm hunks (`-M,0` with one `+ <arm>,` line)
+  whose arms name the added variant compresses to the definition hunk
+  plus K per-site concrete ranged arm hunks (`@@ -M,1 @@` + `  match
+  <scrut> {` + `+ <arm>,`). Each arm's path must name the variant: a
+  qualified prefix must equal the definition enum (`E::C`), or a bare
+  `C` needs a `use …E::*` glob in the pre-image (unanchored bare arms
+  decline). Hetero bodies ride per-site concrete. Any balanced pair,
+  second insertion, variant mismatch, unanchored bare, or unrelated hunk
+  declines the whole group (all-or-nothing — the per-hunk fallback still
+  compresses the definition insertion alone). Joint scratch-apply probe;
+  scaled precision guard (`≤ ordinary + 16 × hunks`). Emission always
+  appends before the closing brace (native arms sorted into the middle
+  decline via the probe); cross-file arms stay ordinary. Detector names
+  `definition_addition` (def) and `definition_addition_follow` (arms).
 - Trait-method rename sweep: N ≥ 2 `-`/`+` pairs, each a single-line
   fn header (`;`-terminated trait declarations or `{`-terminated
   definitions and trait defaults, `syn`-validated; `}`-terminated
-  single-line definitions such as `fn run(&self) {}` classify on the
-  same `{` emission, which reproduces them byte-identically) differing in
-  exactly the fn ident (per-site vis/qual/generics/params/return/
-  where byte-equal, heterogeneous across sites, one shared
-  `Old`→`New` delta). Every changed line must sit in a `trait` block
-  or an `impl` block (pre-image totality), with at least one site on
-  each side: pure trait-side classes stay ordinary (no impl side
-  shares the intent) and pure impl-side classes stay with the slot
-  sweep. WI-3 emits the single document-first trait hunk with
+  single-line definitions classify on the same `{` emission, which
+  reproduces them byte-identically) differing in exactly the fn ident
+  (per-site vis/qual/generics/params/return/where byte-equal,
+  heterogeneous across sites, one shared `Old`→`New` delta). Every
+  changed line must sit in a `trait` block or an `impl` block, with at
+  least one site on each side: pure trait-side classes stay ordinary
+  (no impl side shares the intent) and pure impl-side classes stay with
+  the slot sweep. WI-3 emits the single document-first trait hunk with
   `# follow=uses` (the engine claims trait-proven `impl <Trait> for
   <Self>` definitions as `rename` spans; inherent `impl S` defs never
-  claim); the scratch-apply line-equality probe is the totality (the
-  single hunk applied to the pre-image must reproduce every native
-  plus line). WI-23 admits anchored call lines sharing the ident delta
-  (cheap ident-boundary gate, scratch over defs+calls authoritative;
+  claim); the scratch-apply line-equality probe is the totality. WI-23
+  admits anchored call lines sharing the ident delta (cheap
+  ident-boundary gate, scratch over defs+calls authoritative;
   unproven/shadowed calls fail the scratch and stay ordinary, never a
-  def-only partial; WI-24 pins `S::old`/`Self::old`/`<S as T>::old` tails
-  on the same gated path — proven tails ride the follow, unrelated `X::old`
-   tails fail the scratch and stay ordinary). Cross-file intents raise via the whole-patch `trait_method_rename` pre-pass (WI-12: trait decl + trait-`impl` defs + anchored calls across files, same one-trait/two-side/uniform-delta gates; emission is the single trait-block hunk with `# follow=uses` — the follow owns every remote def and call, so sibling def hunks would double-claim and are never emitted; a failed single-hunk probe declines to ordinary, never a def-only partial; single-section pure shapes stay with the per-section detector). Probe failure falls back to one hunk per enclosing
-  block with verbatim headers sharing the `rename_Old_to_New` rule
-  (no follow, def-only classes; each hunk clears its own engine probe,
-  twin headers and untouched twins veto to ordinary). WI-22: any def in an
-  inherent `impl S` block declines the whole class to ordinary (different
-  items, never the K-hunk fallback). Divergent per-pair
-  WI-22b: trait tails must match (last segment, `crate::T` proves `T`) or the whole class declines to ordinary (different items, `T::old` vs `U::old`).
-   WI-22c: cross-file grouping joins on the method `(old,new)` delta only; each grouped intent stays per-file same-trait (WI-22b), so the shared rule is token sharing, not a global same-trait claim.
-   suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
+  def-only partial; WI-24 pins `S::old`/`Self::old`/`<S as T>::old`
+  tails on the same gated path — proven tails ride the follow). Cross-file
+  intents raise via the whole-patch `trait_method_rename` pre-pass
+  (WI-12: trait decl + trait-`impl` defs + anchored calls across files,
+  same gates; the single trait-block hunk with `# follow=uses` owns
+  every remote def and call, so sibling def hunks would double-claim and
+  are never emitted; a failed single-hunk probe declines to ordinary,
+  never a def-only partial). Probe failure falls back to one hunk per
+  enclosing block with verbatim headers sharing the `rename_Old_to_New`
+  rule (no follow, def-only classes; twin headers and untouched twins
+  veto). WI-22: any def in an inherent `impl S` block declines the whole
+  class (different items, never the K-hunk fallback); trait tails must
+  match (last segment, `crate::T` proves `T`) or the whole class
+  declines (WI-22b: `T::old` vs `U::old` are different items); cross-file
+  grouping joins on the method `(old,new)` delta only with each grouped
+  intent per-file same-trait (WI-22c: shared rule is token sharing, not
+  a global same-trait claim). Divergent
+  suffixes and mixed indent stay passthrough. Detector name `trait_method_rename`.
  - Inherent-method rename (WI-6): the trait detector's inherent sibling.
    Every def pair sits in an inherent `impl` block of one self type
    (last-segment discipline, D8) with one uniform ident delta, plus at
    least one anchored call line sharing the delta (def-only classes stay
    with the slot sweep; trait-block and `impl <T> for _` defs veto).
-    Emits the single document-first impl-block hunk with `# follow=uses`
-    iff the block probe and the full-set scratch probe reproduce every
-    changed line; otherwise ordinary (unproven/shadowed calls fail the
-    scratch, never a def-only partial). Cross-file intents raise via
-    the whole-patch `inherent_method_rename` pre-pass (WI-12: inherent
-    defs of one self type + anchored calls across files, same
-    one-self-type/uniform-delta gates; emission is the single
-    document-first impl-block hunk with `# follow=uses` — the follow
-    owns every remote same-self-type def and anchored call, so sibling
-    def hunks would double-claim and are never emitted; a failed
-    single-hunk probe declines to ordinary, never a def-only partial;
-    single-section pure shapes stay with the per-section detector).
-    Detector name
-    `inherent_method_rename` (Precision under the WI-7 allowance — the
-    block probe + full-set scratch prove the site set, so the small
-    case fires as one follow hunk).
+   Emits the single document-first impl-block hunk with `# follow=uses`
+   iff the block probe and the full-set scratch probe reproduce every
+   changed line; otherwise ordinary (unproven/shadowed calls fail the
+   scratch, never a def-only partial). Cross-file intents raise via
+   the whole-patch `inherent_method_rename` pre-pass (WI-12: inherent
+   defs of one self type + anchored calls across files; the single
+   document-first impl-block hunk with `# follow=uses` owns every remote
+   same-self-type def and anchored call, so sibling def hunks are never
+   emitted; a failed single-hunk probe declines to ordinary, never a
+   def-only partial). Detector name
+   `inherent_method_rename` (Precision under the WI-7 allowance — the
+   block probe + full-set scratch prove the site set).
 - Call sweep: N ≥ 2 `-`/`+` pairs, each a bare single-segment call
   (`syn`-parsed, trailing `;` tolerated) with per-site textually
   identical args, uniform arity, and one shared callee delta →
   one `# allow=many` hunk (`# expr E0…` per arity position;
-  arity 0 needs no metavars). A leading-uppercase concrete callee
-  (tuple-struct and enum-variant constructors) emits backticked
-  (`` `Old`(E0) `` → `` `New`(E0) ``, SPEC 15.4): bare `Old` would
-  otherwise infer as an `expr` hole (SPEC 15.8), failing loud on the
-   plus side when the callee changes and over-matching when it does
-   not. The same rule covers the trailing-arg-addition,
-   trailing-literal, and head-peel sweeps below, the qualified-call and
-   turbofish sweeps (backtick on the last segment only —
-   `` crate::`Old`(E0) ``, `` `Old`::<u8>(E0) ``; a full-path quote is
-   an invalid literal token), and the method sweeps (backtick on the
-   method ident — `` Receiver.`Old`(E0) ``); turbofish-suffixed method
-   idents stay plain (the `::<` suffix defeats hole inference, so the
-   pattern is already literal), as do macro names (never inferred) and
-   `use` paths (backticks rejected there — the concrete path is
-   already literal). A bare pattern never matches a leading-`::` site
-   (parity, probed); a bare single-segment `::foo` rename stays
-   ordinary (no prefix to anchor the win).
-     Precision singles (WI-7 slices 1-23, `PrecisionUnique`): N == 1
-  whole-line bare-call callee-only pairs (slice-1, `call_holds` over
-  `old_callee/arity`), whole-line method-to-method renames (slice-2,
-  `method_holds` over `old_method/arity`), whole-line
-  method-to-function refactors (slice-3, `method_holds` over
-  `old_method/arity` with a receiver-prepend delta), whole-line
-  general-expression pairs (slice-4) and `let`-init general-expression
-  pairs (slice-5, same WI-5 init entry as the multi sweep), each via
-  `template_pair_holds` at n=1 over the single-pair anti-unification:
-  exactly one hole plus an operator/member/type anchor delta;
-  zero-hole and two-delta shapes veto, each with a pre-image proving
-  exactly one site file-wide with zero opaque hits. Slice-6 adds
-  bare-call arg-template wrap pairs (whole-line plus `let`-init via the
-  shared T449 entry, same callee, exactly one structural wrap from the
-  multi's `wrapper_tpl` vocabulary — method-receiver and reference
-  shapes — all other args holes; zero/two wraps, pure concrete deltas,
-  and permuted holes veto) via `template_pair_holds` at n=1 over the
-   emitted call pair. Slice-7 adds method-arg-template wrap pairs
-   (whole-line plus `let`-init via the shared T449 `parse_method_line`
-   entry, same receiver and same method, exactly one structural wrap
-   from the same `wrapper_tpl` vocabulary via the shared
-   single-pair core — all other args holes; receiver/method deltas,
-   zero/two wraps, pure concrete deltas, and permuted holes veto) via
-   `template_pair_holds` at n=1 over the emitted `Receiver.m(...)`
-   pair. Slice-8 adds bare-call and binary inner-wrap pairs
-   (`use_it(E0)` → `use_it(f(E0))`, `use_it(E0)` → `use_it(E0 + 1)`)
-   for both outer entries through the same shared single-pair core:
-   the N ≥ 2 column-uniformity gates are vacuous-but-blocking at N=1,
-   so these two vocabularies prove structurally from one pair
-   (`wrapper_tpl_single`: exactly one arg/side token-equals the minus,
-   every other position a concrete anchor); zero holes, two holes,
-   and pure concrete deltas veto as before. Slice-9 adds method
-   one-arg-hole inner-wrap pairs (`use_it(E0)` → `use_it(r.foo(E0))`,
-   plus the `Receiver.` outer twin) for both outer entries through the
-   same shared core: the method one-arg-hole column gate is likewise
-   vacuous-but-blocking at N=1, so the shape proves structurally
-   (`wrapper_tpl_single` method arm: receiver-is-hole or exactly one
-   arg token-equals the minus, every other position a concrete anchor
-   — receiver/token is the anchor beyond the hole); zero holes, two
-    holes (`r.foo(x, x)`, `x.foo(x)`), and pure concrete deltas veto.
-    Slice-10 adds whole-line bare-call arg-permutation pairs
-    (`swap(E0, E1)` → `swap(E1, E0)`, whole-line plus `let`-init via the
-    shared T449 entry) in a sibling module (`perm_single.rs`, D5 split):
-    the N ≥ 2 perm sweep owns sub-line-only classes and vetoes
-    whole-line pairs, so the single proves structurally from one pair
-    (same callee, uniform arity k ≥ 2, plus args a non-trivial
-    permutation of the minus args — pure token multiset bijection via
-    first-unused mapping; identity, non-bijective deltas, callee
-    deltas, and macro/unsupported args veto; the callee token is the
-    anchor beyond the holes). The
-    callee/method/function/operator token is the anchor beyond the holes
-    (`Receiver`/`E`; uppercase rides backticks, same rule as above).
-    Emission is the ranged allow-one spelling (tight original range,
-    directive-free, default `allow=one`); the `let`-init emission stays
-    the bare anchored template (pattern/type ride each site's own
-    wrapper) and carries the same T361 byte-compare pre-reservation as
-    slice-4. Guard is the precision guard (semantic ≤ ordinary + 16).
-    Slice-11 adds whole-line method-call arg-permutation pairs
-    (`Receiver.foo(E0, E1)` → `Receiver.foo(E1, E0)`, whole-line plus
-    `let`-init via the shared `parse_method_line` entry) as the twin of
-    the slice-10 entry: same receiver and same method (receiver deltas
-    stay with the m2f single, method deltas with the slice-2 single),
-    uniform arity k ≥ 2, plus args a non-trivial token multiset
-    bijection of the minus args; identity, non-bijective deltas,
-    receiver/method deltas, and macro/unsupported args veto. TOOL-5
-    hygiene (same slice): the slice-6/7/11 defensive `syn::Expr`
-    re-parse runs on the raw callee/method (backticks are RSmPL-level
-    literal spelling, never Rust syntax); the emission keeps the
-    backticked literal. `None` pre-image vetoes (no guessing); an
-    untouched same-shape twin vetoes (same-arity for call/method
-    shapes, same-template for general, same-trailing-literal for
-    literal); non-matching twins never count. Slice-12 adds
-    whole-line bare-call trailing-literal pairs
-    (`make_widget(E0, E1, false)` → `make_widget(E0, E1, "100644")`,
-    whole-line plus `let`-init via the shared T449 entry): same
-    callee, uniform arity k+1 with k ≥ 1 (zero-hole pure-concrete
-    pairs veto — verbatim-shaped, general-expr single precedent;
-    fixture 57 `foo(&x)` → `foo(x)` stays ordinary), leading k args
-    token-equal minus-vs-plus, trailing old/new concrete literals with
-    a real delta; callee deltas, leading-arg deltas, identity, and
-    macro/unsupported args veto; uniqueness proved by
-    `call_literal_holds` at n=1 keyed on the trailing old literal.
-    Slice-13 adds whole-line method same-literal pairs
-    (`Receiver.configure(alpha_argument_1, first_value_foo, false)` →
-    `Receiver.configure(alpha_argument_1, first_value_foo, "100644")`,
-    whole-line plus `let`-init via the shared `parse_method_line`
-    entry): same method, same per-site receiver, uniform arity k ≥ 1,
-    old/new arg token-tuples with a real delta; method deltas, receiver
-    deltas, identity, and macro/unsupported args veto; uniqueness proved
-    by `method_literal_holds` at n=1 keyed on the exact old-args tuple.
-    The emission is the concrete tuple (no `E` arg holes — a holed
-    template would match sites the tuple-keyed proof never counted;
-    `Receiver` is the only hole). Slice-14 adds sub-line bare-call
-    callee-only pairs (`foo(alpha_argument) + 1` →
-    `bar(alpha_argument) + 1`, bare-statement and `let`-init framings
-    via the shared `side_expr` entry): the pair must not parse
-    whole-line (slice-1 owns that shape), `extract_bare_sites` yields
-    exactly one site with a real callee delta and the frame rule holds;
-    multi-subterm lines decline (multi territory by site count);
-    uniqueness proved by `template_expr_holds` at n=1 plus the T361
-    byte-compare. Slice-15 adds sub-line method-to-method rename-only
-    pairs (`val.old_method(alpha_argument) + 1` →
-    `val.new_method(alpha_argument) + 1`, bare-statement and `let`-init
-    framings via the shared `side_expr` entry): the pair must not parse
-    whole-line (slice-2 owns that shape), `extract_method_sites` yields
-    exactly one site with a real method delta and the frame rule holds;
-    multi-subterm lines decline (multi territory by site count);
-    uniqueness proved by `template_expr_holds` at n=1 over the emitted
-    `Receiver.old(E0…)` template plus the T361 byte-compare; uppercase
-    idents ride backticks with the raw-method re-parse check (TOOL-5).
-    Slice-16 adds sub-line method-to-function pairs
-    (`val.old_method(alpha_argument) + 1` →
-    `new_func(val, alpha_argument) + 1`, bare-statement and `let`-init
-    framings via the shared `side_expr` entry): the pair must not parse
-    whole-line (slice-3 owns that shape), `extract_method_fn_sites`
-    yields exactly one site with a receiver-prepend delta and the frame
-    rule holds; multi-subterm lines decline (multi territory by site
-    count); uniqueness proved by `template_expr_holds` at n=1 over the
-    emitted `Receiver.old(E0…)` template plus the T361 byte-compare;
-    uppercase idents ride backticks with the raw-probe re-parse check
-    on both sides (TOOL-5). Slices 17-23 land the remaining sub-line
-    families (general, literal, perm, wrap -- see below). Slice-17
-    adds sub-line bare perm pairs (`swap(alpha_arg, beta_arg) + 1` ->
-    `swap(beta_arg, alpha_arg) + 1`, bare-statement and `let`-init
-    framings via the shared `side_expr` entry): the pair must not parse
-    whole-line (slice-10 owns that shape, including the T449 `let`-init
-    entry), `extract_arg_permutation_sites` yields exactly one site with
-    a real non-trivial permutation and the frame rule holds;
-    multi-subterm lines decline (multi territory by site count);
-    uniqueness proved by `template_pair_holds` at n=1 over the emitted
-    pair plus the T361 byte-compare; uppercase callees ride backticks
-    with the raw-callee re-parse check (TOOL-5). Slice-18 adds sub-line
-    method perm pairs (`svc.configure(alpha_arg, beta_arg) + 1` ->
-    `svc.configure(beta_arg, alpha_arg) + 1`, bare-statement and
-    `let`-init framings via the shared `side_expr` entry): the pair
-    must not parse whole-line on both sides (slice-11 owns that shape,
-    including the T449 `let`-init entry),
-    `extract_method_perm_sites` yields exactly one site with a real
-    non-trivial permutation and the frame rule holds; receiver deltas
-    stay with the m2f single and method deltas with the slice-15
-    single (both veto in the extractor); multi-subterm lines decline
-    (multi territory by site count); uniqueness proved by
-    `template_pair_holds` at n=1 over the emitted
-    `Receiver.m(E0, E1)` / `Receiver.m(E1, E0)` pair plus the T361
-    byte-compare; uppercase methods ride backticks with the raw-method
-    re-parse check (TOOL-5). Slice-19 adds sub-line general-expression
-    pairs (`foo(alpha_arg + 1);` -> `foo(alpha_arg + 2);`,
-    bare-statement and `let`-init framings via the shared `side_expr`
-    entry, detector in the `general_subline.rs` sibling per D5): the
-    pair must not anti-unify whole-line (slices 4–5 own that shape, via
-    both the whole-line and the `let`-init entries),
-    `extract_general_sites` yields exactly one inner general site with
-    a real single-hole delta and the frame rule holds; unchanged
-    subterms (a nested base such as `self.alpha`) are skipped, never
-    vetoed — twin-counting is the engine totality over the emitted
-    pair; multi-subterm lines decline (multi territory by site count);
-    uniqueness proved by `template_pair_holds` at n=1 over the emitted
-    pair plus the T361 byte-compare. Slice-20 adds sub-line bare-call
-    trailing-literal pairs (`foo(bar(alpha_arg, 1));` ->
-    `foo(bar(alpha_arg, 2));`, bare-statement and `let`-init framings
-    via the shared `side_expr` entry, detector inline in `literal.rs`
-    — the file sits well under the D5 gates): the pair must not form a
-    whole-line literal pair with `prefix >= 1` (slice-12 owns that
-    shape; the emission tail and the `call_literal_holds` counter are
-    shared, so no bypass around its twin veto via a second counter —
-    wrapper pairs with `prefix == 0` fall through, since the whole-line
-    single vetoes them as zero-hole),
-    `extract_literal_sites` yields exactly one inner site with a real
-    trailing-literal delta (`k >= 1`; unchanged pairs and zero-hole
-    pairs are skipped, never vetoed — twin-counting is the engine
-    totality over the emitted triple) and the frame rule holds;
-    multi-subterm lines decline (multi territory by site count);
-    uniqueness proved by `call_literal_holds` at n=1 over the emitted
-    triple plus the T361 byte-compare; uppercase callees ride backticks
-    with the raw-callee re-parse check (TOOL-5). Slice-21 adds sub-line
-    method same-literal pairs (`foo(svc.configure(alpha_arg, 1));` ->
-    `foo(svc.configure(alpha_arg, 2));`, bare-statement and `let`-init
-    framings via the shared `side_expr` entry, detector in the
-    `method_subline.rs` sibling per D5 — `methods.rs` sat at ~1962, so
-    the detector plus the shared emission tail cannot land inline
-    without breaking the 2000 gate; the whole-line slice-13 arm keeps
-    its shape checks and delegates to the same tail, net-shrinking
-    `methods.rs`): the pair must not form a whole-line method
-    same-literal pair (slice-13 owns that shape; the emission tail and
-    the `method_literal_holds` counter are shared, so no bypass around
-    its twin veto via a second counter),
-    `extract_method_literal_sites` yields exactly one inner site with a
-    real arg-tuple delta (unchanged pairs are skipped, never vetoed —
-    twin-counting is the engine totality over the emitted exact
-    old-args tuple; method/receiver/arity deltas veto) and the frame
-    rule holds; multi-subterm lines decline (multi territory by site
-    count); uniqueness proved by `method_literal_holds` at n=1 over the
-    emitted tuple plus the T361 byte-compare; uppercase methods ride
-    backticks with the raw-method re-parse check (TOOL-5). Slice-22 adds sub-line
-    method-arg-template wrap pairs (`foo(svc.process(alpha_arg));` ->
-    `foo(svc.process(alpha_arg.clone()));`, bare-statement and
-    `let`-init framings via the shared `side_expr` entry, detector in
-    the `method_subline.rs` sibling per D5 — `methods.rs` sits at ~1933
-    and `arg_template.rs` at ~1875, so the detector cannot land inline
-    in either without breaking the 2000 gate; the shared single-pair
-    `antiunify_call_args_single` core is reused, not mirrored): the pair
-    must not form a whole-line method wrap pair (slice-7 owns that shape
-    via the same parser plus the shared core, so there is no bypass
-    around its twin veto via a second counter),
-    `extract_method_wrap_sites` yields exactly one inner site whose args
-    anti-unify to exactly one wrap plus holes. The extractor collects
-    OUTERMOST method calls only — a wrapper that is itself a method call
-    (`a.clone()`) adds a plus-side subterm, so flat pairing would veto
-    every such wrap; turbofish/non-ident calls never record but still
-    gate their interiors. Unchanged pairs are skipped, never vetoed
-    (slice-19/20/21 discipline — twin-counting is the engine totality
-    over the emitted holed pair, which keys on method + arity, so any
-    same-method same-arity twin vetoes even with different args —
-    slice-7 precedent); pure-concrete deltas veto the line (literal
-    territory — slices 20/21 own them), permuted holes veto the line
-    (perm territory), method/receiver/arity deltas veto the line
-    (slice-15/m2f territory); multi-subterm lines decline (multi
-    territory by site count); uniqueness proved by
-    `template_pair_holds` at n=1 over the emitted holed pair plus the
-    T361 byte-compare; uppercase methods ride backticks with the
-    raw-method re-parse check (TOOL-5). Both wrap arms sit BEFORE the
-    literal arms: a holed wrap beats the concrete literal spelling
-    where both prove the same site set (reference/binary wrappers
-    upgrade from the slice-20/21 concrete spelling); the general arm
-    above declines wraps by construction (`Call`/`MethodCall` subterms
-    are never general sites). Slice-23 adds sub-line bare-arg-template
-    wrap pairs (`foo(bar(alpha_arg));` ->
-    `foo(bar(alpha_arg.clone()));` and the same-level twin
-    `foo(alpha_arg) + 1` -> `foo(bar(alpha_arg)) + 1`, bare-statement
-    and `let`-init framings via the shared `side_expr` entry, detector
-    inline in `calls.rs` -- the sub-line bare-call owner, well under
-    the D5 gates): the pair must not form a whole-line bare wrap pair
-    (slice-6 owns that shape via the same parser plus the shared core,
-    so no bypass around its twin veto via a second counter),
-    `extract_bare_wrap_sites` yields exactly one site via a recursive
-    structural worker: same-callee pairs whose args anti-unify to
-    exactly one wrap plus holes site at their own level; pairs the
-    core declines descend into their args pairwise (deep-inner wraps
-    add a plus-side bare level, so flat pairing would veto them on
-    counts); binary and method-call frames are transparent, with any
-    frame delta left behind vetoing via the frame rule (never
-    partially claimed); pure-concrete deltas veto the line (literal
-    territory), permuted holes veto the line (perm territory),
-    callee/arity deltas veto the line (slice-14 territory); unchanged
-    pairs are skipped, never vetoed (twin-counting is the engine
-    totality over the emitted holed pair, which keys on callee +
-    arity, so any same-callee same-arity twin vetoes even with
-    different args -- slice-6 precedent); multi-subterm lines decline
-    (multi territory by site count); uniqueness proved by
-    `template_pair_holds` at n=1 over the emitted holed pair plus the
-    T361 byte-compare; uppercase callees ride backticks with the
-    raw-callee re-parse check (TOOL-5). The sub-line wrap family is
-    closed (whole-line slices 6-9 plus sub-line slices 22-23).
- Slice-24 adds the N=1 qualified prefix+callee double-delta single
- (`let v = old_mod::foo(alpha_arg);` → `let v = new_mod::bar(alpha_arg);`,
- bare-statement and `let`-init framings via the shared `side_expr` entry,
- detector inline in `paths.rs` — the qualified-call owner, well under the
- D5 gates): the pair must parse on both sides as a multi-segment
- generic-free qualified call with agreeing leading `::`, token-equal
- `qself` qualifiers, the same segment count, and token-equal value args,
- while the prefix segments differ in exactly one position AND the last
- segment differs (exactly two disjoint segment deltas); single-delta N=1
- qual pairs stay verbatim (no bypass around the verbatim floor), prefix
- deltas in 2+ positions stay ordinary (three or more deltas); turbofish
- segments veto (turbofish territory); the frame rule holds over the single
-  subterm pair; uniqueness proved by `template_pair_holds` at n=1 over the
-  emitted holed pair plus the T361 byte-compare; uppercase last segments
-  ride backticks with the raw-path re-parse check (TOOL-5 precedent).
-  Slice-25 adds the N>=2 sweep twin (chain `call_sweep` before the
-  single-delta qualified sweep, same holed spelling with `# allow=many`,
-  detector inline in `paths.rs`): every pair parses via the slice-24
-  parser with one shared class (leading, `qself`+pos, old/new prefix
-  vectors, old/new callee, uniform arity), the per-pair frame rule holds
-  over the call subterm, and `template_pair_counts` proves want=N
-  (`CountMismatch`/`OpaqueHit` decline counted; divergent classes veto
-  whole). Multi-line composition (WI-13 residue slice A) is owned by
-  WI-4 subhunk, not by this family: a fused hunk of hetero
-  double-delta lines that declines whole is split into contiguous
-  same-class runs, each run offered whole with per-pair singles as
-  fallback and declining runs kept ordinary verbatim in place
-  (A-B-A interleaves veto whole by the order law; shared-minus-
-  template hetero pairs veto each holed single by occurrence
-  totality with framed literal singles owning the lines instead).
-  Typed-let two-template joints land as slice-26 (WI-13 residue slice
-  B, `typed_let_joint.rs` sibling — `general_expr.rs` stays under the
-  D5 gate): a single `let PAT: P_old::Ty = P_old::callee(args);` line
-  whose type and init call share one prefix rename (`P_old` → `P_new`
-  in exactly one prefix segment, `Ty` same, callee same, token-equal
-  binder pattern and args, no leading `::`/`qself`/generics/turbofish)
-  compresses to the factored two-hunk one-rule joint (type pair first
-  = source order, second hunk bare per WI-8 diet) under `call_sweep`;
-  the type template proves file-unique (`template_type_counts` == 1)
-  and the call proves at want=1 (`template_pair_counts` +
-  `engine_verdict`), both `CountMismatch`/`OpaqueHit` counted, plus
-  the D13 composed scratch-apply (both hunks reproduce the plus line
-  byte-identical); `Ty`/callee-changing, prefix-mismatched,
-  multi-delta-prefix, leading/`qself`/generic variants stay ordinary.
-   Method+prefix double deltas land as slice-27 (WI-13 residue slice
-  C, `method_double.rs` sibling): a method-call line whose qualified
-  receiver and method share one rename (`old_mod::obj.old_m(args);`
-  → `new_mod::obj.new_m(args);`, whole-line or `let`-init framing,
-  receiver a generic-free path with ≥2 segments, base same, exactly
-  one differing receiver prefix segment, real method delta,
-  token-equal args per pair, no `&`/leading/`qself`/turbofish/
-  generics) compresses to one holed hunk
-  (`- old_mod::obj.old_m(E0)` / `+ new_mod::obj.new_m(E0)`,
-  method backticked when uppercase per WI-7-upper, receiver raw):
-  the N=1 single rides the precision guard (frame rule over the call
-  subterm, re-parse guard, `template_pair_counts` + `engine_verdict`
-  at want=1 plus the T361 byte-compare) and the N≥2 shared-class
-  sweep rides `call_sweep` with `# allow=many` (one shared class —
-  old/new receiver vectors, old/new method, uniform arity —
-  per-pair frame rule, same proof at want=N, `CountMismatch`/
-  `OpaqueHit` counted); receiver-only or method-only single deltas
-  decline here (verbatim / method-to-method own them), as do base
+  arity 0 needs no metavars). Uppercase concrete callees (tuple-struct
+  and enum-variant constructors) emit backticked (`` `Old`(E0) `` →
+  `` `New`(E0) ``, SPEC 15.4): bare `Old` would otherwise infer as an
+  `expr` hole (SPEC 15.8). The same backtick rule covers the
+  trailing-arg-addition, trailing-literal, and head-peel sweeps below,
+  the qualified-call and turbofish sweeps (backtick on the last segment
+  only; a full-path quote is an invalid literal token), and the method
+  sweeps (backtick on the method ident); turbofish-suffixed method
+  idents stay plain (the `::<` suffix defeats hole inference), as do
+  macro names (never inferred) and `use` paths (backticks rejected —
+  already literal). A bare pattern never matches a leading-`::` site;
+  a bare single-segment `::foo` rename stays ordinary (no prefix).
+  History (precision singles, WI-7 slices 1-23, `PrecisionUnique`,
+  precision guard `sem ≤ ordinary + 16`): whole-line singles prove
+  structurally from one pair via `template_pair_holds`@n=1 over the
+  single-pair anti-unification — exactly one hole plus an anchor delta
+  (the callee/method/function/operator token is the anchor beyond the
+  holes; uppercase rides backticks), zero-hole and two-delta shapes veto,
+  each with a pre-image proving exactly one site file-wide and zero
+  opaque hits. Slice families: 1 bare-call callee-only (`call_holds`
+  over old_callee/arity); 2 method-to-method (`method_holds` over
+  old_method/arity); 3 method-to-function (same + receiver-prepend
+  delta); 4 general-expression whole-line + 5 `let`-init general (same
+  WI-5 init entry as the multi sweep); 6 bare-call arg-template wrap + 7
+  method-arg-template wrap (whole-line + `let`-init via T449 /
+  `parse_method_line`, same callee / same receiver+method, exactly one
+  structural wrap from the multi's `wrapper_tpl` vocabulary —
+  method-receiver and reference shapes, all other args holes; zero/two
+  wraps, pure concrete deltas, permuted holes veto); 8 bare-call and
+  binary inner-wrap (`use_it(E0)` → `use_it(f(E0))`, `use_it(E0)` →
+  `use_it(E0 + 1)`) + 9 method one-arg-hole inner-wrap, both via the
+  shared `wrapper_tpl_single` core (exactly one arg/side token-equals
+  the minus, every other position a concrete anchor; method arm:
+  receiver-is-hole or exactly one arg token-equals); 10 whole-line
+  bare-call arg-permutation + 11 method-call arg-permutation (sibling
+  `perm_single.rs`; same callee / same receiver+method, uniform arity
+  k ≥ 2, plus args a non-trivial token multiset bijection via
+  first-unused mapping; identity, non-bijective deltas,
+  callee/method/receiver deltas, macro/unsupported args veto; the N ≥ 2
+  perm sweep owns sub-line-only classes); 12 bare-call trailing-literal
+  (`make_widget(E0, E1, false)` → `make_widget(E0, E1, "100644")`: same
+  callee, arity k+1 with k ≥ 1, leading k args token-equal, trailing
+  old/new concrete literals with a real delta; zero-hole pure-concrete
+  pairs veto — fixture 57 `foo(&x)` → `foo(x)` stays ordinary;
+  `call_literal_holds`@n=1 keyed on the trailing old literal) + 13
+  method same-literal (same method+receiver, arity k ≥ 1, old/new arg
+  tuples with a real delta; `method_literal_holds`@n=1 keyed on the exact
+  old-args tuple; emission is the concrete tuple, `Receiver` the only
+  hole). Emission is the ranged allow-one spelling (tight original
+  range, directive-free, default `one`); the `let`-init emission stays
+  the bare anchored template and carries the same T361 byte-compare
+  pre-reservation as slice-4. Sub-line singles prove the same way with
+  one extra gate — the pair must not parse whole-line (the whole-line
+  slice owns that shape) and the family extractor must yield exactly one
+  site with a real delta under the shared frame rule; multi-subterm lines
+  decline (multi territory by site count); TOOL-5 defensive re-parse on
+  the raw callee/method/path, backticked emission. Slice families
+  (bare-statement and `let`-init framings via the shared `side_expr`
+  entry): 14 bare-call callee-only (`extract_bare_sites`); 15
+  method-to-method rename-only (`extract_method_sites`,
+  `Receiver.old(E0…)` template); 16 method-to-function
+  (`extract_method_fn_sites`, receiver-prepend delta); 17 bare perm
+  (`extract_arg_permutation_sites`; slice-10 owns whole-line incl. T449
+  `let`-init); 18 method perm (`extract_method_perm_sites`;
+  receiver/method deltas veto in the extractor); 19 general-expression
+  (`extract_general_sites`, one inner general site with a real
+  single-hole delta; nested bases skipped, never vetoed; sibling
+  `general_subline.rs`); 20 bare-call trailing-literal
+  (`extract_literal_sites`, `k ≥ 1`, shared emission tail and
+  `call_literal_holds` counter with slice-12; `prefix == 0` wrapper pairs
+  fall through; inline in `literal.rs`); 21 method same-literal
+  (`extract_method_literal_sites`, shared tail and
+  `method_literal_holds` with slice-13; sibling `method_subline.rs` —
+  `methods.rs` sits at the D5 gate, the whole-line arm delegates to the
+  same tail); 22 method-arg-template wrap (`extract_method_wrap_sites`,
+  OUTERMOST method calls only, turbofish/non-ident calls gate
+  interiors; pure-concrete deltas veto (slices 20/21 territory),
+  permuted holes veto (perm territory), method/receiver/arity deltas
+  veto; a holed wrap beats the concrete literal spelling where both
+  prove the same site set; sibling `method_subline.rs`); 23
+  bare-arg-template wrap (`extract_bare_wrap_sites`, recursive structural
+  worker — same-callee pairs anti-unifying to exactly one wrap plus holes
+  site at their own level, declined cores descend pairwise; binary and
+  method-call frames transparent with frame deltas vetoing; inline in
+  `calls.rs`). The sub-line wrap family is closed (whole-line 6-9 +
+  sub-line 22-23). Shared single law: `None` pre-image vetoes; an
+  untouched same-shape twin vetoes (same-arity call/method,
+  same-template general, same-trailing-literal literal; slice-22 keys on
+  method+arity, slice-23 on callee+arity); non-matching twins never
+  count; uniqueness via the named holds-fn@1 plus the T361 byte-compare.
+  History (slice-24 N=1 qualified prefix+callee double-delta single,
+  `paths.rs`): the pair parses both sides as a multi-segment generic-free
+  qualified call (agreeing leading `::`, token-equal `qself`, same segment
+  count, token-equal value args) with exactly two disjoint segment deltas
+  (one prefix-segment + last-segment); single-delta pairs stay verbatim,
+  3+ deltas stay ordinary, turbofish segments veto;
+  `template_pair_holds`@n=1 + T361.
+  History (slice-25 N≥2 sweep twin, `call_sweep` before the single-delta
+  qualified sweep): every pair parses via the slice-24 parser under one
+  shared class (leading, `qself`+pos, old/new prefix vectors, old/new
+  callee, uniform arity) with the per-pair frame rule;
+  `template_pair_counts` proves want=N (`CountMismatch`/`OpaqueHit`
+  counted; divergent classes veto whole). Hetero double-delta lines
+  partition via the WI-4 subhunk law (contiguous same-class runs, per-pair
+  singles fallback, declining runs ordinary verbatim; A-B-A interleaves
+  veto whole; shared-minus-template hetero pairs veto each holed single
+  by occurrence totality).
+  History (slice-26 typed-let two-template joint, WI-13 residue slice B,
+  `typed_let_joint.rs`): a single `let PAT: P_old::Ty =
+  P_old::callee(args);` line whose type and init call share one prefix
+  rename (exactly one prefix segment, `Ty` same, callee same, token-equal
+  binder and args, no leading `::`/`qself`/generics/turbofish) → the
+  factored two-hunk one-rule joint (type pair first, second hunk bare)
+  under `call_sweep`; the type proves file-unique
+  (`template_type_counts` == 1) and the call proves want=1 (both
+  `CountMismatch`/`OpaqueHit` counted) plus the D13 composed
+  scratch-apply; `Ty`/callee-changing and prefix-mismatched variants stay
+  ordinary.
+  History (slice-27 method+prefix double delta, WI-13 residue slice C,
+  `method_double.rs`): a method-call line whose qualified receiver and
+  method share one rename (`old_mod::obj.old_m(args)` →
+  `new_mod::obj.new_m(args)`; whole-line or `let`-init; generic-free
+  ≥2-segment receiver, base same, exactly one differing receiver prefix
+  segment, real method delta, token-equal args, no `&`/leading/`qself`/
+  turbofish/generics) → one holed hunk (method backticked when uppercase,
+  receiver raw); the N=1 single rides the precision guard
+  (`template_pair_counts` + `engine_verdict` at want=1 + T361) and the
+  N≥2 shared-class sweep rides `call_sweep` with `# allow=many`;
+  receiver-only or method-only single deltas decline here, as do base
   renames, multi-delta receivers, and bare receivers.
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
@@ -9117,73 +8784,58 @@ every length and the totals stay the default truth at any size.
   is token-equal concrete text across all sites on each side with a
   real old/new delta (emitted verbatim, T442-safe). All-identical
   classes stay for the tighter verbatim sweep (peel precedent, T422).
-  Pre-image totality keys on callee + trailing old literal
-  (`call_literal_holds`, T420-style): same-arity sites with a
-  different trailing literal never match and never veto. Call sites
-  inside `let` inits unwrap to their init call (the whole line parses
-  as a `Stmt`, declined as `Expr::Let`; the emission stays a bare-call
-  pattern and the engine rewrites the call sub-expression in place).
-  A trailing literal hiding a macro invocation anywhere inside stays
-  ordinary (WI-9b2-delim): TokenStream-normalized macro text
-  (`wrap(old_mac ! (1))`) is unmatchable by the engine, so the sweep
-  declines and those pairs fall through to the nested macro sweep (or
-  ordinary). Boolean `!`/`!=` never contain a macro node and keep firing.
-  Cross-hunk classes compress non-whole sections (T449: singleton
-  `-U0` hunks split by distance or pure additions elsewhere, e.g.
-   spaced `let` sites — peel-driver precedent); all-identical classes
-   stay for verbatim and the emitted bodies are invisible to it. Hunk
-   atomicity (WI-9e, same index-based fixed point as the macro-interior
-   sweep): a class fires only if every balanced hunk holding a member
-   pair is fully covered by passing classes — a class whose member hunk
-   also holds an uncovered pair drops to a fixed point (cascade:
-   dropping uncovers hunks) and the section falls through to ordinary;
-   rules reserve only for survivors.
+  Totality keys on callee + trailing old literal (`call_literal_holds`,
+  T420-style): same-arity sites with a different trailing literal never
+  match and never veto. Call sites inside `let` inits unwrap to their
+  init call (emission stays a bare-call pattern; the engine rewrites the
+  call sub-expression in place). A trailing literal hiding a macro
+  invocation anywhere inside stays ordinary (WI-9b2-delim:
+  TokenStream-normalized macro text is unmatchable, so the sweep declines
+  and those pairs fall through to the nested macro sweep; boolean `!`/`!=`
+  never contain a macro node and keep firing). Cross-hunk classes compress
+  non-whole sections (T449: singleton `-U0` hunks split by distance or
+  pure additions elsewhere); hunk atomicity (WI-9e, same index-based fixed
+  point as the macro-interior sweep): a class fires only if every balanced
+  hunk holding a member pair is fully covered by passing classes (cascade
+  drops uncover hunks; rules reserve only for survivors).
  - Hetero call-arg-template sweep (WI-5): N ≥ 2 `-`/`+` pairs, each a
    bare single-segment call with uniform arity `k` ≥ 1 (turbofish and
    multi-segment callees stay with their detectors) and a callee that
-   is token-equal across all sites or one shared delta (`O` → `N`,
-   uniform on both sides), where every argument position independently
-   is (a) token-equal concrete on both sides (uniform positions replay
-   the first site's normalized spelling, hetero preserved positions
-   ride `Ej`), (b) a whole-arg hole (`Ej` on both sides, ordered value
-   correspondence per Section 15.7), or (c) a uniform wrapper — one
-   `Ej` occurrence inside a plus template with a literal anchor
-   (method-call `Ej.clone()`, bare-call `f(Ej)`, binary `Ej + 1` /
-   `1 + Ej`, shared reference `&Ej`; every other plus shape vetoes).
-   Plus templates may permute holes (`f(E0, E1)` → `f(E1, E0)`);
-   dropped or duplicated holes veto (a duplicated hole would need
-   repeat-equality the emission cannot state); at least one position
-   carries a real delta (no-delta classes are the callee-only sweep's,
-   never this detector's). An argument hiding a macro invocation
-   anywhere inside vetoes (TokenStream-normalized macro text is
-   unmatchable, WI-9b2-delim precedent); all-identical classes stay
-   for the tighter verbatim sweep (T422 precedent). One `# allow=many`
-   hunk (tight original range, Section D.5) with diet holes
-   (`- old(E0)` / `+ new(E0.clone())`, no declarations, Section 15.8;
-   a leading-uppercase callee rides backticks, Section 15.4).
-   Pre-image totality is the real-pair engine-count check
-   (`template_pair_holds`): the emitted pair must match exactly N
-   sites in the pre-image — an untouched twin vetoes. Detector name
-   `call_arg_template`. Sub-line whole-arg permutation (WI-6 slice 2)
-   is the same family at subterm granularity: N ≥ 1 pairs whose every
-   call subterm is a same-callee same-arity bare call with one uniform
-   non-trivial arg permutation across all subterms (multiset-equal
-   args, ordered correspondence per Section 15.7; macro args veto;
-   the frame check parks each minus subterm on a placeholder so a swap
-   cannot alias), emitting `swap(E0, E1)` → `swap(E1, E0)` with total
-   subterm sites ≥ 2 (a single site stays ordinary, T375). Pure
-   whole-line classes decline here and fire as the whole-line sweep
-   above.
+   is token-equal across all sites or one shared delta (`O` → `N`), where
+   every argument position independently is (a) token-equal concrete on
+   both sides (uniform positions replay the first site's normalized
+   spelling, hetero preserved positions ride `Ej`), (b) a whole-arg hole
+   (`Ej` both sides, ordered value correspondence per Section 15.7), or
+   (c) a uniform wrapper — one `Ej` occurrence inside a plus template
+   with a literal anchor (method-call `Ej.clone()`, bare-call `f(Ej)`,
+   binary `Ej + 1` / `1 + Ej`, shared reference `&Ej`; every other plus
+   shape vetoes). Plus templates may permute holes (`f(E0, E1)` →
+   `f(E1, E0)`); dropped/duplicated holes veto (a duplicated hole would
+   need unstatable repeat-equality); at least one position carries a real
+   delta (no-delta classes are the callee-only sweep's). Macro-hiding
+   arguments veto (WI-9b2-delim precedent); all-identical classes stay
+   for verbatim (T422). One `# allow=many` hunk (tight original range)
+   with diet holes (`- old(E0)` / `+ new(E0.clone())`, no declarations;
+   uppercase callee backticked). Totality is the real-pair engine-count
+   check (`template_pair_holds`, exactly N sites — an untouched twin
+   vetoes). Detector name `call_arg_template`. Sub-line whole-arg
+   permutation (WI-6 slice 2) is the same family at subterm granularity:
+   N ≥ 1 pairs whose every call subterm is a same-callee same-arity bare
+   call with one uniform non-trivial arg permutation (multiset-equal
+   args; macro args veto; the frame check parks each minus subterm on a
+   placeholder so a swap cannot alias), emitting `swap(E0, E1)` →
+   `swap(E1, E0)` with total subterm sites ≥ 2 (a single site stays
+   ordinary, T375). Pure whole-line classes decline here and fire as the
+   whole-line sweep above.
  - Hetero method-arg-template sweep (WI-5): the method-call sibling —
    N ≥ 2 `-`/`+` pairs, each `recv.m(args)` with per-site token-equal
    receivers (hetero across sites, bound as `Receiver`; a per-site
-   receiver delta is the method-to-function domain, never guessed
-   here) and the same method/arity/hole discipline as the bare-call
-   sibling (method token-equal or one shared delta; no turbofish, no
-   `&`-led sides). One `# allow=many` hunk (tight original range):
-   `- Receiver.m(E0)` / `+ Receiver.m(E0.clone())` (uppercase method
-   backticked, Section 15.4). Totality is the same real-pair check.
-   Detector name `method_arg_template`.
+   receiver delta is the method-to-function domain) and the same
+   method/arity/hole discipline as the bare-call sibling (method
+   token-equal or one shared delta; no turbofish, no `&`-led sides). One
+   `# allow=many` hunk (tight original range): `- Receiver.m(E0)` /
+   `+ Receiver.m(E0.clone())` (uppercase method backticked). Same
+   real-pair totality. Detector name `method_arg_template`.
   - General-expression sweep (WI-6): N ≥ 2 `-`/`+` pairs, each parsing
     whole-line as one `syn::Expr` of the same variant (binary, unary,
     cast, field, index, reference, await — `Call`/`MethodCall`/macro
@@ -9191,229 +8843,183 @@ every length and the totals stay the default truth at any size.
     unsupported subterms veto), anti-unified to one template pair with
     at most one `E{i}` hole. Hole positions are subterms token-equal
     within each pair but hetero across sites (ordered value
-    correspondence, Section 15.7); every other position is a literal
-    anchor token-equal across all sites on its side; at least one
-    anchor carries the delta (`E0 + 1` → `E0 + 2`, `E0.timeout` →
-    `E0.timeout2`, `&E0` → `&mut E0`). No-delta and multi-hole
-    classes stay ordinary. One `# allow=many` hunk (tight original
-    range, Section D.5) with diet holes, no declarations. Pre-image
-    totality is the real-pair engine-count check
-    (`template_pair_holds`): the emitted pair must match exactly N
-    subterms in the pre-image — an untouched twin vetoes. `let`-init
-    subterm fallback (WI-5): when no pair parses whole-line but every
-    pair parses as `let PAT[: TY] = INIT;` with init present and no
-    `let-else` diverge, the init column anti-unifies through the same
-    core (same ≤1-hole, macro/unsupported vetoes); the template must
-    be anchored (neither side a bare literal) and prove N through the
-    same totality check, and emission is the bare anchored template
-    (the engine rewrites it inside each `let`, preserving pat/ty).
-    Whole-line classes keep their winner — the fallback only fires
-    when whole-line declines uniformly. Detector name `general_expr`.
-    Preference (WI-5/D10): where an anchored general template and a
-    bare literal prove the same site set, the anchored form wins —
-    a bare-literal emission is legal only when the literal is the
-    whole matched unit, never when extracted as a subterm of a larger
-    expression an anchored template proves.
+    correspondence); every other position is a literal anchor token-equal
+    across all sites on its side; at least one anchor carries the delta
+    (`E0 + 1` → `E0 + 2`, `E0.timeout` → `E0.timeout2`, `&E0` → `&mut
+    E0`). No-delta and multi-hole classes stay ordinary. One
+    `# allow=many` hunk (tight original range) with diet holes, no
+    declarations. Totality is the real-pair engine-count check
+    (`template_pair_holds`, exactly N subterms — an untouched twin
+    vetoes). `let`-init subterm fallback (WI-5): when no pair parses
+    whole-line but every pair parses as `let PAT[: TY] = INIT;` (init
+    present, no `let-else`), the init column anti-unifies through the
+    same core (same ≤1-hole, macro/unsupported vetoes); the template
+    must be anchored (neither side a bare literal) and prove N, and
+    emission is the bare anchored template (the engine rewrites it inside
+    each `let`). Whole-line classes keep their winner — the fallback only
+    fires when whole-line declines uniformly. Detector name
+    `general_expr`. Preference (WI-5/D10): where an anchored general
+    template and a bare literal prove the same site set, the anchored
+    form wins — a bare-literal emission is legal only when the literal is
+    the whole matched unit.
   - Control-position sweep (WI-8b): N ≥ 2 `-`/`+` pairs whose changed
    lines each carry the changed subterm in one uniform single-line
-   control position — match-arm guard (`_ if GUARD => …`), arm body
-   (`PAT => BODY`), closure body (bare `|x| BODY` or a `let` whose
-   init is a closure), `if`/`while` condition, `for` iterable (pattern
-   token-equal per pair), single-expression `let`-`else` diverge
-   (head token-equal per pair), or `await`/`?` base (whole-line or
-   `let`-init spelling, same wrapper both sides) — with all N pairs
-   extracting through the same position kind (mixed positions
-   decline). The subterm columns anti-unify through the WI-6
-    general-expression core (same ≤1-hole discipline, same macro/
-    unsupported vetoes); call-shaped subterm columns route through
-    the call-arg-template core instead (bare `Call` with a
-    per-side-uniform single-segment callee, `MethodCall` with a
-    per-pair-preserved receiver emitted as `Receiver.m(...)`;
-    qualified/turbofish callees stay ordinary). Emission is the bare
-    WI-6 template pair (`- E0 > 0` / `+ E0 >= 0`) in one `# allow=many`
-    hunk (tight original range, Section D.5) with diet holes, no
-    declarations (field bases infer `expr`, WI-23). Totality is the
-    same whole-file real-pair check:
-   an untouched twin anywhere — including the same subterm in a
-   plain body expression — counts N+1 and vetoes to ordinary instead
-   of rewriting the body (position-scoped counting and control
-   frames in emission stay future work). Detector name
+   control position — match-arm guard, arm body, closure body, `if`/
+   `while` condition, `for` iterable (pattern token-equal per pair),
+   single-expression `let`-`else` diverge (head token-equal per pair), or
+   `await`/`?` base (whole-line or `let`-init spelling, same wrapper
+   both sides) — with all N pairs extracting through the same position
+   kind (mixed positions decline). The subterm columns anti-unify
+   through the WI-6 general-expression core (same ≤1-hole discipline,
+   same vetoes); call-shaped subterm columns route through the
+   call-arg-template core instead (bare `Call` with a per-side-uniform
+   single-segment callee, `MethodCall` with a per-pair-preserved receiver
+   emitted as `Receiver.m(...)`; qualified/turbofish callees stay
+   ordinary). Emission is the bare WI-6 template pair in one
+   `# allow=many` hunk (tight original range) with diet holes, no
+   declarations (field bases infer `expr`, WI-23). Totality is the same
+   whole-file real-pair check: an untouched twin anywhere — including
+   the same subterm in a plain body expression — counts N+1 and vetoes
+   (position-scoped counting stays future work). Detector name
    `control_template`.
-   - Literal-frame sweep (WI-7): N ≥ 2 `-`/`+` pairs, each parsing as
-   one `syn::Stmt` (expression statements, `let`s, `return`s, `const`/
-   `static` items via `Stmt::Item`; header/attr/control lines fail to
-   parse and stay ordinary) and differing from its partner in exactly
-   one literal token — string, char, number, or bool, same kind on both
-   sides (byte/C/raw-string spellings veto; macro-body deltas contribute
-   no literals and veto) — with a uniform `(old, new)` pair across
-   sites while the surrounding frames stay hetero. One `# allow=many`
-   hunk (tight original range, Section D.5) with the bare literal pair
-   (`- "old"` / `+ "new"`), which the engine matches as literal
+   - Literal-frame sweep (WI-7): N ≥ 2 `-`/`+` pairs, each parsing as one
+   `syn::Stmt` (expression statements, `let`s, `return`s, `const`/
+   `static` items; header/attr/control lines fail to parse and stay
+   ordinary) and differing in exactly one literal token — string, char,
+   number, or bool, same kind both sides (byte/C/raw-string spellings
+   veto; macro-body deltas contribute no literals and veto) — with a
+   uniform `(old, new)` pair across sites while the surrounding frames
+   stay hetero. One `# allow=many` hunk (tight original range) with the
+   bare literal pair (`- "old"` / `+ "new"`), matched as literal
    subterms wherever they sit. Guards: all-identical line classes stay
-   for the tighter verbatim sweep (T422 precedent); the old literal
-   occurs exactly once per minus line (one template application must
-   reproduce the plus line); single-site classes stay ordinary.
-   Extracted-subterm veto (WI-5/D10): when every pair parses as a
-   `let` with init and the init column anti-unifies to an anchored
-   general template proving N, the bare pair declines so `general_expr`
-   claims it. Pre-image
-   totality is the same real-pair engine-count check
-   (`template_pair_holds`): macro interiors and string-in-string never
-   count (the engine never enters them), an untouched twin vetoes.
-   Detector name `literal_frame`. Non-`let` statements (e.g.
-   `return x + 1;`) stay bare in this slice (named residue for a
-   `return`/general subterm follow-up).
+   for verbatim (T422); the old literal occurs exactly once per minus
+   line; single-site classes stay ordinary. Extracted-subterm veto
+   (WI-5/D10): when every pair parses as a `let` with init and the init
+   column anti-unifies to an anchored general template proving N, the
+   bare pair declines so `general_expr` claims it. Totality is the same
+   real-pair check (`template_pair_holds`): macro interiors and
+   string-in-string never count; an untouched twin vetoes. Detector name
+   `literal_frame` (non-`let` statements stay bare in this slice —
+   residue for a `return`/general subterm follow-up).
  - Array-head-peel call-migration sweep (T441 slice 1): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call `f(D, &[H, M, T…])` →
-  `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds
-  its shared string-literal head `H` while the tail replays
-  positionally into a new trailing slice (statement-level lines: `let`
-  inits and bare call-statements alike — the engine rewrites the call
-  sub-expression in place). One `# allow=many` hunk per shared
-  `(f, g, H, tail-length)` class (`# expr D` + `# expr M` +
-  `# expr T0…` per tail position; all-identical classes stay for the
-  tighter verbatim sweep). Pre-image totality keys on callee + exact
-  array length with the unescaped head (other arities/lengths never
-  match and never count). Cross-hunk classes compress non-whole
-   sections (pure additions elsewhere veto whole-section balance but
-   not this sweep); the emitted single-pattern bodies are invisible to
-   the later verbatim pass. Hunk atomicity (WI-9e, same index-based
-  fixed point as the macro-interior sweep): a class fires only if
+  `g(D, M, &[T…])` — the minus 2-arg array-literal second arg sheds its
+  shared string-literal head `H` while the tail replays positionally
+  into a new trailing slice (statement-level lines; the engine rewrites
+  the call sub-expression in place). One `# allow=many` hunk per shared
+  `(f, g, H, tail-length)` class (`# expr D` + `# expr M` + `# expr T0…`
+  per tail position; all-identical classes stay for verbatim). Totality
+  keys on callee + exact array length with the unescaped head (other
+  arities/lengths never match and never count). Cross-hunk classes
+  compress non-whole sections (pure additions elsewhere veto
+  whole-section balance but not this sweep); the emitted single-pattern
+  bodies are invisible to the later verbatim pass. Hunk atomicity
+  (WI-9e fixed point, same as macro-interior): a class fires only if
   every balanced hunk holding a member pair is fully covered by passing
-  classes — a class whose member hunk also holds an uncovered pair
-  drops to a fixed point (cascade: dropping uncovers hunks) and the
-  section falls through to ordinary; rules reserve only for survivors.
+  classes (cascade drops uncover hunks; rules reserve only for survivors).
 - Let type-addition sweep (WI-4a, first anti-unification shape): N ≥ 2
   `-`/`+` pairs, each a complete single-line `let PAT = INIT;` →
   `let PAT: T = INIT;` — the pattern and initializer token-equal per
   site and hetero across sites (bound as inferred `P0`/`E0`, no
-  declarations, SPEC 15.8), with one uniform concrete type `T` across
-  all sites (a varying type would need an unbound plus-side `T0`,
-  T442-illegal, so it stays ordinary). Per-site pattern/init deltas,
-  `let-else`, macro/closure/unsupported inits, and all-identical
-  classes (verbatim stays the tighter winner, T422 precedent) stay
-  ordinary. Pre-image totality counts every untyped with-init
+  declarations), with one uniform concrete type `T` across all sites (a
+  varying type would need an unbound plus-side `T0`, T442-illegal).
+  Per-site pattern/init deltas, `let-else`, macro/closure/unsupported
+  inits, and all-identical classes (verbatim stays the tighter winner,
+  T422) stay ordinary. Totality counts every untyped with-init
   no-diverge `let` (`let_untyped_holds`): the minus template matches
-  exactly that domain (ascription agreement is strict, so typed twins
-  never match and never count), and the count must equal N.
-  Framed class (WI-14 slice 4 + arm/branch residue): N ≥ 2 pairs
-  whose every line unwraps through one `Stmt` rung — single-statement
-  one-line `fn` frames (`fn f0() { let x = E; }` →
-  `fn f0() { let x: T = E; }`), match-arm blocks
-  (`1 => { let a = E; a },` → `1 => { let a: T = E; a },`, exactly one
-  `let` per block), or `if`/`else` branches
-  (`if c { let a = E; a } else { … }`, `} else { let a = E; a }`,
-  exactly one `let` across then/else; `else if` chains stay ordinary)
-  — raise to the identical bare hunk (no frame text emitted, D14) when
-  every pair unwraps through the same rung to an inner `let` of the
-  own-line class with a frame-equal outer (a frame delta alongside the
-  inner rewrite stays ordinary — never a partial claim). Each rung's
-  outer (fn/arm/branch) is never itself a `Stmt::Local`, so the bare
-  emission cannot match an outer `let` first. `let`-outer frames
-  (`let g = || { let x = E; };`, `let r = if … { let … };`; two-`let`
-  blocks as ambiguous inners) stay ordinary by construction
-  (unwrapping them would hand the engine a template matching the
-  outer `let`, over-matching); mixed-rung and mixed whole-line +
-  framed sections stay ordinary (all-or-nothing per side). Same
-  totality (the AST count descends into `fn` bodies, match arms, and
-  block inits; needles are the whole minus lines).
+  exactly that domain (ascription agreement is strict — typed twins never
+  match), and the count must equal N.
+  History (framed class, WI-14 slice 4 + arm/branch residue): N ≥ 2
+  pairs whose every line unwraps through one `Stmt` rung — single-statement
+  one-line `fn` frames, match-arm blocks (exactly one `let` per block),
+  or `if`/`else` branches (exactly one `let` across then/else; `else if`
+  chains stay ordinary) — raise to the identical bare hunk (no frame text
+  emitted, D14) when every pair unwraps through the same rung to an inner
+  `let` of the own-line class with a frame-equal outer (a frame delta
+  alongside stays ordinary). Each rung's outer is never itself a
+  `Stmt::Local`, so the bare emission cannot match an outer `let` first;
+  `let`-outer frames (`let g = || { let x = E; };`, two-`let` blocks as
+  ambiguous inners) stay ordinary (unwrapping would over-match); mixed
+  rungs and mixed whole-line + framed sections stay ordinary
+  (all-or-nothing per side). Same totality (the AST count descends into
+  `fn` bodies, match arms, block inits; needles are the whole minus
+  lines).
 - Type rewrite sweep (WI-4b, second anti-unification shape): N ≥ 2
   `-`/`+` pairs, each a complete single-line `let PAT: T = INIT;` →
-  `let PAT: T′ = INIT;` — the pattern and initializer token-equal per
-  site (a per-site init/pattern delta is a let-statement template, not
-  a type template), while the ascribed types anti-unify across sites
-  to one template pair with shared inferred `T0…` holes (e.g.
-  `- Vec < T0 >` / `+ Box < [T0] >`, no declarations, SPEC 15.8;
-  all-identical classes stay for the tighter verbatim sweep, T422
-  precedent).   Guards: same `syn::Type` variant at every generalized
-  node (the root constructor is the literal anchor); holes only in
-  `Type` positions at depth ≤ 2 (deeper variation coarsens to the
-  shallowest varying level) — except parenthesized `Fn` inputs/outputs,
-  which are granted one extra level (WI-6d: the `dyn`/`impl` wrapper
-  plus bound plus path triple-count a single bound position, so
-  `Box<dyn Fn(..)>` holes land at depth 3); lifetimes, const-generic args,
-  mutability and all other non-`Type` slots must agree across sites (a
-  varying lifetime would mis-rewrite — the engine wildcards pattern
-  lifetimes while the plus side would emit the first site's spelling);
-  hole correspondence is pairwise (an unbound plus-side hole is
-  T442-illegal; dropped or reordered holes stay ordinary). Only
-  `let`-ascription pairs qualify (bare-type full lines never occur in
-  `-U0` diffs of valid Rust, so no bare-`Type` path exists).
-  Pre-image totality is the generic engine-count check: the emitted
-  minus template must match exactly N type subterms in the pre-image
-  (macro/string twins never count — the engine never enters them;
-  nested matches count outer-only, exactly like the real sweep
-  rewrites). Detector name `type_sweep`.
+  `let PAT: T′ = INIT;` — pattern and initializer token-equal per site
+  (a per-site init/pattern delta is a let-statement template, not a type
+  template), while the ascribed types anti-unify to one template pair
+  with shared inferred `T0…` holes (e.g. `- Vec < T0 >` / `+ Box <
+  [T0] >`, no declarations; all-identical classes stay for verbatim,
+  T422). Guards: same `syn::Type` variant at every generalized node
+  (the root constructor is the anchor); holes only in `Type` positions
+  at depth ≤ 2 (deeper variation coarsens to the shallowest varying
+  level) — except parenthesized `Fn` inputs/outputs, granted one extra
+  level (WI-6d: the `dyn`/`impl` wrapper plus bound plus path
+  triple-count a single bound position, so `Box<dyn Fn(..)>` holes land
+  at depth 3); lifetimes, const-generic args, mutability and all other
+  non-`Type` slots must agree (a varying lifetime would mis-rewrite —
+  the engine wildcards pattern lifetimes while the plus side would emit
+  the first site's spelling); hole correspondence is pairwise (unbound
+  plus-side holes are T442-illegal; dropped/reordered holes stay
+  ordinary). Only `let`-ascription pairs qualify (bare-type full lines
+  never occur in `-U0` diffs of valid Rust). Totality is the generic
+  engine-count check: the emitted minus template must match exactly N
+  type subterms (macro/string twins never count; nested matches count
+  outer-only). Detector name `type_sweep`.
 - Joint let-template sweep (WI-5 slice 1, third anti-unification
   shape): N ≥ 2 `-`/`+` pairs, each a complete single-line
-  typed `let PAT: T = INIT;` → `let PAT: T = INIT′;` — the pattern and
-  ascribed type token-equal per site (a per-site pat/ty delta belongs
-  to another detector, never guessed here) and hetero across sites
-  (bound as inferred `P0`/`T0`, no declarations, SPEC 15.8 — WI-3:
-  hetero destructuring patterns anti-unify structurally, e.g.
-  `Some(v)` / `Some(w)` → `Some(P0)`, depth ≤ 2 with ≥ 1 literal
-  anchor and shared holes for identical per-site value vectors per
-  SPEC 15.7; uniform concrete positions replay the first site's
-  spelling so the real-apply stays byte-identical), while the
-  initializer carries one uniform delta: either a uniform concrete
-  rewrite or one `E0` hole with a uniform structural wrapper on the
-  plus side (method call with varying receiver, e.g.
-  `- let P0: T0 = E0;` / `+ let P0: T0 = E0.wrapping_add(1);`; bare
-  call with one varying argument; binary with one varying side — each
-  with ≥ 1 literal anchor and exactly one `E0` occurrence, ordered
-  value correspondence per SPEC 15.7). Guards: ascriptions on both
-  sides (minus-untyped classes stay with the type-addition sweep;
-  per-site-preserved-init classes stay with the type sweep — disjoint
-  by construction); no attributes, no `let-else`, no unbound/dropped
-  holes (T442 posture); all-identical classes stay for the tighter
-  verbatim sweep (T422 precedent). Pre-image totality is the real-pair
-   engine-count check (`template_pair_holds`): the emitted minus must
-   match exactly N typed lets in the pre-image — an untouched twin
-   vetoes. Detector name `let_template` (same family). At N = 1 a
-   method-wrap single fires as the allow-one holed template
-   (`- let P0: T0 = E0;` / `+ let P0: T0 = E0.wrapping_add(1);`) under
-   the precision guard (uniqueness = `template_pair_holds` at n = 1
-   plus the T361 byte-compare; the preserved pattern hoists only a
-   bare ident to `P0` or a single-argument tuple struct over a bare
-   ident to `Path(P0)` — never a bare `P0`, which would also match
-   unrelated lets; nested/multi-arg/`mut` patterns and bare-call or
-   binary plus-shapes stay with the literal floor).
+  typed `let PAT: T = INIT;` → `let PAT: T = INIT′;` — pattern and type
+  token-equal per site (a per-site pat/ty delta belongs to another
+  detector) and hetero across sites (bound as inferred `P0`/`T0`, no
+  declarations — WI-3: hetero destructuring patterns anti-unify
+  structurally, e.g. `Some(v)` / `Some(w)` → `Some(P0)`, depth ≤ 2 with
+  ≥ 1 literal anchor and shared holes for identical per-site value
+  vectors per SPEC 15.7; uniform concrete positions replay the first
+  site's spelling), while the initializer carries one uniform delta:
+  either a uniform concrete rewrite or one `E0` hole with a uniform
+  structural wrapper on the plus side (method call with varying receiver,
+  bare call with one varying argument, binary with one varying side —
+  each with ≥ 1 literal anchor and exactly one `E0` occurrence, ordered
+  value correspondence). Guards: ascriptions on both sides
+  (minus-untyped classes stay with type-addition; per-site-preserved-init
+  classes stay with the type sweep); no attributes, no `let-else`, no
+  unbound/dropped holes (T442); all-identical classes stay for verbatim
+  (T422). Totality is the real-pair engine-count check
+  (`template_pair_holds`, exactly N typed lets — an untouched twin
+  vetoes). Detector name `let_template` (same family). At N = 1 a
+  method-wrap single fires as the allow-one holed template under the
+  precision guard (`template_pair_holds`@n=1 + T361; the preserved
+  pattern hoists only a bare ident to `P0` or a single-argument tuple
+  struct over a bare ident to `Path(P0)` — never a bare `P0`, which
+  would match unrelated lets; nested/multi-arg/`mut` patterns and
+  bare-call or binary plus-shapes stay with the literal floor).
  - Untyped joint let-template sweep (WI-8 slice 1): the joint template
   without ascriptions — N ≥ 2 untyped→untyped `let PAT = INIT;` →
   `let PAT = INIT′;` pairs with per-site preserved patterns plus one
-  uniform initializer delta (uniform concrete rewrite, e.g.
-  `let v = const { 1 + 2 };` → `let v = const { 1 + 3 };` and
-  `let v = _;` → `let v = 0;` — `const` blocks and `_` are structural
-  inits, matched by the engine and admitted by the shape gate; or one
-  `E0` hole with a uniform structural wrapper, e.g.
-  `- let Some(P0) = E0;` / `+ let Some(P0) = E0.unwrap_or(0);`).
-  Guards: no ascription on either side (ascribed classes stay with the
-  joint typed template above — disjoint by construction); no
+  uniform initializer delta (uniform concrete rewrite — `const` blocks
+  and `_` are structural inits admitted by the shape gate; or one `E0`
+  hole with a uniform structural wrapper). Guards: no ascription either
+  side (ascribed classes stay with the typed template above); no
   attributes, no `let-else`; macro/unsupported inits veto
-  (nested-macro classes belong to the macro-interior sweep — the
-  engine never binds inside macro bodies); all-identical classes stay
-  for verbatim (T422). Totality is the same real-pair engine-count
-   check. Detector name `let_template` (same family). At N = 1 the
-   same method-wrap gate fires allow-one (`- let Some(P0) = E0;` /
-   `+ let Some(P0) = E0.unwrap_or(0);`) under the precision guard
-   with the same totality and byte-compare; the `Some(P0)` anchor is
-   what keeps the exactly-one-hit proof biting.
+  (nested-macro classes belong to the macro-interior sweep); all-identical
+  classes stay for verbatim (T422). Same real-pair totality. Detector
+  name `let_template` (same family). At N = 1 the same method-wrap gate
+  fires allow-one under the precision guard with the same totality and
+  byte-compare; the `Some(P0)` anchor keeps the exactly-one-hit proof
+  biting.
  - Tuple-position swap sweep (WI-8 slice 1): N ≥ 2 untyped→untyped
-  `let (P, Q) = E;` → `let (Q, P) = E;` pairs — each minus/plus
-  pattern an arity-2 tuple with the same two elements in swapped order
-  (real swap per site, no `let (x, x)` self-swap), the initializer
-  token-equal per site (a per-site init delta is an untyped-let
-  template, never guessed here). Cross-site hetero elements ride
-  positional holes (`P0` minus-first, `P1` minus-second, replayed
-  swapped; uniform elements stay concrete in first-site spelling);
-  hetero inits ride `E0`, uniform inits stay concrete. Macro/
-  unsupported inits veto, same posture as above. Totality is the same
-  real-pair engine-count check. The typed twin
-   (`let (P, Q): T = E;`) stays ordinary. Detector name `let_template`
-    (same family). At N = 1 the swap fires allow-one
-    (`- let (P0, P1) = E0;` / `+ let (P1, P0) = E0;`) under the
-    precision guard with the same totality and byte-compare; a per-site
-    init delta is still an untyped-wrap shape, never guessed here.
+  `let (P, Q) = E;` → `let (Q, P) = E;` pairs — each minus/plus pattern
+  an arity-2 tuple with the same two elements in swapped order (no
+  `let (x, x)` self-swap), the initializer token-equal per site (a
+  per-site init delta is an untyped-let template). Cross-site hetero
+  elements ride positional holes (`P0`/`P1` replayed swapped; uniform
+  elements stay concrete); hetero inits ride `E0`, uniform inits stay
+  concrete. Macro/unsupported inits veto. Same real-pair totality. The
+  typed twin (`let (P, Q): T = E;`) stays ordinary. Detector name
+  `let_template` (same family). At N = 1 the swap fires allow-one
+  (`- let (P0, P1) = E0;` / `+ let (P1, P0) = E0;`) under the precision
+  guard; a per-site init delta is still an untyped-wrap shape.
 - Binder-rename window (WI-5): one binder-def pair (a plain single-ident
   `let old = INIT;` → `let new = INIT;`, typed twin with a token-equal
   ascription, no attrs/`let-else`/macro init) plus 1..N in-scope use
@@ -9427,17 +9033,15 @@ every length and the totals stay the default truth at any size.
   exactly one `let` in the pre-image (an untouched twin def records
   `totality:2:1`); every engine-computed follow line is a claimed use
   line (`veto:unproven-use` otherwise — the raiser never invents an
-  edit the diff did not show); every claimed use line is an
-  engine-computed follow line and the scratch-apply reproduces exactly
-  the native plus lines at the claimed sites with every other line
-  byte-identical (`veto:capture-risk` otherwise — shadowing, capturing,
-  macro-hidden, nested-fn, or out-of-block uses the proof cannot own).
-  Destructuring binders, anti-unified (non-token-equal) inits, shorthand
-  struct-literal uses, and dead binders with no uses in the diff stay
-  ordinary. Detector name `let_binder`. Fused-header sections split one
-  level up: the binder run fuses in the subhunk partition while other
-  runs raise alone (fixture `12-stmt-rewrite` raises as a type single
-  plus one binder intent).
+  edit); every claimed use line is an engine-computed follow line and
+  the scratch-apply reproduces exactly the native plus lines
+  (`veto:capture-risk` otherwise — shadowing, capturing, macro-hidden,
+  nested-fn, or out-of-block uses). Destructuring binders, anti-unified
+  inits, shorthand struct-literal uses, and dead binders with no uses in
+  the diff stay ordinary. Detector name `let_binder`. Fused-header
+  sections split one level up: the binder run fuses in the subhunk
+  partition while other runs raise alone (fixture `12-stmt-rewrite`
+  raises as a type single plus one binder intent).
 - Column-0 one-line free-fn terse single (WI-6(a)): a lone
   `fn foo() {}` → `fn bar() {}` definition (whole item on one line,
   rename-only, byte-identical body, column-0 — indented one-liners are
@@ -9451,26 +9055,25 @@ every length and the totals stay the default truth at any size.
   occurrence of the old ident outside the def line vetoes as
   `veto:unproven-use` (a col0 rename whose calls the diff does not
   update stays wholly ordinary — the raiser never invents edits); the
-  D13 scratch-apply must reproduce the plus line at the site with every
-  other line byte-identical. Detector name `item_rename` (fixture
-  `04-mixed` raises as the terse def plus the call single).
+  D13 scratch-apply must reproduce the plus line at the site. Detector
+  name `item_rename` (fixture `04-mixed` raises as the terse def plus
+  the call single).
 - Double-delta `impl` widening (WI-6(b)): a section holding exactly one
   `impl OldTr for OldTy {` → `impl NewTr for NewTy {` pair plus its
   trait-def pair, its self-ty-def pair (`struct`/`enum`/`union`/`type`),
   one inherent self-ty head pair (no `for`) and one trait-side head
   pair (with `for`), with every remaining pair a bare item rename,
   raises as the rest singles plus the two head singles re-headered to
-  the `syn` cover of head + double-delta item spans (the authored
-  `@@ -18,23 @@` / `@@ -30,11 @@` overlapping wide sweeps, one shared
+  the `syn` cover of head + double-delta item spans (one shared
   shape per half, hunks ordered by start) — the double-delta line is
   absorbed by both wides and never stated alone. Missing defs/heads, a
   second double-delta, cross-file defs, or a non-item rest pair declines
   to today's behavior (tight singles plus the ordinary remainder).
   Soundness is the D13 section probe over every pair (range-cited hunks
-  cannot over-match; the probe fails the arm on any mismatch); pricing
-  is the caller's `pair_section_gate` (`item_rename`, Precision).
-  Detector name `item_rename` (fixture `14-item-rename` replays the
-  authored 8-hunk grouping byte-for-byte up to rule names).
+  cannot over-match); pricing is the caller's `pair_section_gate`
+  (`item_rename`, Precision). Detector name `item_rename` (fixture
+  `14-item-rename` replays the authored 8-hunk grouping byte-for-byte
+  up to rule names).
 - Rename + full attr-strip joint (WI-6(c)): an unbalanced Nv1 hunk of
   N-1 attribute/doc deletions (`#[…]`, `///`, `//!`) above a column-0
   fn pure-rename header pair, with a bare header plus line (full strip
@@ -9478,12 +9081,11 @@ every length and the totals stay the default truth at any size.
   (attrs included, via `syn`) plus `# attrs=strip` plus the rename
   frame (`- fn foo(...) {` / `+ fn bar(...) {` + `...` + `}`). No
   `# allow` line (a single-item joint never needs it, and carrying
-  `# allow=many` changes the engine's reported span granularity,
-  breaking canonical equality with the authored diet). A stripped line
-  mentioning the old ident vetoes as `veto:attr-mentions-old` (opaque
-  attr interiors are never classified). Soundness is the D13 unbalanced
-  splice probe (first changed line ← plus, rest deleted; the emission
-  must reproduce it byte-identical). Detector name `attr_sweep`
+  `# allow=many` changes the engine's reported span granularity).
+  A stripped line mentioning the old ident vetoes as
+  `veto:attr-mentions-old` (opaque attr interiors are never classified).
+  Soundness is the D13 unbalanced splice probe (first changed line ←
+  plus, rest deleted; byte-identical). Detector name `attr_sweep`
   (fixture `22-attrs-strip` replays the authored joint).
 - Statement-sequence sweep (WI-5c, fourth anti-unification shape): N
   flat `-`/`+` pairs splitting block-major into ≥ 2 blocks × K = 2–4
@@ -9492,100 +9094,82 @@ every length and the totals stay the default truth at any size.
   16.4.2), each statement position anti-unified across blocks with the
   shared let cores in order (type-addition, joint typed template,
   untyped-init template, uniform-concrete anchor for repeated identical
-  edits); hetero positions ride positionally-numbered holes (`P0`/`E0`
-  in position 0, `P1`/`T1`/`E1` in position 1, … — windows bind
-  independently, Section 15.7), identical ones stay concrete. Guards:
-  K tried largest-first (4, 3, 2); all-identical whole classes stay
-  for the tighter verbatim sweep (T422 precedent); non-`let` members,
-  attribute/diverge carriers, and divergent positions stay ordinary.
-  A single block (N = 1) declines — single-block runs are the
-  `single_block` detector below, never this one. One `# allow=many`
-  hunk with K minus/plus lines (tight original range, Section D.5).
-  Pre-image totality is the real-pair engine-count check
-  (`template_sequence_holds`): the emitted K-line minus must match
-  exactly N block windows in the pre-image — an untouched twin window
-  vetoes. Detector name `sequence`.
+  edits); hetero positions ride positionally-numbered holes
+  (independently-bound windows, Section 15.7), identical ones stay
+  concrete. Guards: K tried largest-first (4, 3, 2); all-identical whole
+  classes stay for verbatim (T422); non-`let` members,
+  attribute/diverge carriers, and divergent positions stay ordinary. A
+  single block (N = 1) declines — single-block runs are the
+  `single_block` detector below. One `# allow=many` hunk with K
+  minus/plus lines (tight original range). Totality is the real-pair
+  check (`template_sequence_holds`, exactly N block windows — an
+  untouched twin window vetoes). Detector name `sequence`.
 - Single-block sweep (WI-5d, fifth anti-unification shape): one
   contiguous run of K = 2–4 hetero plain-`let` pairs (a single block
-  window, N = 1; changed old lines consecutive — the engine only
-  matches consecutive statement windows), each position
+  window, N = 1; changed old lines consecutive), each position
   anti-unified *within* its own pair: a subterm preserved verbatim
   between that pair's minus and plus rides a positional hole
-  (`Pj`/`Tj`/`Ej`, same numbering as the sequence detector so window
-  statements bind independently, Section 15.7), anything that differs
-  stays concrete in original site spelling (span-sliced, never
-  token-normalized; concrete inits ride the same engine-matchability
-  gate as holes, so macro/opaque inits decline instead of emitting a
-  dead hunk). No hole is shared across lines. Territory gate: the
-  run must mix init families (expression kinds) — a family-uniform
-  run is an earlier detector's class and its verdict (fire or veto)
-  stands, never undercut by a narrower re-spelling here. Guards:
-  mixed runs decline (a header, expression, or any non-plain-`let`
-  member — permanent non-goal for the window fuser itself (WI-15
-  slice 1 splits a fused `fn`-header-plus-statement def hunk one level
-  up, in the fn-joint pre-pass: one to three `syn::Stmt`/`syn::Expr`
-  body pairs park as verbatim leftovers while a Joint-A-shaped or
-  rename-only header still fires its follow; more than three bodies,
-  attr/doc/item lines, attr-shaped company, interleaved order, and
-  B1-shaped headers stay unsplit by construction. Full-history probe:
-  0/2473 paired hunks over 467 commits hold a splittable hetero let
-  window); one-sided ascriptions decline
-  (a type-add/removal inside the run is another detector's class);
-  K = 1 true singles stay ordinary (Section D.4 N = 1 rule); K > 4
-  exceeds the `Sequence` engine arm's exact-K bound; all-identical
-  whole classes stay for the tighter verbatim sweep (T422 precedent).
-  One allow-one hunk (tight original range, no `# allow=many`, no
-  `# sweep` — a twin fails loud as too-many at apply time). Pre-image
-  totality is the same real-pair engine-count check
-  (`template_sequence_holds` with n = 1): the K-line minus must match
-  exactly one window — an untouched twin vetoes. Detector name
-  `single_block`. A narrow K = 2 hetero window (one pure type-add
-  plus one typed method-wrap, WI-7 slice 2) fires as one allow-one
-  window intent under the same totality and byte-compare; any other
-  delta combination is not a window and falls through to the
-  partition literals — the one-sided decline above stands.
+  (`Pj`/`Tj`/`Ej`, same numbering as the sequence detector), anything
+  that differs stays concrete in original site spelling (span-sliced,
+  never token-normalized; concrete inits ride the same
+  engine-matchability gate as holes, so macro/opaque inits decline
+  instead of emitting a dead hunk). No hole is shared across lines.
+  Territory gate: the run must mix init families (expression kinds) — a
+  family-uniform run is an earlier detector's class and its verdict
+  stands, never undercut here. Guards: mixed runs decline (a header,
+  expression, or any non-plain-`let` member — the window fuser itself
+  never splits container joints; WI-15 slice 1 splits a fused
+  `fn`-header-plus-statement def hunk one level up in the fn-joint
+  pre-pass: one to three body pairs park as verbatim leftovers while a
+  Joint-A-shaped or rename-only header still fires its follow; more than
+  three bodies, attr/doc/item lines, attr-shaped company, interleaved
+  order, and B1-shaped headers stay unsplit; 0/2473 paired hunks over 467
+  commits hold a splittable hetero let window); one-sided ascriptions
+  decline (another detector's class); K = 1 true singles stay ordinary
+  (Section D.4 N = 1 rule); K > 4 exceeds the `Sequence` engine arm's
+  exact-K bound; all-identical whole classes stay for verbatim (T422).
+  One allow-one hunk (tight original range, no directives — a twin fails
+  loud as too-many at apply time). Totality is the same real-pair check
+  (`template_sequence_holds` with n = 1, exactly one window — an
+  untouched twin vetoes). Detector name `single_block`. A narrow K = 2
+  hetero window (one pure type-add plus one typed method-wrap, WI-7 slice
+  2) fires as one allow-one window intent under the same totality and
+  byte-compare; any other delta combination falls through to the
+  partition literals.
 - Repeat-fold sweep: N ≥ 2 `-`/`+` pairs where every minus is the same
   1-arg callee (bare `foo` or qualified `Box::new` — leading `::`,
   qself, and generic args decline here; narrower than the qualified
-  sweep, whose engine spelling now covers both) applied one or more times around a plus side that is exactly the
-  full-strip fixpoint (peeling that callee repeatedly from the minus
-  reaches the plus; partial strips are the `partial_strip` detector
-  below — a `# repeat` emission would over-strip the untouched layers). Call sites inside
-  `let` inits unwrap to their init call (T449 precedent — the emission
-  stays a bare pattern and the engine rewrites the call sub-expression
-  in place); `&`-led sides decline (general-expr territory);
-  all-byte-identical classes stay for the tighter verbatim sweep (T422
-  precedent). One `# allow=many` hunk (`- C(E0)` / `+ E0`, inferred
-  hole, Section 15.8; uppercase last segments ride backticks per the
-  call-sweep rule) with `# repeat` when some pair nested two or more
-  deep — flat single-unwrap sweeps emit the plain hunk — so one hunk
-  strips every depth bottom-up (Section 17.8). The plus side must hold
-  no same-callee call (repeat would keep folding past the diff's
-  post-state). Pre-image totality is the engine-count fold check: the
-   real fold probe (`- C(E0)` / `+ E0` with `# sweep` + `# repeat`)
-   must match exactly N outermost sites (nested matches are folds, not
-   separate sites; macro/string twins never count — the engine never
-   enters them). Detector name `repeat_fold`. At N = 1 a full-strip
-   single fires as the allow-one fold template (tight original range,
-   `# repeat` when nested two or more deep, plain hunk for a flat
-   single-layer strip) under the precision guard: uniqueness is the
-   same fold counter at n = 1 plus the T361 byte-compare with
-   `# repeat`; an untouched outermost twin vetoes to the literal floor.
-   N = 1 partial strips stay with `partial_strip`/ordinary.
+  sweep) applied one or more times around a plus side that is exactly
+  the full-strip fixpoint (peeling that callee repeatedly from the
+  minus reaches the plus; partial strips are the `partial_strip`
+  detector below). Call sites inside `let` inits unwrap to their init
+  call (emission stays a bare pattern); `&`-led sides decline
+  (general-expr territory); all-byte-identical classes stay for verbatim
+  (T422). One `# allow=many` hunk (`- C(E0)` / `+ E0`, inferred hole;
+  uppercase last segments backticked) with `# repeat` when some pair
+  nested two or more deep — flat single-unwrap sweeps emit the plain
+  hunk — so one hunk strips every depth bottom-up (Section 17.8). The
+  plus side must hold no same-callee call (repeat would keep folding
+  past the post-state). Totality is the engine-count fold check: the
+  real fold probe (`- C(E0)` / `+ E0` with `# sweep` + `# repeat`) must
+  match exactly N outermost sites (nested matches are folds, not separate
+  sites; macro/string twins never count). Detector name `repeat_fold`.
+  At N = 1 a full-strip single fires as the allow-one fold template
+  (tight original range, `# repeat` when nested two or more deep) under
+  the precision guard (`template_pair_holds`@n=1 + T361 with `# repeat`;
+  an untouched outermost twin vetoes to the literal floor). N = 1
+  partial strips stay with `partial_strip`/ordinary.
 - Partial-strip sweep (WI-1d): N ≥ 2 `-`/`+` pairs where every minus is
   the same 1-arg callee applied exactly one layer deeper than the plus
   (`C(C(x))` → `C(x)`; uniform depth both sides — mixed `2→1` + `3→2`
-  classes stay ordinary, one template cannot spell both depths without
-  overlap ambiguity), same callee discipline as the fold
-  (leading `::`, qself, generics, `&`-led sides decline — narrower than
-  the qualified sweep's engine spelling;
-  all-byte-identical classes stay for verbatim, T422). `let`-init sites
-  unwrap the same way. One plain `# allow=many` hunk with no `# repeat`
+  classes stay ordinary, one template cannot spell both depths), same
+  callee discipline as the fold (leading `::`, qself, generics, `&`-led
+  sides decline; all-byte-identical classes stay for verbatim, T422).
+  `let`-init sites unwrap the same way. One plain `# allow=many` hunk
   (`- C(C(E0))` / `+ C(E0)` generalized to depth d, inferred hole;
   uppercase last segments backticked) — a `# repeat` emission would
-  over-strip the deliberately kept layers (Section 17.8). Totality is
-  the real-pair engine-count check (`template_pair_holds`): the emitted
-  pair must match exactly N sites in the pre-image. Detector name
+  over-strip the kept layers (Section 17.8). Same real-pair totality
+  (`template_pair_holds`, exactly N sites). Detector name
   `partial_strip`.
 - Method-to-function sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish, non-`&` receiver) → a bare
@@ -9594,8 +9178,7 @@ every length and the totals stay the default truth at any size.
   ident, one shared function callee, and uniform minus-arity →
   one `# allow=many` hunk (`# expr Receiver` + `# expr E0…`).
   Uppercase idents ride backticks on the method
-  (`` Receiver.`Old`(E0) `` — raw `Receiver.Old(E0)` binds `Old` and
-  silently rewrites twin methods) and on an uppercase plus-side bare
+  (`` Receiver.`Old`(E0) ``) and on an uppercase plus-side bare
   callee (`` `New`(Receiver, E0) ``).
 - Method-to-method sweep: N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish either side, non-`&` receivers) →
@@ -9603,8 +9186,7 @@ every length and the totals stay the default truth at any size.
   one shared old-method ident, one shared new-method ident
   (`old != new`), and uniform arity → one `# allow=many` hunk
   (`# expr Receiver` + `# expr E0…`; uppercase idents backticked —
-  `` Receiver.`Old`(E0) `` → `` Receiver.`New`(E0) ``, same hole
-  class as the call sweep).
+  same hole class as the call sweep).
 - Same-method literal sweep (T420): N ≥ 2 `-`/`+` pairs, each a method call
   (`syn`-parsed, no turbofish either side, non-`&` receivers, one trailing
   `;`/`,` stripped) → the same method ident with per-site token-equal
@@ -9612,14 +9194,13 @@ every length and the totals stay the default truth at any size.
    real old/new delta → one `# allow=many` hunk (`# expr Receiver` only,
    concrete `ToTokens` spellings: backtick literals are ident-only per
    SPEC 15.4, and a plus-only `E` would be unbound; an uppercase method
-   rides backticks — `` Receiver.`Old`(E0, lit) ``, same hole class).
-   Pre-image totality
-   keys on method + old-arg tuple (plain callee+arity would over-count
-   same-method/different-arg sites that the pattern can never match).
-   An arg hiding a macro invocation anywhere inside stays ordinary
-   (WI-9b2-method-probe): TokenStream-normalized macro text is
-   unmatchable by the engine, so the sweep declines and those pairs
-   fall through to the nested macro sweep (or ordinary).
+   rides backticks — same hole class).
+   Pre-image totality keys on method + old-arg tuple (plain callee+arity
+   would over-count same-method/different-arg sites the pattern can
+   never match). An arg hiding a macro invocation anywhere inside stays
+   ordinary (WI-9b2-method-probe: TokenStream-normalized macro text is
+   unmatchable, so the sweep declines and those pairs fall through to
+   the nested macro sweep).
 - `&`-receiver strip sweep: N ≥ 2 `-`/`+` pairs, each containing
    exactly one shared-reference-to-method call (`syn`-parsed, no
    turbofish/`&mut`/explicit lifetime) with the plus side equal to
@@ -9641,82 +9222,70 @@ every length and the totals stay the default truth at any size.
   `+ crate::new_api(E0…)`; SPEC 19.3 prefers concrete paths, no `# symbol`
   tax). An uppercase last segment rides backticks on that segment only
   (`` crate::`Old`(E0) `` — bare `crate::Old(E0)` leaves plus-side
-  `New` unbound; only the last segment can infer, so prefixes stay
-  verbatim). Bare single-segment `::foo` renames stay ordinary (no
-  prefix to anchor the win). Call sites inside
-  `let` inits unwrap to their init call (T449 precedent). Pre-image
-  totality keys on the exact rendered path (qualifier + leading +
-  segments) + arity (bare twins never match a qualified pattern and
-  vice versa — probed parity).
+  `New` unbound; only the last segment can infer). Bare single-segment
+  `::foo` renames stay ordinary (no prefix). Call sites inside `let`
+  inits unwrap to their init call (T449). Totality keys on the exact
+  rendered path (qualifier + leading + segments) + arity (bare twins
+  never match a qualified pattern and vice versa — probed parity).
 - Turbofish sweep: N ≥ 2 `-`/`+` pairs, one uniform variant per hunk —
   bare calls (`foo::<u8>(x)` → `bar::<u8>(x)`), qualified calls
   (`crate::old::<u8>(x)` → `crate::new::<u8>(x)`, same prefix rule as
   the qualified sweep), or method calls (`recv.old::<u8>(x)` →
   `recv.new::<u8>(x)` with per-site token-equal receivers) — every side
-  carrying `::<…>` (the `::` spelling; `let`-init calls unwrap, T449).
-  Value args token-equal per site with uniform value arity; turbofish
-  uniform turbo-arity with per-site minus token-equals plus; across all
-  sites at most one turbo position varies — that position emits an
-   inferred `T` on both sides (`- foo::<T>(E0)` /
-   `+ bar::<T>(E0)`), the rest verbatim. An uppercase bare/qualified
-   callee rides backticks (`` `Old`::<u8>(E0) ``,
-   `` crate::`Old`::<T>(E0) `` — bare `Old::<u8>(E0)` leaves plus-side
-   `New` unbound); turbofish-suffixed method idents stay plain (the
-   `::<` suffix defeats hole inference — probed literal, no backticks).
-   A bare-without-turbofish
-   pattern never matches a turbofish site (R3 parity, probed), and
-  turbo-arity is match-exact, so totality keys on callee + value arity
-  + turbo arity + concrete non-hole turbo texts (`&`-receivers counted
-  conservatively). Leading `::` compares with parity on the bare and
-  qualified variants (shared verbatim). Two varying positions,
-  per-site turbofish deltas, non-type holes, and qself-turbofish stay
-  ordinary (a `qself` qualifier with `::<…>` has no template spelling).
+  carrying `::<…>` (`let`-init calls unwrap, T449). Value args
+  token-equal per site with uniform value arity; turbofish uniform
+  turbo-arity with per-site minus token-equals plus; across all sites at
+  most one turbo position varies — that position emits an inferred `T`
+  on both sides (`- foo::<T>(E0)` / `+ bar::<T>(E0)`), the rest verbatim.
+  An uppercase bare/qualified callee rides backticks; turbofish-suffixed
+  method idents stay plain (the `::<` suffix defeats hole inference —
+  probed literal). A bare-without-turbofish pattern never matches a
+  turbofish site (R3 parity, probed), and turbo-arity is match-exact, so
+  totality keys on callee + value arity + turbo arity + concrete
+  non-hole turbo texts (`&`-receivers counted conservatively). Leading
+  `::` compares with parity on the bare and qualified variants. Two
+  varying positions, per-site turbofish deltas, non-type holes, and
+  qself-turbofish stay ordinary (a `qself` qualifier with `::<…>` has no
+  template spelling).
 - Macro-rename sweep: N ≥ 2 `-`/`+` pairs, each a bare
   (`old!(body)` → `new!(body)`) or qualified
   (`prefix::old!(body)` → `prefix::new!(body)`, one uniform class per
   hunk — shared prefix, one shared last-segment delta, generic-free
   segments, no leading `::`) macro invocation (whole-line statements
-  and `let`-init invocations, which match the pattern in place —
-  probed) with one shared old/new path and per-site token-equal
-  bodies (bodies vary across sites; delimiters unrestricted — the
-  engine `...` matches `!()`, `![]`, `!{}` alike, probed, including
-  for qualified paths) → one `# allow=many` `# macro=token_tree`
-   hunk (`- old!(...)` / `+ new!(...)`, or the concrete qualified
-   form `- prefix::old!(...)` / `+ prefix::new!(...)`; SPEC 19.3
-   prefers concrete paths, no `# symbol` tax). Uppercase macro names
-   stay plain (macro names never infer — probed clean, no backticks).
-   Token-tree matching is
-  verbatim-only by design, so the body is never spelled. Leading-`::`
-  (no engine spelling, probed), varying-across-sites hetero body rewrites
-  and macro-body-descent interiors (WI-9b2), and divergent new names stay
-  ordinary. Pre-image
-   totality counts every invocation of the exact rendered path (any
-  delimiter/body — the `...` pattern matches all; bare twins never
-  match a qualified pattern and vice versa, probed).
-  Rename + hole (WI-17a): when the class shares arity ≥ 2 under one
-  uniform delimiter and exactly one top-level argument position varies
-  across sites (rename-clean per site — the path carries the delta,
-  never the args; stable positions token-equal everywhere), that
-  position rides one diet `E{i}` hole beside the concrete stables
-  (`- old_m!(E0, 1)` / `+ new_m!(E0, 1)`, no length gate — the hole
-  names the varying position even for single-char values; strings never
-  hole). Totality is the real-pair probe over the holed pair (tighter
-  wins; any veto — multi-hole, strings, per-site deltas, mixed
-  delimiters, unmatched twin — falls back to the verbatim `...` with
-  its own probe).
+  and `let`-init invocations match in place) with one shared old/new
+  path and per-site token-equal bodies (bodies vary across sites;
+  delimiters unrestricted — the engine `...` matches `!()`, `![]`,
+  `!{}` alike, including for qualified paths) → one `# allow=many`
+  `# macro=token_tree` hunk (`- old!(...)` / `+ new!(...)`, or the
+  concrete qualified form; SPEC 19.3 prefers concrete paths, no
+  `# symbol` tax). Uppercase macro names stay plain (macro names never
+  infer). The body is never spelled (verbatim-only token-tree matching
+  by design). Leading-`::` (no engine spelling), varying-across-sites
+  hetero body rewrites and macro-body-descent interiors (WI-9b2), and
+  divergent new names stay ordinary. Totality counts every invocation
+  of the exact rendered path (any delimiter/body; bare twins never
+  match a qualified pattern and vice versa).
+  History (rename + hole, WI-17a): when the class shares arity ≥ 2 under
+  one uniform delimiter and exactly one top-level argument position
+  varies across sites (rename-clean per site; stable positions
+  token-equal everywhere), that position rides one diet `E{i}` hole
+  beside the concrete stables (`- old_m!(E0, 1)` / `+ new_m!(E0, 1)`, no
+  length gate; strings never hole). Totality is the real-pair probe over
+  the holed pair (tighter wins; any veto — multi-hole, strings, per-site
+  deltas, mixed delimiters, unmatched twin — falls back to the verbatim
+  `...` with its own probe).
 - `macro_rules!` definition + invocation rename (WI-7b + WI-16): exactly one
   column-0 `macro_rules! Old { … }` → `macro_rules! New { … }` header
   pair plus N ≥ 1 bare `Old!(…)` → `New!(…)` invocation pairs sharing
   one ident delta → one def hunk with `# follow=uses`
-  (`- macro_rules! Old` / `+ macro_rules! New`, WI-16 slice 1,
-  byte-identical to the authored form). The engine's `macro_paths`
-  follow rewrites every invocation by path identity; totality is the
-  scratch line-equality probe over the exact site set (an untouched
-  twin the follow would rewrite fails the unchanged leg, a missed
-  site fails the plus leg). Bare invocations only (qualified
-  `crate::Old!` stays ordinary); twin definitions, indented
-  (block-level) definitions, and untouched invocation twins veto to
-  ordinary; invocations nested inside another macro's body are opaque
+  (`- macro_rules! Old` / `+ macro_rules! New`, byte-identical to the
+  authored form). The engine's `macro_paths` follow rewrites every
+  invocation by path identity; totality is the scratch line-equality
+  probe over the exact site set (an untouched twin the follow would
+  rewrite fails the unchanged leg, a missed site fails the plus leg).
+  Bare invocations only (qualified `crate::Old!` stays ordinary); twin
+  definitions, indented definitions, and untouched invocation twins veto;
+  invocations nested inside another macro's body are opaque
   (`macro-hidden`: veto loud without fallback, skip with it — never
   rewritten, never silent). When the follow probe declines (no
   pre-image), the WI-7b two-hunk fallback emits instead sharing
@@ -9724,98 +9293,93 @@ every length and the totals stay the default truth at any size.
   the invocations as one `# allow=many` `# macro=token_tree` verbatim
   sweep, under the same def-site + `macro_holds` proof plus a
   scratch-apply probe of the combined emission.
-   Def-only singles (WI-19b, N = 1 definition pair, no invocations):
-   the definition hunk alone in the concrete directive-free spelling,
-   under the precision guard; same def-site proof + scratch probe.
-   Detector name `macro_rules_rename`.
+  History (def-only singles, WI-19b, N = 1, no invocations): the
+  definition hunk alone in the concrete directive-free spelling, under
+  the precision guard; same def-site proof + scratch probe. Detector name
+  `macro_rules_rename`.
 - Macro-interior sweep (WI-9a): N ≥ 2 `-`/`+` pairs rendering (whole-line
   statements and `let`-init unwraps — the emitted pattern is the bare
   `name!(args)`, never `let`) to one identical same-name pair —
   exact rendered path (bare or qualified, one uniform class per hunk),
-  the same delimiter on both sides (paren, bracket, or brace —
-  WI-9b2-delim; the engine splice emits with the plus pattern's
-  delimiter), body delta, no holes — → one `# allow=many` hunk
-  (`- name!(args)` / `+ name!(new_args)`, plain `!` routing, no
-  `# macro` directive, first-site raw spacing). Cross-hunk driver with
-  the verbatim stranded join (exactly-1-minus pure unbalanced hunks
-  whose first plus matches shed minus + first plus and stay a
-  pure-insertion leftover), so sections with a pure addition still
-  compress their runs. Totality is the generic engine-count probe on
-  the emitted minus (the engine's own match domain).    `![...]`/`!{}`
-    Mixed-delimiter pairs stay ordinary (no cross-delimiter class);
-   renames (name delta) and varying-across-sites macro-body-descent
-   edits (changed lines nested inside macro bodies whose enclosing
-   texts differ per site) stay ordinary; identical-enclosing descents
-   group one level up (enclosing sweep below). Varying-across-sites hetero body rewrites
-   group cross-site (WI-9b2 below), while pairs whose delta itself
-   varies across sites stay ordinary. WI-9b1 hetero emission: when every
-  stable (minus==plus) non-string arg longer than its hole name can hole
-  to a shared diet `E{i}` hole (`E0` first, bumped past idents in the
-  surviving literals/path so SPEC 15.7 equality never fuses hole to
-  literal) and the shorter hetero pair passes its real-pair totality
-  probe, the hunk emits hetero (`- assert_eq!(E0, TEXT_SECTION)` /
+  the same delimiter on both sides (WI-9b2-delim; the engine splice
+  emits with the plus pattern's delimiter), body delta, no holes — →
+  one `# allow=many` hunk (`- name!(args)` / `+ name!(new_args)`, plain
+  `!` routing, no `# macro` directive, first-site raw spacing).
+  Cross-hunk driver with the verbatim stranded join (exactly-1-minus
+  pure unbalanced hunks whose first plus matches shed minus + first
+  plus and stay a pure-insertion leftover), so sections with a pure
+  addition still compress their runs. Totality is the generic
+  engine-count probe on the emitted minus (the engine's own match
+  domain). Mixed-delimiter pairs stay ordinary (no cross-delimiter
+  class); renames (name delta) and varying-across-sites
+  macro-body-descent edits (changed lines nested inside macro bodies
+  whose enclosing texts differ per site) stay ordinary;
+  identical-enclosing descents group one level up (enclosing sweep
+  below). Varying-across-sites hetero body rewrites group cross-site
+  (WI-9b2 below), while pairs whose delta itself varies across sites
+  stay ordinary.
+  History (WI-9b1 hetero emission): when every stable (minus==plus)
+  non-string arg longer than its hole name can hole to a shared diet
+  `E{i}` hole (`E0` first, bumped past idents in the surviving
+  literals/path so SPEC 15.7 equality never fuses hole to literal) and
+  the shorter hetero pair passes its real-pair totality probe, the hunk
+  emits hetero (`- assert_eq!(E0, TEXT_SECTION)` /
   `+ assert_eq!(E0, TEXT_STRIPPED)` — diet, no declarations: the
   both-sides inference rule gives `E0` → `expr` while single-side
   `TEXT_*` stay literal deltas); otherwise the concrete probe decides
   and concrete fires. String-literal args never hole (opaque positions);
   numeric/unit args no longer than the hole name stay literal (tighter +
-  shorter); mixed delimiters stay ordinary as above. Totality for
-  hetero pairs is the real-pair probe (`template_pair_holds`: the emitted
-  minus/plus diet pair applied to a scratch pre-image must match exactly
-  N — a self-rewrite probe would infer literal uppercase deltas as holes
-  and count a more general domain than the hunk matches).
-   WI-9b2a: the concrete fallback probes the real pair too (same
-   soundness — the self probe holed shared uppercase deltas and vetoed on
-   second-arg twins a sound concrete group must ignore).
-   WI-9b2b nested extraction: pairs the whole-line parse declines whose
-   lines parse as one `Stmt` (fallback `Expr`) holding the same count
-   (≥1) of expression-position macros, all token-equal except exactly one
-   delta with the same rendered path, the same delimiter, and different
-   tokens, with the rendered delta texts each occurring byte-exact once
-   per line and the plus line equal to the minus line under that one
-   substring replacement — → the same concrete hunk shape spelling just
-   the macro pair (`- env!("OLD")` / `+ env!("NEW")`, concrete-only, no
-   hetero, no stranded claims). Macros inside other macro bodies stay
-   ordinary (`syn::visit` never enters opaque token streams); nested
-   renames, multi-delta lines, and any outside-macro difference stay
-   ordinary.
-   Nested multi-token bodies fire: the delta pair renders from raw
-   source bytes via the nested nodes' `Span::byte_range` slices
-   (WI-9b2 nested-raw) instead of the TokenStream grouping key
-   (`1, 2` → `1 , 2`, which never occurs byte-exact in the line), so
-   there is always a byte-exact substring to anchor on; slicing
-   failures fall back to the normalized rendering     (single-token bodies
-   render identically either way). WI-9b2 cross-site hetero grouping:
-   leftover balanced pairs (singletons the identical classes veto)
-   sharing path, delimiter, and arity group when every top-level arg
-   position is stable in ALL pairs (token-equal everywhere → literal;
-   varying → one shared diet `E{i}` hole, strings veto) or a delta in
-   ALL pairs with the same trimmed `(minus, plus)` everywhere
-   (→ literal delta); mixed stable/delta positions, varying deltas,
-   and arity mismatch stay ordinary. Same engine token-wise matching
-   (first-site raw separators), same real-pair totality
-   (`template_pair_holds`, N = members), same index-based hunk
-   atomicity, plus a per-group byte sanity so a losing candidate can
-   never flip the section T375 into a whole-sweep veto.
-   Enclosing-macro sweep (WI-7a): N ≥ 2 balanced pairs whose changed
-   lines are not themselves macro invocations (whole-line and
-   `let`-init shapes belong to the interior sweep above, which runs
-   first) but sit each inside one same-spelling macro invocation in
-   the pre-image — same path, same delimiter, byte-identical enclosing
-   span texts on both sides after line-splicing each pair's changed
-   line into its span (nested same-line macros never qualify: byte
-   containment requires the span to cover the whole changed line).
-   → one `# sweep` hunk spelling the raw enclosing texts
-   (`-`/`+` bare prefixes, no added space — the span text carries its
-   own indentation and the parser strips exactly one prefix char).
-   Emission is always file scope: the candidate (enclosing span)
-   exceeds any interior-line range, so a ranged hunk could never
-   contain it. Totality is a multi-line engine-count probe
-   (`template_enclosing_holds`: the emitted pair must match exactly N
-   sites file-wide — an untouched twin vetoes). Same index-based hunk
-   atomicity, same section-global T375 (no stranded joins in v1; tiny
-   templates lose to ordinary hunks by design). `macro_rules!`
-   definitions never enclose (WI-7b owns that kind).
+  shorter); mixed delimiters stay ordinary. Totality for hetero pairs is
+  the real-pair probe (`template_pair_holds`: minus/plus diet pair on a
+  scratch pre-image must match exactly N — a self-rewrite probe would
+  infer literal uppercase deltas as holes and count a more general
+  domain). History (WI-9b2a): the concrete fallback probes the real pair
+  too (the self probe holed shared uppercase deltas and vetoed on
+  second-arg twins a sound concrete group must ignore).
+  History (WI-9b2b nested extraction): pairs the whole-line parse
+  declines whose lines parse as one `Stmt` (fallback `Expr`) holding the
+  same count (≥1) of expression-position macros, all token-equal except
+  exactly one delta with the same rendered path, the same delimiter, and
+  different tokens, with the rendered delta texts each occurring
+  byte-exact once per line and the plus line equal to the minus line
+  under that one substring replacement — → the same concrete hunk shape
+  spelling just the macro pair (`- env!("OLD")` / `+ env!("NEW")`,
+  concrete-only, no hetero, no stranded claims). Macros inside other
+  macro bodies stay ordinary (`syn::visit` never enters opaque token
+  streams); nested renames, multi-delta lines, and any outside-macro
+  difference stay ordinary. Nested multi-token bodies render from raw
+  source bytes via the nested nodes' `Span::byte_range` slices (WI-9b2
+  nested-raw) instead of the TokenStream grouping key (which never
+  occurs byte-exact in the line); slicing failures fall back to the
+  normalized rendering (single-token bodies render identically either
+  way). History (WI-9b2 cross-site hetero grouping): leftover balanced
+  pairs (singletons the identical classes veto) sharing path, delimiter,
+  and arity group when every top-level arg position is stable in ALL
+  pairs (token-equal everywhere → literal; varying → one shared diet
+  `E{i}` hole, strings veto) or a delta in ALL pairs with the same
+  trimmed `(minus, plus)` everywhere (→ literal delta); mixed
+  stable/delta positions, varying deltas, and arity mismatch stay
+  ordinary. Same engine token-wise matching (first-site raw separators),
+  same real-pair totality (`template_pair_holds`, N = members), same
+  index-based hunk atomicity, plus a per-group byte sanity so a losing
+  candidate can never flip the section T375 into a whole-sweep veto.
+  History (enclosing-macro sweep, WI-7a): N ≥ 2 balanced pairs whose
+  changed lines are not themselves macro invocations (whole-line and
+  `let`-init shapes belong to the interior sweep above, which runs
+  first) but sit each inside one same-spelling macro invocation in the
+  pre-image — same path, same delimiter, byte-identical enclosing span
+  texts on both sides after line-splicing each pair's changed line into
+  its span (nested same-line macros never qualify: byte containment
+  requires the span to cover the whole changed line). → one `# sweep`
+  hunk spelling the raw enclosing texts (`-`/`+` bare prefixes, no added
+  space — the span text carries its own indentation and the parser strips
+  exactly one prefix char). Emission is always file scope (the enclosing
+  span exceeds any interior-line range). Totality is the multi-line
+  engine-count probe (`template_enclosing_holds`, exactly N sites — an
+  untouched twin vetoes). Same hunk atomicity, same section-global T375
+  (no stranded joins in v1; tiny templates lose to ordinary hunks by
+  design). `macro_rules!` definitions never enclose (WI-7b owns that
+  kind).
 - Rule-body interior sweep (WI-17b): N >= 2 arm-line pairs whose
   textual macro sets match in count (>= 1) with every position sharing
   path + delimiter and exactly one position differing in full text
@@ -9823,13 +9387,11 @@ every length and the totals stay the default truth at any size.
   minus with that one substring replaced) group by identical rendered
   inner pairs (`- inner!(1)` / `+ inner!(2)`, concrete-only, no
   hetero, no stranded claims) with the same real-pair totality
-  (`template_pair_holds`, now proving via the rule-body engine half),
-  hunk atomicity, and section-global T375 as the interior sweep.
-  Whole-line macro pairs never key here (the interior sweep owns them
-  -- disjoint by construction); multi-delta lines (e.g.
-  `outer!(inner!(1))` to `outer!(inner!(2))`, where outer and inner
-  both differ) veto as depth-2 and stay ordinary. Detector name
-  `macro_rule_body`.
+  (`template_pair_holds`, via the rule-body engine half), hunk
+  atomicity, and section-global T375 as the interior sweep. Whole-line
+  macro pairs never key here (the interior sweep owns them); multi-delta
+  lines (outer and inner both differing) veto as depth-2 and stay
+  ordinary. Detector name `macro_rule_body`.
 - Use-path prefix sweep: N ≥ 2 `-`/`+` pairs, each a `use` statement
   (leading `pub…`/`::`, trailing `;` normalized away) sharing one
   two-or-more-segment prefix with a common parent and one renamed
@@ -9869,14 +9431,12 @@ every length and the totals stay the default truth at any size.
   pair in document order, the rest stay ordinary), cut-file pre-image flat-ws uniqueness (twin
   veto), minus paired runs anywhere with exactly one blank between runs (a cut
   absorbs exactly one following blank; the last run's absorbed blank must lie
-  inside the minus hunk — a file-only following blank is a kept line the
-  cut would silently eat, so the gate caps to the sound prefix instead (WI-6);
+  inside the minus hunk, else the gate caps to the sound prefix (WI-6);
   without an absorbed blank a multi-pair last cut or a blank-ending prefix
   double-claims the preceding blank (f09edcd); uncovered
   prefix/trailing minus lines stay as rewritten ordinary hunks around the
   cuts, one post-run blank absorbed, never re-emitted), interior blanks ride
-  with their item (the cut removes the whole span, so covered lines need no
-  gap accounting), plus paired runs
+  with their item, plus paired runs
   anywhere with exactly one
   blank between runs (the same-anchor paste join restores exactly one;
   uncovered prefix/trailing plus lines stay as rewritten ordinary hunks around
@@ -9887,223 +9447,183 @@ every length and the totals stay the default truth at any size.
   (the last run stays an ordinary trailing leftover; a
   single item with a blank-ending prefix and no following blank trims the
   absorbed blank from the prefix leftover hunk), and a global T375 byte-win
-  guard (strict `emitted < replaced`, ties stay ordinary — e.g. a 3-line
-  fn with short lines, 6 ordinary lines, costs more as cut+paste and
-   stays ordinary by design; emitted cut+paste is ~constant (the item
-   rides a metavar, never respelled) while replaced ordinary grows with
-   content, so the same 3-line shape with a longer body fires — no fixed
-   line threshold). A mixed `-U0` hunk (an insertion adjacent to an edit,
-   with no unchanged line between them) splits into ordered pure runs
-   for pairing (WI-6 slice 3a): each run cites exact walked anchors, so
-   a trailing-edit plus run anchors past the cut and fires while a
-   genuinely interior insertion still vetoes the section (the anchor
-   inside the cut's claimed range is unorderable); two runs of one hunk
-   never pair (same-spot edits stay with the intent detectors), and a
-   group no pair touches re-emits verbatim;
-  inter-run gap relaxation stays vetoed (the same-anchor paste join
-   restores exactly one blank); WI-8a pairs `fn` moves whose header prefix
-   (vis + qualifiers, verbatim) and/or name evolve while attrs, generics,
-   params, return, `where`, and bodies stay token-equal — the paste carries
-   the plus-side header template `+ <prefix>fn <New>(...) { ... }` and the
-   engine splices the captured body under it (identical pairs keep the
-   bare-`bind` paste); WI-8 slice 9 pairs `fn` moves whose signature
-   additionally evolves (generics, params, return, and/or `where` differ
-   while attrs and bodies stay token-equal) — the paste carries the
-   concrete plus-side header `+ <prefix>fn <New>(args) -> ret { ... }`
-   (single- or multi-line: a multi-line plus header rides verbatim
-   across lines with only the `{ ... }` marker closing it)
-   and the engine replaces the captured header span with it (both
-   sides must open the block with a header line ending in `{` with
-   body lines after it; single-line items stay
-   ordinary); WI-8 slice 1 pairs `struct` moves whose visibility
-  and/or name evolve while attrs, generics, and fields stay token-equal
-   (paste `+ <vis>struct <New> { ... }`); WI-8 slice 2 pairs `enum`
-   moves whose visibility and/or name evolve while attrs, generics, and
-   variants stay token-equal (paste `+ <vis>enum <New> { ... }`); WI-8
-   slice 3 pairs `union` moves whose visibility and/or name evolve while
-   attrs, generics, and fields stay token-equal (paste `+ <vis>union
-   <New> { ... }`); WI-8
-   slice 4 pairs `type` moves whose visibility and/or name evolve while
-   attrs, generics, and the aliased type stay token-equal (paste
-   `+ <vis>type <New> = ...;`); WI-8
-   slice 5 pairs `const` moves whose visibility and/or name evolve while
-   attrs, the const type, and the initializer expr stay
-   token-equal (paste `+ <vis>const <New> = ...;`); WI-8
-   slice 6 pairs `static` moves whose visibility, name, and/or
-   mutability evolve while attrs, the static type, and the initializer
-   expr stay token-equal (paste `+ <vis>static [mut ]<New> = ...;`,
-   with the plus-side `mut` riding verbatim like `fn` qualifiers); WI-8
-    slice 7 pairs `mod` moves whose visibility, name, and/or `unsafe`
-    evolve while attrs stay token-equal and content is absent (`;`) or
-    empty (`{}` — any nested item vetoes, the scalar cut cannot isolate
-    it) (paste `+ <vis>mod <New> { ... }`, with `unsafe`
-    riding verbatim in the prefix like `fn` qualifiers; a `;`-vs-braced delta vetoes);
-    WI-8     slice 8 pairs `trait` moves whose visibility, name, and/or
-    `unsafe` evolve while attrs, generics, and supertraits stay
-    token-equal and both sides declare empty traits (any trait item
-    vetoes, the scalar cut cannot isolate it — same narrowing as
-    `mod`) (paste `+ <vis>trait <New> { ... }`, with `unsafe`
-      riding verbatim in the prefix like `fn` qualifiers; any `auto`
-      token or `impl Trait for` restriction vetoes).
-    WI-6 slice 3b pairs `fn` moves whose rename also renames the body's
-    self-references (`fn fact` → `fn factorial` with `fact(n-1)` →
-    `factorial(n-1)` in the moved body) while vis, qualifiers, attrs,
-    generics, params, return, and `where` stay token-equal — the paste
-    carries the body-evolving template
+  guard (strict `emitted < replaced`; emitted cut+paste is ~constant while
+  replaced ordinary grows with content, so short-body shapes stay ordinary
+  by design with no fixed line threshold). A mixed `-U0` hunk (an insertion
+  adjacent to an edit, with no unchanged line between them) splits into
+  ordered pure runs for pairing (WI-6 slice 3a): each run cites exact walked
+  anchors, so a trailing-edit plus run anchors past the cut and fires while
+  a genuinely interior insertion still vetoes the section (the anchor
+  inside the cut's claimed range is unorderable); two runs of one hunk
+  never pair (same-spot edits stay with the intent detectors), and a
+  group no pair touches re-emits verbatim;
+  inter-run gap relaxation stays vetoed. History (WI-8a): `fn` moves
+  whose header prefix (vis + qualifiers, verbatim) and/or name evolve
+  while attrs, generics, params, return, `where`, and bodies stay
+  token-equal — the paste carries the plus-side header template
+  `+ <prefix>fn <New>(...) { ... }`, the engine splicing the captured
+  body under it (identical pairs keep the bare-`bind` paste). History
+  (WI-8 slice 9): `fn` moves whose signature additionally evolves
+  (generics, params, return, and/or `where` differ while attrs and bodies
+  stay token-equal) — the paste carries the concrete plus-side header
+  `+ <prefix>fn <New>(args) -> ret { ... }` (single- or multi-line: a
+  multi-line plus header rides verbatim across lines with only the
+  `{ ... }` marker closing it) and the engine replaces the captured
+  header span with it (both sides must open the block with a header line
+  ending in `{` with body lines after it; single-line items stay
+  ordinary). History (WI-8 slices 1-8, one law per kind — evolving
+  slots only, everything else token-equal): `struct` (vis/name; attrs,
+  generics, fields) → paste `+ <vis>struct <New> { ... }`; `enum`
+  (vis/name; attrs, generics, variants) → `+ <vis>enum <New> { ... }`;
+  `union` (vis/name; attrs, generics, fields) → `+ <vis>union <New> {
+  ... }`; `type` (vis/name; attrs, generics, aliased type) → `+
+  <vis>type <New> = ...;`; `const` (vis/name; attrs, const type, init)
+  → `+ <vis>const <New> = ...;`; `static` (vis/name/mut; attrs, static
+  type, init; plus-side `mut` rides verbatim) → `+ <vis>static [mut
+  ]<New> = ...;`; `mod` (vis/name/unsafe; attrs; content absent (`;`) or
+  empty (`{}`, any nested item vetoes)) → `+ <vis>mod <New> { ... }`
+  (a `;`-vs-braced delta vetoes); `trait` (vis/name/unsafe; attrs,
+  generics, supertraits; both sides empty, any trait item vetoes) →
+  `+ <vis>trait <New> { ... }` (any `auto` token or `impl Trait for`
+     restriction vetoes).
+    History (WI-6 slice 3b, `as` paste): `fn` moves whose rename also
+    renames the body's self-references (`fn fact` → `fn factorial` with
+    `fact(n-1)` → `factorial(n-1)` in the moved body) while vis,
+    qualifiers, attrs, generics, params, return, and `where` stay
+    token-equal — the paste carries the body-evolving template
     `+ <prefix>fn <Old> as <New>(...) { ... }` (the `as` names the
     captured ident; the old spelling `+ fn <New>(...) { ... }` keeps its
     verbatim-body splice, so stale-self-ref and shadowed-local moves
     still fire unchanged) and the engine splices the header to the new
     name and renames word-bounded `<Old>` → `<New>` in the captured body
-    through a comment/string/raw-string/lifetime-aware scanner, leaving
-    string literals, char literals, lifetimes, and comments
-    byte-verbatim. Occurrence law (WI-2): an occurrence rewrites iff
-    `syn` shows it is the header ident itself or a self-recursive
-    call/path; a shadowing local (or its uses), a field/method name, a
-    macro name, or an attribute interior never rewrites — the authored
-    paste vetoes with `RSMPL_PATTERN_CONFLICT` naming the kind and the
-    captured line (rename by hand or split the move), and the raiser
-    declines the same shapes to ordinary. The pairing proves the same
-    scanner plus the same veto first (renamed minus item text == plus
-    run text, raw string equality, no veto hit), so pairing and splice
-    agree by construction; any non-rename delta vetoes to ordinary.
-    WI-6 collection cells: one (minus hunk, plus hunk) cell holding ≥3
-   distinct moved items that owns every pair of its minus hunk and every
-   paired run of its plus hunk (no fan-out interleave, no split anchors)
-   emits one ranged `# allow=many` + `# bind` cut plus one paste (bare
-   `+ Mk` for byte-identical cells; WI-18 `N`-hole template
-   `+ fn new_N(...) { ... }` for evolving cells where every member is
-   abstract-evolved with the same kind/prefix and one uniform
-   `pre_N_post` affix) when that spelling beats the scalar fan-in under
-   T375, else the cell keeps scalar emission; the absorbed-blank gate
-   above applies unchanged, except a source file emptied to zero bytes
-   (minus hunk covering BOF..EOF) is sound for multi-item cuts (WI-18
-   gate: no outside line to double-claim).
-    WI-19 slice 3 pairs signature+body joint `fn` moves (WI-6 slice 3b
-    rename plus WI-8 slice 9 signature evolution in exactly one slot —
-    generics params, `where`, inputs+variadic, return; vis/name ride
-    verbatim for free): the paste carries the joint template
-    `+ <prefix>fn <Old> as <New>(concrete signature) { ... }`
-    (single- or multi-line like the concrete form) and the engine
-    replaces the captured header span with the new-signature header
-    while renaming the captured body's self-references under the `as`
-    occurrence law. The pairing proves the same veto plus raw body-tail
-    equality after the rename, so pairing and splice agree by
-    construction; zero-slot pairs belong to the `as` arm and two-slot
-    pairs stay ordinary.
-    WI-19 slice 4 pairs container body-evolving `struct`/`enum`/`union`
-    moves (a rename whose field types / variant payloads name the
-    container): the paste carries the per-kind `as` template
-    (`+ <vis>struct <Old> as <New> { ... }`, likewise `enum`/`union`)
-    and the engine splices the header while renaming the captured
-    suffix/body's type-path self-references under the `as` occurrence
-    law generalised per kind (field/variant ident, macro name, and
-    attribute-interior vetoes). The pairing proves the same veto plus
-    the renamed-minus == plus-run agreement, so pairing and splice
-    agree by construction; vis/generics/attr deltas belong to the
-    abstract path or stay ordinary, never here. WI-19 residue pairs
-    inherent-`impl`-block body-evolving moves (a self-ty rename whose
-    body self-paths follow): the paste carries
-    `+ impl <Old> as <New> { ... }` and the engine splices the header
-    while renaming the captured suffix/body under the same law with
-    assoc-item-name vetoes (a method/const/type named `Old` lives in
-    another namespace); trait-impls (`impl Tr for Ty`) stay ordinary
-    (WI-3 owns that header).
-    WI-14 slices 1-3 + slice 5 pair move-eligible item moves gaining exactly one
-    single-line `///` outer-doc line or one balanced single `#[...]` attr
-    (single-line, or multi-line up to the raiser cap) while every other
-    slot stays token-equal: the cut + bare paste carry the move while
-    the attr/doc lines ride an ordinary plus-prefix leftover hunk above
-    the paste (the T432b prefix shape — no new spelling, no engine
-    change).     WI-14 slice 7 extends the same prefix shape to `fn`
-    move+rename with exactly one added leading block (single-line
-    `#[...]` / `///`, one balanced multi-line `#[...]` up to the cap,
-    or one added block atop an existing attr): the minus cut is bare
-    (span law satisfied), the inner rename pairs through the abstract
-    evolved matcher, and the paste carries the evolution template
-    (`+ fn <new>(...) { ... }`) with the added block as the ordinary
-    prefix. WI-14 slice 8 extends the same composition to every other
-    move-eligible kind (`struct` / `enum` / `union` / `type` / `const` /
-    `static` / `mod`, each through its own abstract evolved matcher and
-    header-prefix helper; the trait finder is untouched): the paste
-    carries the kind's evolution template with the added block as the
-    ordinary prefix. WI-14 slice 9 extends the same composition to
-    empty `trait` rename+attr (through `trait_evolved_match`, so pure
-    attr-added without rename never double-claims; E2 slice 1 admits
-    method-bearing traits with token-equal methods): the paste
-    carries the trait evolution template with the added block as the
-    ordinary prefix. WI-14 slice 10 closes the axis: the struct
+    through a comment/string/raw-string/lifetime-aware scanner (string /
+    char literals, lifetimes, comments stay byte-verbatim). Occurrence
+    law (WI-2): an occurrence rewrites iff `syn` shows it is the header
+    ident itself or a self-recursive call/path; a shadowing local (or
+    its uses), a field/method name, a macro name, or an attribute
+    interior never rewrites — the authored paste vetoes with
+    `RSMPL_PATTERN_CONFLICT` naming the kind and the captured line, and
+    the raiser declines the same shapes to ordinary. The pairing proves
+    the same scanner plus the same veto first (renamed minus item text
+    == plus run text, raw string equality), so pairing and splice agree
+    by construction; any non-rename delta vetoes to ordinary.
+    History (WI-6 collection cells): one (minus hunk, plus hunk) cell
+    holding ≥3 distinct moved items that owns every pair of its minus
+    hunk and every paired run of its plus hunk (no fan-out interleave, no
+    split anchors) emits one ranged `# allow=many` + `# bind` cut plus
+    one paste (bare `+ Mk` for byte-identical cells; WI-18 `N`-hole
+    template `+ fn new_N(...) { ... }` for evolving cells where every
+    member is abstract-evolved with the same kind/prefix and one uniform
+    `pre_N_post` affix) when that spelling beats the scalar fan-in under
+    T375, else the cell keeps scalar emission; the absorbed-blank gate
+    above applies unchanged, except a source file emptied to zero bytes
+    (minus hunk covering BOF..EOF) is sound for multi-item cuts (WI-18
+    gate: no outside line to double-claim).
+    History (WI-19 slice 3, signature+body joint `fn` moves — WI-6 slice
+    3b rename plus WI-8 slice 9 signature evolution in exactly one slot):
+    the paste carries the joint template `+ <prefix>fn <Old> as
+    <New>(concrete signature) { ... }` (single- or multi-line) and the
+    engine replaces the captured header span with the new-signature
+    header while renaming the captured body's self-references under the
+    `as` occurrence law. The pairing proves the same veto plus raw
+    body-tail equality after the rename; zero-slot pairs belong to the
+    `as` arm and two-slot pairs stay ordinary.
+    History (WI-19 slice 4, container body-evolving `struct`/`enum`/
+    `union` moves — a rename whose field types / variant payloads name
+    the container): the paste carries the per-kind `as` template (`+
+    <vis>struct <Old> as <New> { ... }`, likewise `enum`/`union`) and the
+    engine splices the header while renaming the captured suffix/body's
+    type-path self-references under the `as` occurrence law generalised
+    per kind (field/variant ident, macro name, and attribute-interior
+    vetoes). The pairing proves the same veto plus the renamed-minus ==
+    plus-run agreement; vis/generics/attr deltas belong to the abstract
+    path or stay ordinary, never here. History (WI-19 residue,
+    inherent-`impl`-block body-evolving moves — a self-ty rename whose
+    body self-paths follow): the paste carries `+ impl <Old> as <New> {
+    ... }` and the engine splices the header while renaming the captured
+    suffix/body under the same law with assoc-item-name vetoes (a
+    method/const/type named `Old` lives in another namespace);
+    trait-impls (`impl Tr for Ty`) stay ordinary (WI-3 owns that header).
+    History (WI-14 move+attr compositions, E1 axis — no new spelling, no
+    engine change): slices 1-3 + slice 5 pair move-eligible item moves
+    gaining exactly one single-line `///` outer-doc line or one balanced
+    single `#[...]` attr (single-line, or multi-line up to the raiser
+    cap) while every other slot stays token-equal — the cut + bare paste
+    carry the move while the attr/doc lines ride an ordinary plus-prefix
+    leftover hunk above the paste (the T432b prefix shape). Slice 7
+    extends the same prefix shape to `fn` move+rename with exactly one
+    added leading block (single-line `#[...]` / `///`, one balanced
+    multi-line `#[...]` up to the cap, or one added block atop an
+    existing attr): the minus cut is bare, the inner rename pairs
+    through the abstract evolved matcher, and the paste carries the
+    evolution template with the added block as the ordinary prefix.
+    Slice 8 extends the same composition to every other move-eligible
+    kind (`struct` / `enum` / `union` / `type` / `const` / `static` /
+    `mod`, each through its own abstract evolved matcher and
+    header-prefix helper; the trait finder is untouched). Slice 9 extends
+    the same composition to empty `trait` rename+attr (through
+    `trait_evolved_match`, so pure attr-added without rename never
+    double-claims; E2 slice 1 admits method-bearing traits with
+    token-equal methods). Slice 10 closes the axis: the struct
     composition arm admits a vis delta riding with rename+attr
     (`struct Old` → `#[derive(Clone)] pub struct New` fires as cut +
-    evolved paste + ordinary prefix — the stripped-inner evolved
-    match needs only a vis-or-name delta, so the "container-delta
-    beyond vis" residue for the added axis is landed, not deferred);
-    E2 slice 1 fires the method-bearing trait bare twin
-    (byte-identical move) and the header-only rename twins
-    (`trait Old { fn foo }` → `trait New { fn foo }`,
-    plus the rename+attr twin) via the token-equal-methods gate —
-    the engine scalar cut isolates the whole trait
-    (`outermost_spans`) and the splice keeps the body verbatim.
-    E2 slice 2a fires the self-ref twin
-    (`trait Old { fn make() -> Old }` →
-    `trait New { fn make() -> New }`) as one intent with the
-    `+ trait Old as New { ... }` paste (name-only scope, full-text
-    agreement through the shared rename scanner, method/macro/attr
-    E2 slice 2b fires the one-method-rename joint
-    (`trait Old { fn m_old }` → `trait New { fn m_new }`) as one intent
-    with the `+ trait Old as New { fn m_old as m_new; ... }` paste
-    (name-only scope, full-text double-scan agreement, Old-side
-    method/macro/attr vetoes plus the `m_old` macro/attr joint veto;
-    all four idents pairwise distinct; exactly one method renamed —
-    two-method renames stay ordinary). Attr+joint composition stays
-    ordinary (the attr-added arm strips then calls the abstract
-    matcher, which vetoes item deltas). Tiny `mod` and tiny-trait rename+attr stay ordinary under the
-    T375 byte guard (a 1-line empty mod or empty trait plus one attr line can never
-    price the cut+paste below the ordinary hunks), and content-bearing
-    mods still decline via the shared cut gate. Two added attrs, `//!` /
-    `/* */` docs, two-added+rename, and item-interior
-    (`#[keep]+#[old]+fn` → `#[keep]+fn`, needs discontiguous cuts) attr
+    evolved paste + ordinary prefix). E2 slice 1 fires the method-bearing
+    trait bare twin (byte-identical move) and the header-only rename
+    twins (`trait Old { fn foo }` → `trait New { fn foo }`, plus the
+    rename+attr twin) via the token-equal-methods gate — the engine
+    scalar cut isolates the whole trait (`outermost_spans`) and the
+    splice keeps the body verbatim. E2 slice 2a fires the self-ref twin
+    (`trait Old { fn make() -> Old }` → `trait New { fn make() -> New
+    }`) as one intent with the `+ trait Old as New { ... }` paste
+    (name-only scope, full-text agreement through the shared rename
+    scanner, method/macro/attr vetoes). E2 slice 2b fires the
+    one-method-rename joint (`trait Old { fn m_old }` → `trait New { fn
+    m_new }`) as one intent with the `+ trait Old as New { fn m_old as
+    m_new; ... }` paste (name-only scope, full-text double-scan
+    agreement, Old-side method/macro/attr vetoes plus the `m_old`
+    macro/attr joint veto; all four idents pairwise distinct; exactly one
+    method renamed — two-method renames stay ordinary). Attr+joint
+    composition stays ordinary (the attr-added arm strips then calls the
+    abstract matcher, which vetoes item deltas). Tiny `mod` and
+    tiny-trait rename+attr stay ordinary under the T375 byte guard, and
+    content-bearing mods still decline via the shared cut gate. Two added
+    attrs, `//!` / `/* */` docs, two-added+rename, and item-interior attr
     deltas stay ordinary. Hunk-interior removed (one removed attr between
     companion cuts, bare or +rename) fires via the same E1 sub-span cut
-    below with the removed block as an interior ordinary minus leftover
-    between the cuts; hunk-interior replaced (one removed attr minus-side
-    + one added attr plus-side between companions, bare or +rename) fires
-    the same way with interior ordinary leftovers on both sides (the plus
-    gap admits blank+single-attr, the rebuild interleaves it between the
-    pastes). Removed / replaced
-    bare at prefix position fires via the E1 sub-span cut: `- I` cites
-    the stripped span (`find_stripped_item_target`, move-cut-only) with
-    the old block as an ordinary minus prefix (removed) or ordinary
-    prefixes on both sides (replaced) around a bare `+ M1` paste; the
-    removed/replaced + rename twins fire the same way with an evolved
-    paste (stripped remainder through the shared evolved cascade —
-    abstract arm for removed+rename, plus-added arm for replaced+rename;
-    first-of-N strip serves kept docs).
-       Everything else (other item kinds, other attr deltas, vis+body combos
-       without a signature delta, two-slot signature+body combos,
-       trait-`impl` moves, shadowed-body
-       renames the pairing scanner disagrees with, single-line items)
-       stays ordinary: abstract, body-evolving, and concrete-signature
-       multi-line headers fire, as do single- and multi-line
-       signature+body joints (diffrs fixtures
-       `137-multiline-abstract-move-fires`,
-       `138-multiline-sig-evolve-fires`, and
-       `139-sig-body-joint-fires`) and single-line container
-       body-evolving `as` pastes (diffrs fixture
-       `140-container-body-evolve-fires`) and inherent-`impl`
-       body-evolving `as` pastes (diffrs fixture
-       `141-impl-body-evolve-fires`).
-     WI-15 residue joins a file-module move with its `mod` pair: a
-     deleted-file → created-file move over one file pair (same dir, file
-     stems naming the `mod` idents, N≥1 moved items) beside exactly one
-     adjacent-run `mod old;` → `mod new;` declaration pair (no use lines,
-     unique workspace declaration, cited site verified) raises the pair
-     as `- mod old` / `+ mod new` under the first cut's rule — contents
-     never restated, file creation/deletion carried by the sections;
-     other runs of a mixed group stay ordinary leftovers. Rename
-     sections, fan-out/collection moves, `mod` + use lines (`mod_rename`
-     territory), stem mismatches, twin declarations, and a failing joined
-     T375 (falls back to today's split) stay split by design.
+    with the removed block as an interior ordinary minus leftover between
+    the cuts; hunk-interior replaced fires the same way with interior
+    ordinary leftovers on both sides (the plus gap admits blank +
+    single-attr, the rebuild interleaves it between the pastes). Removed
+    / replaced bare at prefix position fires via the E1 sub-span cut: `-
+    I` cites the stripped span (`find_stripped_item_target`,
+    move-cut-only) with the old block as an ordinary minus prefix
+    (removed) or ordinary prefixes on both sides (replaced) around a
+    bare `+ M1` paste; the removed/replaced + rename twins fire the same
+    way with an evolved paste (stripped remainder through the shared
+    evolved cascade; first-of-N strip serves kept docs).
+    History (everything else): other item kinds, other attr deltas,
+    vis+body combos without a signature delta, two-slot signature+body
+    combos, trait-`impl` moves, shadowed-body renames the pairing scanner
+    disagrees with, and single-line items stay ordinary — while abstract,
+    body-evolving, concrete-signature multi-line headers, single- and
+    multi-line signature+body joints (fixtures
+    `137-multiline-abstract-move-fires`,
+    `138-multiline-sig-evolve-fires`, `139-sig-body-joint-fires`),
+    single-line container body-evolving `as` pastes (fixture
+    `140-container-body-evolve-fires`), and inherent-`impl`
+    body-evolving `as` pastes (fixture `141-impl-body-evolve-fires`)
+    fire.
+    History (WI-15 residue, file-module move + `mod` pair joint): a
+    deleted-file → created-file move over one file pair (same dir, file
+    stems naming the `mod` idents, N≥1 moved items) beside exactly one
+    adjacent-run `mod old;` → `mod new;` declaration pair (no use lines,
+    unique workspace declaration, cited site verified) raises the pair
+    as `- mod old` / `+ mod new` under the first cut's rule — contents
+    never restated, file creation/deletion carried by the sections;
+    other runs of a mixed group stay ordinary leftovers. Rename
+    sections, fan-out/collection moves, `mod` + use lines (`mod_rename`
+    territory), stem mismatches, twin declarations, and a failing joined
+    T375 (falls back to today's split) stay split by design.
 - Whole-file item-deletion sweep (T464): a deleted `.rs` file whose
   minus lines tile the whole file and parse as Rust compresses to one
   `@@ -1,1 @@ rule=delete_items` hunk (`# scope=file`, `# allow=many`,
@@ -10117,17 +9637,15 @@ every length and the totals stay the default truth at any size.
 - Partial-file item-deletion sweep (T465): a minus-heavy unbalanced
   native hunk whose minus lines are whole items — top-level or nested
   (mod-nested fns, `impl`/`trait` methods, T466; the engine `- I` delete
-  removes the same nested set, so every fire applies) — in the pre-image
-  compresses to one real-range `@@ -O,L +N,0 @@ rule=delete_items_K`
-  hunk (`# allow=many`, `# item I`, `- I` — default Contained scope
-  deletes exactly the items in the range) plus one ordinary insertion
-  leftover for the plus lines (with a compensating trailing `+` blank when
-  the pre-image line after the range is blank — the last delete absorbs
-  it). Edge-crossing items (an item straddling a range edge is edited,
-  not deleted) veto; strict containers (`mod tests`, `impl Foo` around a
-  nested delete) are fine. Leading in-range blanks ride an ordinary
-  deletion hunk ahead of the shrunk semantic range (the engine absorbs a
-  preceding blank only at EOF); two or more trailing in-range blanks veto
+  removes the same nested set) — in the pre-image compresses to one
+  real-range `@@ -O,L +N,0 @@ rule=delete_items_K` hunk (`# allow=many`,
+  `# item I`, `- I` — default Contained scope deletes exactly the items in
+  the range) plus one ordinary insertion leftover for the plus lines (with
+  a compensating trailing `+` blank when the pre-image line after the
+  range is blank). Edge-crossing items (straddling a range edge) veto;
+  strict containers (`mod tests`, `impl Foo` around a nested delete) are
+  fine. Leading in-range blanks ride an ordinary deletion hunk ahead of
+  the shrunk semantic range; two or more trailing in-range blanks veto
   (conservative). Balanced hunks keep their rename/call detectors
   (strictly minus-heavy only); mid-item cuts, non-item code lines,
   EOF-touching regions whose absorbed preceding blank is kept (T472: EOF
@@ -10139,84 +9657,75 @@ every length and the totals stay the default truth at any size.
   compress to one `# allow=many` hunk per group, with literal pattern
   lines and no metavars. Both sides strip one terminator and parse as
   `syn::Expr`; complete single-line `let` statements (T440) parse as
-  `syn::Stmt::Local` and sweep on the full `;`-terminated lines (engine
-  `Stmt` shape; multi-line fragments never parse and stay ordinary).
-  Macro invocations on either side (SPEC 21), bare-ident/literal minus
-  sides (expressions only — a whole-statement `let` pattern is always
-  precise; hetero-frame lone-literal deltas are the `literal_frame`
-  sweep's, above), and `?`-applied calls
-  wrapping a closure (minus side), and top-level Unary on either side
-  are rejected — each failed loud in-corpus (top-level Unary matches since
-  T415: leading `!` skips the macro pre-route and leading `!`/`-` bypasses
-  the call router to a general-expr hunk — b208847 compresses);
-  inner-`!` routes call/general since T428 (only `name!` + body opener
-  `(`, `[`, `{` with strings skipped is macro; placeholder-carrying
-  concrete args bypass to the general matcher; arg splitters are
-  string-aware);
-  non-Call-top-level pairs
-  with nodes outside the engine's bounded general-expr set
-  (Block/If/... — Return supported since T418, b9c00d5) are rejected.
-  Struct-literal fields (`label: expr`, T416) strip the label and sweep
-  on the inner expression when both sides parse and labels match (c48a6e6).
-  Soundness is subterm totality on the pre-image file
-  (index blob for pending diffs, `rev` blob for staged/rev diffs):
-  the stripped minus must occur as a sub-expression exactly
-  group-size times, with zero occurrences inside opaque text (macro
-  bodies, string interiors — the engine never matches there; line-aware
-  (T411): a hit vetoes only when its span covers a changed old-side line).
-  `let` groups count whole statements instead (T440): the full line must
-  occur as a `Stmt::Local` exactly group-size times — parsed statements
-  cannot hide inside macro bodies or string literals, so no line-aware
-  veto applies. A stranded identical pair inside an unbalanced hunk
-  joins its group instead of vetoing it (T441 slice): an exactly-1-minus
-  pure `-`/`+` hunk whose first plus matches the group sheds minus +
-  first plus and stays as a pure-insertion leftover (`@@ -O,0 +N+1,K-1 @@`);
-  multi-minus, context-bearing, or first-plus-mismatch hunks stay
-  ordinary (the leftover would split in two).
-   Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
-   subterm and does not veto (probe-verified). Uppercase call heads
-   ride backticks (`` `Old`(alpha) ``, `` a.`Old`(alpha) `` — a raw
-   uppercase callee/method infers as a hole and rewrites twin sites);
-   any other surviving uppercase ident (let-pat, general-expr
-   positions) is judged by an engine self-rewrite count
-   (`template_expr_holds`): the minus template must match exactly
-   group-size times or the group stays ordinary (conservative:
-   whole-file count, so an out-of-range twin still vetoes). Leftover balanced hunks
-   retry the standard chain in place; the T375 guard applies to the
-   retry the standard chain in place; the T375 guard applies to the
-   verbatim-covered set as a whole. Hunk atomicity (WI-9e, same
-  index-based fixed point as the macro-interior sweep): a group fires
-  only if every balanced hunk holding a member pair is fully covered
-  by passing groups — a group whose member hunk also holds an
+  `syn::Stmt::Local` and sweep on the full `;`-terminated lines (multi-line
+  fragments never parse and stay ordinary). Rejected: macro invocations
+  on either side (SPEC 21); bare-ident/literal minus sides (expressions
+  only — a whole-statement `let` pattern is always precise;
+  hetero-frame lone-literal deltas are the `literal_frame` sweep's);
+  `?`-applied calls wrapping a closure (minus side); top-level Unary on
+  either side (each failed loud in-corpus; top-level Unary matches since
+  T415 — leading `!` skips the macro pre-route and leading `!`/`-`
+  bypasses the call router to a general-expr hunk; inner-`!` routes
+  call/general since T428 — only `name!` + body opener with strings
+  skipped is macro; placeholder-carrying concrete args bypass to the
+  general matcher; arg splitters are string-aware); non-Call-top-level
+  pairs with nodes outside the engine's bounded general-expr set
+  (Block/If/... — Return supported since T418). Struct-literal fields
+  (`label: expr`, T416) strip the label and sweep on the inner expression
+  when both sides parse and labels match. Soundness is subterm totality
+  on the pre-image file (index blob for pending diffs, `rev` blob for
+  staged/rev diffs): the stripped minus must occur as a sub-expression
+  exactly group-size times, with zero occurrences inside opaque text
+  (macro bodies, string interiors; line-aware (T411): a hit vetoes only
+  when its span covers a changed old-side line). `let` groups count
+  whole statements instead (T440): the full line must occur as a
+  `Stmt::Local` exactly group-size times (parsed statements cannot hide
+  inside macro bodies or strings, so no line-aware veto applies). A
+  stranded identical pair inside an unbalanced hunk joins its group
+  instead of vetoing it (T441 slice): an exactly-1-minus pure `-`/`+`
+  hunk whose first plus matches the group sheds minus + first plus and
+  stays as a pure-insertion leftover (`@@ -O,0 +N+1,K-1 @@`); multi-minus,
+  context-bearing, or first-plus-mismatch hunks stay ordinary.
+  Syntactic, not textual: `&s.p` inside `&s.p.items` is a different
+  subterm and does not veto (probe-verified). Uppercase call heads
+  ride backticks (`` `Old`(alpha) ``, `` a.`Old`(alpha) ``); any other
+  surviving uppercase ident (let-pat, general-expr positions) is judged
+  by an engine self-rewrite count (`template_expr_holds`): the minus
+  template must match exactly group-size times or the group stays
+  ordinary (conservative: whole-file count, so an out-of-range twin
+  still vetoes). Leftover balanced hunks retry the standard chain in
+  place; the T375 guard applies to the verbatim-covered set as a whole.
+  Hunk atomicity (WI-9e fixed point, same as macro-interior): a group
+  fires only if every balanced hunk holding a member pair is fully
+  covered by passing groups — a group whose member hunk also holds an
   uncovered pair drops (releasing its stranded-join claims) to a fixed
   point, and uncovered leftovers stay ordinary; rules reserve only for
   survivors.
-  N=1 literal single (WI-6 slice 1): a whole-line single no holed
-  single owns raises as one directive-free allow-one hunk with literal
-  `-`/`+` lines (the fragment is the whole matched unit), under the
-  precision guard (`body <= hunk + 16`). Same gates as the sweep
-  (shape, novelty, backtick emission), uniqueness proved at n=1 over
-  the pre-image file, plus the T361 real-apply byte-compare
-  pre-reservation; the rule is reserved only for emissions that
-  reproduce. The single runs last in the per-hunk chain (after every
-  holed single and the single-pair definition/perm shapes), so tighter
-  spellings always win; `guard_for("verbatim")` stays Strict for
-  multis. In subhunk runs a declined whole still tries the bounded
-  split-search before per-pair singles, so literal keys never shadow
-  the hetero multis their pairs belong to (bench 48). WI-6 slice 2:
-  array-repeat (`[E; N]`, elem plus length structural) and `&raw`
-  addr (mutability token-equal, pointee structural) join the shared
-  shape gate — both match structurally in the engine since WI-2a, so
-  the raiser admits them alongside every other structural shape;
-  macro invocations stay vetoed (token-equal engine arm plus
-  macro-body opacity, Section 21).
-  All seven metavar sweeps carry the same pre-image subterm totality
-  (T409): matchable-unit count (calls/methods by callee+arity, same-method
-  literals by method+old-args, strips by method+args, slots by fn ident
-  free vs impl, uses by prefix) must equal
-  the pair count, with zero stripped-minus hits in opaque text — precise
-  line-aware needles (T411: container spans must cover a changed old-side
-  line; snippet callee checks over-vetoed 57140fe via assert!/patch-string
+  History (N=1 literal single, WI-6 slice 1): a whole-line single no
+  holed single owns raises as one directive-free allow-one hunk with
+  literal `-`/`+` lines (the fragment is the whole matched unit), under
+  the precision guard (`body <= hunk + 16`). Same gates as the sweep
+  (shape, novelty, backtick emission), uniqueness proved at n=1 over the
+  pre-image file, plus the T361 real-apply byte-compare pre-reservation;
+  the rule is reserved only for emissions that reproduce. The single runs
+  last in the per-hunk chain (after every holed single and the
+  single-pair definition/perm shapes), so tighter spellings always win;
+  `guard_for("verbatim")` stays Strict for multis. In subhunk runs a
+  declined whole still tries the bounded split-search before per-pair
+  singles, so literal keys never shadow the hetero multis their pairs
+  belong to (bench 48). History (WI-6 slice 2): array-repeat (`[E; N]`,
+  elem plus length structural) and `&raw` addr (mutability token-equal,
+  pointee structural) join the shared shape gate — both match
+  structurally in the engine since WI-2a, so the raiser admits them
+  alongside every other structural shape; macro invocations stay vetoed
+  (token-equal engine arm plus macro-body opacity, Section 21).
+  History (all seven metavar sweeps carry the same pre-image subterm
+  totality, T409): matchable-unit count (calls/methods by callee+arity,
+  same-method literals by method+old-args, strips by method+args, slots
+  by fn ident free vs impl, uses by prefix) must equal the pair count,
+  with zero stripped-minus hits in opaque text — precise line-aware
+  needles (T411: container spans must cover a changed old-side line;
+  snippet callee checks over-vetoed 57140fe via assert!/patch-string
   literals).
 - Everything else (multi-line edits, pure deletions/additions,
   non-`.rs` files, unbalanced hunks (whole-item moves pair pure-minus/pure-plus
@@ -10229,17 +9738,18 @@ every length and the totals stay the default truth at any size.
    whose content hunks compress under any existing detector emit the
    semantic hunks against the new path inside the preserved rename
    section — the engine seeds rename content from the old side, SPEC
-   6/T377 — with pre-image totality read from the old path (C-decoded via the shared quotepath rule, same as the parser); a rename
-   with no compressible content stays passthrough byte-for-byte, T377) stays
+   6/T377 — with pre-image totality read from the old path (C-decoded via
+   the shared quotepath rule); a rename with no compressible content
+   stays passthrough byte-for-byte, T377) stays
    ordinary-hunk passthrough.
-  Pure deletions/additions stay ordinary by design (T424 verdict — no
-  separate negative/positive sweep vocabulary): positive fan-out is
-  engine-impossible (a pure insertion anchors at one point, with no
-  minus pattern for `# allow=many` to multiply over — probe-verified),
-  and minus-only call sweeps lower to `;` litter (Section 18.2) while
-  the whole-line negative shapes (let/item/use) have zero all-identical
-  pure-hunk exhibits in history. Ordinary 0-context hunks already show
-  each removed/added line at one line per site — the minimal view.
+  History (pure deletions/additions stay ordinary by design, T424 — no
+  separate sweep vocabulary): positive fan-out is engine-impossible (a
+  pure insertion anchors at one point, with no minus pattern for `#
+  allow=many` to multiply over — probe-verified), and minus-only call
+  sweeps lower to `;` litter (Section 18.2) while the whole-line negative
+  shapes (let/item/use) have zero all-identical pure-hunk exhibits in
+  history. Ordinary 0-context hunks already show each removed/added line
+  at one line per site — the minimal view.
 
 Fallback rule: the candidate patch must parse via `parse_patch`;
 any validation failure falls back to the ordinary passthrough —
