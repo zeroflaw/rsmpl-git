@@ -1026,6 +1026,127 @@ mod tests {
         assert_eq!(applied(&pre_map(&pre), &out), native_post(&pre, hunk));
     }
     #[test]
+    fn hetero_double_delta_partitions_into_singles() {
+        // WI-13 residue slice A: two double-delta pairs of different
+        // classes (distinct minus templates, each unique file-wide)
+        // partition into two positional allow-one singles; the tree
+        // re-applies byte-exact. Multi-line composition is owned here,
+        // not by the sweep (which needs one shared class).
+        let pre = "fn m() {\n    let a = oldmod::foo(1);\n    let b = othermod::baz(2);\n}\n";
+        let hunk = "@@ -2,2 +2,2 @@\n-    let a = oldmod::foo(1);\n-    let b = othermod::baz(2);\n+    let a = newmod::bar(1);\n+    let b = newmod::qux(2);\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = try_subhunk_partition(
+            hunk,
+            "f.rs",
+            Some(pre),
+            &mut used,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("hetero double-delta hunk must partition");
+        assert_eq!(out.matches("rule=").count(), 2, "got:\n{out}");
+        assert!(out.contains("- oldmod::foo(E0)\n"), "got:\n{out}");
+        assert!(out.contains("+ newmod::bar(E0)\n"), "got:\n{out}");
+        assert!(out.contains("- othermod::baz(E0)\n"), "got:\n{out}");
+        assert!(out.contains("+ newmod::qux(E0)\n"), "got:\n{out}");
+        assert!(
+            out.find("oldmod::foo(E0)").unwrap() < out.find("othermod::baz(E0)").unwrap(),
+            "document order, got:\n{out}"
+        );
+        assert_eq!(prov.len(), 2, "one entry per run: {prov:?}");
+        assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
+    }
+
+    #[test]
+    fn hetero_double_delta_with_foreign_pair_claims_partial() {
+        // The typed-let line (slice-B territory: no N=1 shape) stays
+        // ordinary verbatim in place while the provable double-delta
+        // neighbor fires its holed single — foreign lines never veto
+        // firing neighbors.
+        let pre =
+            "fn m() {\n    let a = oldmod::foo(1);\n    let w: oldmod::Foo = oldmod::bar(2);\n}\n";
+        let hunk = "@@ -2,2 +2,2 @@\n-    let a = oldmod::foo(1);\n-    let w: oldmod::Foo = oldmod::bar(2);\n+    let a = newmod::bar(1);\n+    let w: newmod::Foo = newmod::bar(2);\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = try_subhunk_partition(
+            hunk,
+            "f.rs",
+            Some(pre),
+            &mut used,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("provable run must claim beside ordinary remainder");
+        assert_eq!(out.matches("rule=").count(), 1, "got:\n{out}");
+        assert!(out.contains("- oldmod::foo(E0)\n"), "got:\n{out}");
+        assert!(
+            out.contains("-    let w: oldmod::Foo = oldmod::bar(2);\n"),
+            "typed-let remainder verbatim, got:\n{out}"
+        );
+        assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
+    }
+
+    #[test]
+    fn hetero_double_delta_shared_minus_falls_back_to_verbatim() {
+        // Shared-minus-template hetero pairs veto each holed single by
+        // occurrence totality (found 2 vs want 1), so the run raises
+        // the whole-line verbatim singles instead — the literal floor
+        // owns identical-template shapes, holed patterns never bypass
+        // it. Byte-identical round-trip either way.
+        let pre = "fn m() {\n    let a = oldmod::foo(1);\n    let b = oldmod::foo(2);\n}\n";
+        let hunk = "@@ -2,2 +2,2 @@\n-    let a = oldmod::foo(1);\n-    let b = oldmod::foo(2);\n+    let a = newmod::bar(1);\n+    let b = newmod::baz(2);\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        let out = try_subhunk_partition(
+            hunk,
+            "f.rs",
+            Some(pre),
+            &mut used,
+            &mut prov,
+            &std::collections::HashSet::new(),
+        )
+        .expect("shared-minus hetero must raise verbatim singles");
+        assert_eq!(out.matches("rule=").count(), 2, "got:\n{out}");
+        assert!(
+            out.contains("- let a = oldmod::foo(1);\n"),
+            "framed literal floor, got:\n{out}"
+        );
+        assert!(
+            out.contains("- let b = oldmod::foo(2);\n"),
+            "framed literal floor, got:\n{out}"
+        );
+        assert!(!out.contains("foo(E0)"), "no holed bypass: {out}");
+        assert_eq!(applied(&pre_map(pre), &out), native_post(pre, hunk));
+    }
+
+    #[test]
+    fn hetero_double_delta_interleave_stays_ordinary() {
+        // Same-key double-delta runs on both sides of a foreign line
+        // (A B A) stay ordinary — order is never manufactured, even
+        // though each flank proves alone. The order law owns this
+        // shape, not a future detector.
+        let pre = "fn m() {\n    let a = oldmod::foo(1);\n    let w: oldmod::Foo = oldmod::bar(2);\n    let c = othermod::qux(3);\n}\n";
+        let hunk = "@@ -2,3 +2,3 @@\n-    let a = oldmod::foo(1);\n-    let w: oldmod::Foo = oldmod::bar(2);\n-    let c = othermod::qux(3);\n+    let a = newmod::bar(1);\n+    let w: newmod::Foo = newmod::bar(2);\n+    let c = newmod::quux(3);\n";
+        let mut used = Vec::new();
+        let mut prov = Vec::new();
+        assert!(
+            try_subhunk_partition(
+                hunk,
+                "f.rs",
+                Some(pre),
+                &mut used,
+                &mut prov,
+                &std::collections::HashSet::new()
+            )
+            .is_none(),
+            "interleaved same-key runs must stay ordinary"
+        );
+        assert!(used.is_empty());
+        assert!(prov.is_empty());
+    }
+
+    #[test]
     fn partition_takes_no_declined_by_construction() {
         // WI-15 P3: the partition driver takes no `declined` vec — the
         // single-pair/run classification probes are speculative offers

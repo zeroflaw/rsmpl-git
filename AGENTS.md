@@ -75,7 +75,7 @@ tolerate zero (SPEC 17). Add `# repeat` to fold nested same-rule matches
 (`Box::new(Box::new(x))` → `x`, SPEC 17.8; general-expr shapes fold too,
 `let`/type/macro hunks reject it). Metavars bind once, repeats must match
 structurally (SPEC 15.7, SPEC 17.7); literal `E` needs backticks when `E`
-is declared (SPEC 15.4). A qualified N=1 line with exactly two disjoint segment deltas (prefix + callee, `old::foo(E)` → `new::bar(E)`) composes under one rule with the same proof, and the N≥2 shared-class twin sweeps under `call_sweep` the same way; three deltas stay ordinary (SPEC D.4):
+is declared (SPEC 15.4). A qualified N=1 line with exactly two disjoint segment deltas (prefix + callee, `old::foo(E)` → `new::bar(E)`) composes under one rule with the same proof, and the N≥2 shared-class twin sweeps under `call_sweep` the same way; hetero fused hunks partition per contiguous run via subhunk (declining runs stay ordinary verbatim, foreign lines never veto firing neighbors); three deltas stay ordinary (SPEC D.4):
 
 ```diff rsmpl
 @@ -5,5 @@ rule=rename_calls

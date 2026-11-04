@@ -9057,7 +9057,16 @@ every length and the totals stay the default truth at any size.
   vectors, old/new callee, uniform arity), the per-pair frame rule holds
   over the call subterm, and `template_pair_counts` proves want=N
   (`CountMismatch`/`OpaqueHit` decline counted; divergent classes veto
-  whole).
+  whole). Multi-line composition (WI-13 residue slice A) is owned by
+  WI-4 subhunk, not by this family: a fused hunk of hetero
+  double-delta lines that declines whole is split into contiguous
+  same-class runs, each run offered whole with per-pair singles as
+  fallback and declining runs kept ordinary verbatim in place
+  (A-B-A interleaves veto whole by the order law; shared-minus-
+  template hetero pairs veto each holed single by occurrence
+  totality with framed literal singles owning the lines instead).
+  Typed-let two-template joints and holed method double-delta
+  sweeps stay ordinary (slices B/C).
 - Same-callee trailing-arg-addition sweep (T447): N ≥ 2 `-`/`+`
   pairs, each a bare single-segment call with one shared callee,
   uniform minus arity `k`, and uniform plus arity `k + t` (`t` ≥ 1)
