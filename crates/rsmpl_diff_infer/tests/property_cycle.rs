@@ -20,7 +20,11 @@
 //! `&`/`field` anchors replay source bytes verbatim (WI-3 span-slice
 //! law) — `&cand.body_text` stays `&cand.body_text`, never
 //! `& cand . body_text` — so these shapes generate, raise, and
-//! re-apply byte-identically like every other kind below.
+//! re-apply byte-identical like every other kind below.
+//!
+//! WI-12 residue A: single-region unbalanced pairs (insertion-only,
+//! deletion-only) generate through `native_unbalanced`, and the joint
+//! rename-plus-body shape is pinned below via `native_hunks`.
 
 use std::collections::HashMap;
 
@@ -68,6 +72,90 @@ fn native_section(path: &str, pre: &str, post: &str) -> String {
         body.push_str(&format!("@@ -{n},1 +{n},1 @@\n-{a}\n+{b}\n"));
     }
     format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{body}")
+}
+/// Build a second U0 native section from explicit hunks (WI-12 residue A).
+/// Each entry holds old/new starts plus minus/plus lines. Line-preserving
+/// pairs go through native_section above; unbalanced and multi-region
+/// pairs call the builder below directly.
+#[allow(clippy::type_complexity)] // test-only 6-tuple hunk rows
+fn native_hunks(
+    path: &str,
+    hunks: &[(usize, usize, usize, usize, Vec<String>, Vec<String>)],
+) -> String {
+    let mut body = String::new();
+    for (o, ol, n, nl, minus, plus) in hunks {
+        body.push_str(&format!("@@ -{o},{ol} +{n},{nl} @@\n"));
+        for m in minus {
+            body.push_str(&format!("-{m}\n"));
+        }
+        for p in plus {
+            body.push_str(&format!("+{p}\n"));
+        }
+    }
+    format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{body}")
+}
+
+/// Single-region unbalanced U0 section (WI-12 residue A): prefix/suffix
+/// split of the pre/post lines with one hunk for the differing middle.
+/// Pure insertions emit an old-side zero length, pure deletions a
+/// new-side zero length.
+fn native_unbalanced(path: &str, pre: &str, post: &str) -> String {
+    let pre_lines: Vec<&str> = pre.split('\n').collect();
+    let post_lines: Vec<&str> = post.split('\n').collect();
+    let mut prefix = 0;
+    while prefix < pre_lines.len()
+        && prefix < post_lines.len()
+        && pre_lines[prefix] == post_lines[prefix]
+    {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < pre_lines.len() - prefix
+        && suffix < post_lines.len() - prefix
+        && pre_lines[pre_lines.len() - 1 - suffix] == post_lines[post_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let pre_mid = &pre_lines[prefix..pre_lines.len() - suffix];
+    let post_mid = &post_lines[prefix..post_lines.len() - suffix];
+    assert!(
+        !pre_mid.is_empty() || !post_mid.is_empty(),
+        "unbalanced pair must differ"
+    );
+    // Zero-length sides anchor *after* their preceding line: a pure
+    // insertion rides old-side `prefix,0` (after the common prefix), a
+    // pure deletion rides new-side `prefix,0`; replacements start low.
+    let old_at = if pre_mid.is_empty() {
+        prefix
+    } else {
+        prefix + 1
+    };
+    let new_at = if post_mid.is_empty() {
+        prefix
+    } else {
+        prefix + 1
+    };
+    native_hunks(
+        path,
+        &[(
+            old_at,
+            pre_mid.len(),
+            new_at,
+            post_mid.len(),
+            pre_mid.iter().map(|s| s.to_string()).collect(),
+            post_mid.iter().map(|s| s.to_string()).collect(),
+        )],
+    )
+}
+
+/// Raw builder dispatch (WI-12 residue A): line-preserving pairs keep
+/// the per-line section builder, unbalanced pairs use the split above.
+fn raw_for(path: &str, pre: &str, post: &str) -> String {
+    if pre.split('\n').count() == post.split('\n').count() {
+        native_section(path, pre, post)
+    } else {
+        native_unbalanced(path, pre, post)
+    }
 }
 
 /// Independently recompute the N→S→N leg: apply `rsmpl` to `pre` and
@@ -119,11 +207,15 @@ fn assert_state_lossless(
 /// 11 = WI-12 turbofish callee sweep (`foo::<u8>(a)` →
 /// `bar::<u8>(a)`, same turbofish args),
 /// 12 = WI-12 header-evolution sweep (2 fn headers, uniform param-type
-/// delta `i32` → `u64` over hetero names),
-/// 13 = WI-12 type-annotation sweep (`let v: Vec<i32>` →
-/// `let v: Box<[i32]>`, same init).
+/// delta `i32` -> `u64` over hetero names),
+/// 13 = WI-12 type-annotation sweep (`let v: Vec<i32>` ->
+/// `let v: Box<[i32]>`, same init),
+/// 14 = WI-12 residue A insertion-only (one `let added` line appears;
+/// L-insertion stays ordinary, still round-trips),
+/// 15 = WI-12 residue A deletion-only (one `let dead` line disappears;
+/// same ordinary posture as insertion).
 fn generate(rng: &mut Rng) -> (String, String) {
-    let kind = rng.below(14);
+    let kind = rng.below(16);
     let ncalls = 2 + rng.below(2);
     match kind {
         0 => {
@@ -264,7 +356,7 @@ fn generate(rng: &mut Rng) -> (String, String) {
             "fn f0(x: u64) -> i32 {\n    x + 1\n}\nfn f1(y: u64) -> i32 {\n    y + 2\n}\n"
                 .to_string(),
         ),
-        _ => {
+        _ if kind == 13 => {
             let mut pre = "fn m() {\n".to_string();
             let mut post = "fn m() {\n".to_string();
             for i in 0..ncalls {
@@ -275,17 +367,25 @@ fn generate(rng: &mut Rng) -> (String, String) {
             post.push_str("}\n");
             (pre, post)
         }
+        _ if kind == 14 => (
+            "fn m() {\n    let keep = 1;\n}\n".to_string(),
+            "fn m() {\n    let keep = 1;\n    let added = 2;\n}\n".to_string(),
+        ),
+        _ => (
+            "fn m() {\n    let keep = 1;\n    let dead = 0;\n}\n".to_string(),
+            "fn m() {\n    let keep = 1;\n}\n".to_string(),
+        ),
     }
 }
 
 #[test]
 fn property_native_side_cycle_holds() {
-    // 120 seeded cases; case count (not wall-clock) is the budget gate.
+    // 120 seeded cases over 16 kinds (not wall-clock); the count is the gate.
     for case in 0..120 {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15u64.wrapping_add(case as u64 * 0x9E37_79B9));
         let (pre, post) = generate(&mut rng);
         let seed = case as u64 + 1;
-        let raw = native_section("f.rs", &pre, &post);
+        let raw = raw_for("f.rs", &pre, &post);
         assert!(
             raw.contains("@@ "),
             "seed {seed}: generator must produce a non-empty diff"
@@ -421,6 +521,74 @@ fn property_use_prefix_sweep_fires_and_round_trips() {
 }
 
 #[test]
+fn property_insertion_stays_ordinary_and_round_trips() {
+    // WI-12 residue A pin (Generator B kind-14 family): a single-region
+    // insertion-only pair raises ordinary per law L-insertion and the
+    // passthrough still round-trips byte-exact.
+    let pre = "fn m() {\n    let keep = 1;\n}\n";
+    let post = "fn m() {\n    let keep = 1;\n    let added = 2;\n}\n";
+    let raw = native_unbalanced("f.rs", pre, post);
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert!(
+        !out.rsmpl.contains("rule="),
+        "insertion-only pair must stay ordinary, got: {}",
+        out.rsmpl
+    );
+    assert_state_lossless(&out.rsmpl, pre, post, 1008);
+}
+
+#[test]
+fn property_joint_rename_plus_body_round_trips() {
+    // WI-12 residue A joint probe: fn rename plus body delta in one diff,
+    // two regions through the multi-hunk builder. Either posture is
+    // legitimate; the pin asserts lossless apply plus the fixed point.
+    let pre = "fn foo(x: i32) -> i32 {\n    x + 1\n}\nfn m() {\n    let a = foo(1);\n    let b = foo(2);\n}\n";
+    let post = "fn bar(x: i32) -> i32 {\n    x + 2\n}\nfn m() {\n    let a = bar(1);\n    let b = bar(2);\n}\n";
+    let raw = native_hunks(
+        "f.rs",
+        &[
+            (
+                1,
+                2,
+                1,
+                2,
+                vec![
+                    "fn foo(x: i32) -> i32 {".to_string(),
+                    "    x + 1".to_string(),
+                ],
+                vec![
+                    "fn bar(x: i32) -> i32 {".to_string(),
+                    "    x + 2".to_string(),
+                ],
+            ),
+            (
+                5,
+                2,
+                5,
+                2,
+                vec![
+                    "    let a = foo(1);".to_string(),
+                    "    let b = foo(2);".to_string(),
+                ],
+                vec![
+                    "    let a = bar(1);".to_string(),
+                    "    let b = bar(2);".to_string(),
+                ],
+            ),
+        ],
+    );
+    let map = pre_map(&[("f.rs", pre)]);
+    let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert_state_lossless(&out.rsmpl, pre, post, 1009);
+    let out2 = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &map).unwrap();
+    assert_eq!(
+        out2.rsmpl, out.rsmpl,
+        "joint probe second raise must be byte-identical"
+    );
+}
+
+#[test]
 fn property_control_header_veto_rederived() {
     // Historical veto shape (eacce0e/R1): for-loop headers parse as
     // statements, not expressions — no engine shape matches them, so
@@ -479,11 +647,12 @@ fn property_verdict_honesty_orphans_recomputed() {
     // generated pre image, so a lossless semantic raise must report zero
     // orphans and zero follow skips; a phantom entry (or an unlisted skip
     // that still applies clean) fails loudly with the seed.
-    for case in 0..40 {
+    // 64 cases = 4 per kind over 16 kinds (WI-12 residue A budget).
+    for case in 0..64 {
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15u64.wrapping_add(case as u64 * 0x9E37_79B9));
         let (pre, post) = generate(&mut rng);
         let seed = case as u64 + 1;
-        let raw = native_section("f.rs", &pre, &post);
+        let raw = raw_for("f.rs", &pre, &post);
         let pmap = pre_map(&[("f.rs", pre.as_str())]);
         let out = rsmpl_diff_infer::infer_rsmpl_with_pre_images(&raw, &pmap)
             .unwrap_or_else(|_| panic!("seed {seed}: inference must succeed (no panic, no error)"));

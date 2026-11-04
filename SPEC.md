@@ -10421,12 +10421,12 @@ seeded native-side mutations drawn from the D.4 catalogue — fn rename,
 call swap, control-header decoy, N=1 single, hetero `&`/field-anchor
 general-expr sweeps (WI-3), plus method-to-method, method-to-function,
 qualified-call, use-prefix, macro-rename, turbofish-callee,
-header-evolution (uniform param-type delta), and type-annotation sweeps
-(WI-12) — raised via `infer_rsmpl_with_pre_images`
+header-evolution (uniform param-type delta), type-annotation sweeps (WI-12),
+single-region insertion-only / deletion-only unbalanced pairs plus a pinned
+joint rename-plus-body probe (WI-12 residue A) — raised via `infer_rsmpl_with_pre_images`
 must parse, apply to the native post tree byte-identical, and re-infer byte-identical.
-Cross-file twins, joint compositions, and move+delta stay out of the
-generator (single-file line-preserving pairs only); the full-history
-smoke covers what the generator never imagines.
+Cross-file twins and move+delta stay out of the generator (single-file
+pairs only); the full-history smoke covers what the generator never imagines.
 Emission is span-sliced verbatim (WI-3 law): every detector emission that replays a
 source subterm copies that subterm's exact source bytes, so `&cand.body_text` never
 renders as `& cand . body_text`.
