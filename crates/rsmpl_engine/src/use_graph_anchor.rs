@@ -280,13 +280,18 @@ fn type_tail(ty: &syn::Type) -> Option<String> {
 
 /// WI-10 slice 1: one-step deref unwrap over [`type_tail`].
 /// WI-10 slice 2: same-file `impl Deref for C` targets.
+/// WI-17: `impl DerefMut for C` targets parity — a `DerefMut` impl with
+/// a stated `type Target = T;` anchors exactly as the `Deref` arm does
+/// (one step); a `DerefMut` impl without a stated target contributes
+/// nothing (the receiver keeps its outer type → `off-target`).
 ///
 /// `Box<T>` / `Rc<T>` / `Arc<T>` (exactly one generic type arg)
 /// anchors to the inner tail `T`; `&`/`&mut` peel first via the
 /// shared tail so `&Box<S>` composes. A plain `C` with a same-file
-/// `impl Deref for C { type Target = T; }` anchors to the outer
+/// `impl Deref/DerefMut for C { type Target = T; }` anchors to the outer
 /// tail of `T`. Single step only: `Box<Box<S>>` unwraps to `Box`
-/// (off-target against `S`); `Box<C>` unwraps to `C` (wrapper wins,
+/// (off-target against `S` — WI-17 chain-bound law: a second deref step
+/// never chains); `Box<C>` unwraps to `C` (wrapper wins,
 /// never chains to `T`); `&C` peels then derefs to `T`.
 /// Anything else (incl. `Vec<S>`) keeps the outer-type behavior.
 ///
@@ -326,7 +331,7 @@ fn type_tail_deref(
                     }
                 }
             }
-            // Same-file Deref target: one step, no chaining through
+            // Same-file Deref/DerefMut target (WI-17 parity): one step, no chaining through
             // wrappers (the wrapper arm above already returned).
             if tp.path.segments.len() == 1 {
                 if let Some(target) = deref_targets.get(&name) {
@@ -373,8 +378,10 @@ fn path_allows_unwrap(path: &syn::Path, name: &str, no_unwrap: &HashSet<String>)
 
 /// WI-10 slice 2: same-file `impl Deref for C` targets (`C -> T`
 /// outer tail of `type Target = T;`). `Target = Self` is a no-op and
-/// is never stored. Slice 3 tightens the trait path: single-segment
-/// `impl Deref` counts; multi-segment counts only with a `std`/`core`/
+/// is never stored. WI-17: `impl DerefMut for C` targets parity — same
+/// extraction, same path law; a `DerefMut` impl without a stated
+/// `Target` stores nothing. Slice 3 tightens the trait path: single-segment
+/// `impl Deref` / `impl DerefMut` counts; multi-segment counts only with a `std`/`core`/
 /// `alloc`/`crate`/`self`/`super` first segment (`impl std::ops::Deref`
 /// counts, `impl foo::Deref` does not — workspace resolution in
 /// slice 3 disambiguates by path).
@@ -386,7 +393,11 @@ pub(crate) fn collect_deref_targets(parsed: &syn::File) -> HashMap<String, Strin
         fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
             let names_deref = match &node.trait_ {
                 Some((_, p, _)) => {
-                    if !p.segments.last().is_some_and(|s| s.ident == "Deref") {
+                    if !p
+                        .segments
+                        .last()
+                        .is_some_and(|s| s.ident == "Deref" || s.ident == "DerefMut")
+                    {
                         false
                     } else if p.segments.len() == 1 {
                         true
@@ -424,7 +435,9 @@ pub(crate) fn collect_deref_targets(parsed: &syn::File) -> HashMap<String, Strin
     v.out
 }
 
-/// WI-10 slice 3: workspace `impl Deref for C` targets. Union of the
+/// WI-10 slice 3: workspace `impl Deref for C` targets. WI-17: `DerefMut`
+/// targets join the same map under the same law (one step; conflicting
+/// `T` for one `C` anchors nothing either way). Union of the
 /// per-file targets; a `C` with two or more distinct `T` workspace-wide
 /// is ambiguous and dropped (never guessed). Per-file maps win over
 /// this map at anchor build time (`for_file_with_workspace`).
@@ -608,7 +621,8 @@ mod tests {
 
     #[test]
     fn double_deref_stays_outer_by_one_step() {
-        // Single unwrap only: Box<Box<S>> -> Box (off-target vs S).
+        // WI-17 chain-bound law: a second deref step never chains —
+        // single unwrap only: Box<Box<S>> -> Box (off-target vs S).
         let src = "struct S;\nfn f(b: Box<Box<S>>) {\n    b;\n}\n";
         assert_eq!(anchor(src, "b", 3).as_deref(), Some("Box"));
     }
@@ -635,6 +649,38 @@ mod tests {
     fn deref_target_param_anchors_to_target() {
         let src = "struct C;\nstruct S;\nimpl Deref for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
         assert_eq!(anchor(src, "c", 7).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn deref_mut_target_param_anchors_to_target() {
+        // WI-17 parity: `DerefMut` with a stated `Target` anchors exactly
+        // as the `Deref` arm does (one step).
+        let src = "struct C;\nstruct S;\nimpl DerefMut for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 7).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn deref_mut_without_target_stays_outer() {
+        // WI-17: `DerefMut` without a stated `Target` stores nothing —
+        // the receiver keeps its outer type (`off-target` downstream).
+        let src = "struct C;\nfn f(c: C) {\n    c;\n}\nimpl DerefMut for C {\n}\n";
+        let parsed: syn::File = syn::parse_str(src).expect("fixture parses");
+        assert!(!collect_deref_targets(&parsed).contains_key("C"));
+        assert_eq!(anchor(src, "c", 3).as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn deref_mut_std_path_anchors() {
+        // WI-17 path parity: `impl std::ops::DerefMut` counts.
+        let src = "struct C;\nstruct S;\nimpl std::ops::DerefMut for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 7).as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn deref_mut_foreign_path_is_ignored() {
+        // WI-17 path parity: `impl foo::DerefMut` never counts.
+        let src = "struct C;\nstruct S;\nimpl foo::DerefMut for C {\n    type Target = S;\n}\nfn f(c: C) {\n    c;\n}\n";
+        assert_eq!(anchor(src, "c", 7).as_deref(), Some("C"));
     }
 
     #[test]

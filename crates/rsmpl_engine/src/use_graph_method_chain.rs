@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn three_hop_chain_keeps_depth() {
-        // WI-11 bound: three hops exceed the budget.
+        // WI-11 bound + WI-17 chain-bound law: three hops exceed the budget.
         let src = "struct S;\nimpl S {\n    fn make() -> S { S }\n    fn foo(&self) -> S { S }\n    fn bar(&self) -> S { S }\n}\nfn f() {\n    S::make().foo().bar().run();\n}\n";
         assert_eq!(
             resolve_recv(src, "S::make().foo().bar()", 10),

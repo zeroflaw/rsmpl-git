@@ -183,7 +183,7 @@ fn inherent_two_hop_chain_rewrites() {
 
 #[test]
 fn inherent_three_hop_chain_skips_chain_depth() {
-    // WI-11 bound: a third hop keeps `chain-depth`.
+    // WI-11 bound + WI-17 chain-bound law: a third hop keeps `chain-depth`.
     let dir = init_repo();
     cargo_crate(
         dir.path(),
@@ -210,6 +210,34 @@ fn inherent_three_hop_chain_skips_chain_depth() {
     assert!(post.contains("S::make().foo().bar().old();"), "got: {post}");
     // No `cargo check`: the definition renamed while the skipped call
     // still names `old` — the evidence (not the build) is the pin.
+}
+
+#[test]
+fn inherent_deref_mut_only_wrapper_rewrites() {
+    // WI-17 parity: a `DerefMut`-only wrapper anchors exactly as the
+    // `Deref` arm does (one step) — `c.old()` rewrites and verifies.
+    // WI-17 chain-bound law: one deref step + at most two hops; a second
+    // deref step stays `off-target`, a third hop skips `chain-depth`.
+    let dir = init_repo();
+    cargo_crate(
+        dir.path(),
+        "pub struct S;\nimpl S {\n    pub fn old(&self) {}\n}\npub struct C;\nimpl DerefMut for C {\n    type Target = S;\n}\npub fn f(c: &C) {\n    c.old();\n}\n",
+    );
+    let v = check_json(dir.path(), CTOR_PATCH);
+    assert_eq!(
+        v["checked"]["semantics"],
+        serde_json::json!("verified"),
+        "DerefMut-only wrapper completes (WI-17), got: {v}"
+    );
+    apply_patch(dir.path(), CTOR_PATCH);
+    let post = read(dir.path(), "src/lib.rs");
+    assert!(post.contains("c.new();"), "got: {post}");
+    assert!(!post.contains("c.old()"), "got: {post}");
+    // No `cargo check`: a `DerefMut`-only impl with a stated `Target`
+    // is a syntactic anchor shape, not compiling Rust (`DerefMut`
+    // inherits `Target` from `Deref`, so valid Rust always pairs them) —
+    // the rewrite + `verified` verdict is the pin; the compiling
+    // `Deref`-paired path is covered by the `Deref` anchor pins.
 }
 
 #[test]

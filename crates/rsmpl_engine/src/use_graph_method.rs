@@ -1462,7 +1462,7 @@ mod tests {
 
     #[test]
     fn three_hop_chain_is_chain_depth() {
-        // WI-11 bound: a third hop keeps `chain-depth`.
+        // WI-11 bound + WI-17 chain-bound law: a third hop keeps `chain-depth`.
         let src = "struct S;\nimpl S {\n    fn make() -> S {\n        S\n    }\n    fn foo(&self) -> S {\n        S\n    }\n    fn bar(&self) -> S {\n        S\n    }\n    fn run(&self) {\n    }\n}\nfn f() {\n    S::make().foo().bar().run();\n}";
         let (_, report) = apply_files(&run_patch(), &[("src/lib.rs", src)]).unwrap();
         assert!(
