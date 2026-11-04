@@ -1,3 +1,5 @@
+Work only inside ./hashbrown: apart from materials explicitly provided to you (staged skill, tool binaries on PATH), do not list, read, or search anything elsewhere in the surrounding repo.
+
 Refactor task in ./hashbrown (hashbrown v0.17.1; do not modify anything outside it).
 
 Rename the crate-private scope-guard helper in src/scopeguard.rs and update every code use across the crate:

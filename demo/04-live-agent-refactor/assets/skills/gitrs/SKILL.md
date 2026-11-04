@@ -42,7 +42,7 @@ Single path suffices (`a/X b/X` is the same section); `---`/`+++`/`index` are op
 | `# scope=contained\|anchor\|overlap\|exact\|file` | range relation of the match (default `contained`); `file` searches the whole file with dummy `@@ -1,1 @@`, no discovery |
 | `# repeat` | fold nested same-rule matches bottom-up (call + general-expr shapes only; `...` bodies stay verbatim) |
 | `# optional` | zero matches OK (default: error); `# optional=false` restores the error |
-| `E` / `T` / `P` / `V Q G W` / `I` / `N` | inferred metavariables — no declaration needed; `N` is the fn-header name hole (binds per-site, replays; `# ident X` declares others); explicit `# expr E` / `# type T` / `# item I` etc. stay legal, and a literal spelled like a declared metavar needs backticks (`` `E` ``); in type/expression patterns a bare capitalized ident is a hole, so backtick concrete names (`` `Widget`<T> ``) — item/fn-signature patterns take them bare (`- struct Widget`) |
+| `E` / `T` / `P` / `V Q G W` / `I` / `N` | inferred metavariables — no declaration needed; `N` is the fn-header name hole (binds per-site, replays; `# ident X` declares others); explicit `# expr E` / `# type T` / `# item I` etc. stay legal, and a literal spelled like a declared metavar needs backticks (`` `E` ``); in type/expression patterns a bare capitalized ident is a hole, so backtick concrete names (`` `Foo`<T> ``) — item/fn-signature patterns take them bare (`- struct Foo`) |
 | `# bind=N` / `# use=N` | cut (`- I` + `# bind=`) / paste (`+ N` + `# use=`); `I` infers `item`; `# bind=` + `# allow=many` on the cut binds an ordered collection, and an `N`-hole paste template (`+ fn new_N(...) { ... }`) renames each item per item |
 | `# attrs=preserve\|absent\|explicit\|strip` | attribute policy (default `preserve`: ignore + preserve attrs/doc comments; written attr lines are the match delta on fn/item/`let`; uniform attr deltas over hetero items raise via `attr_sweep`); write `#[...]` on its own diff line (single-line `#[a] let x = E;` never matches) |
 | `# root=item\|expr\|stmt\|type` | force parse context when ambiguous |
@@ -71,11 +71,11 @@ Struct rename with use-site follow (verify `matches` covers every site you grepp
 
 ```diff rsmpl
 diff --git src/lib.rs
-@@ -8,7 @@ rule=rename_widget
+@@ -8,7 @@ rule=rename_struct
 # follow=uses
 # fallback=syntax
-- pub struct Widget
-+ pub struct Gadget
+- pub struct Foo
++ pub struct Bar
 ```
 
 Fn rename, full form (untouched slots elided; `...` and `}` keep the one-space marker):
@@ -91,22 +91,22 @@ Fn rename, full form (untouched slots elided; `...` and `}` keep the one-space m
 Method rename (container header spells generics exactly as written):
 
 ```diff rsmpl
-@@ -24,17 @@ rule=rename_bite
-  impl<T> Widget<T> {
-- pub fn bite(...) {
-+ pub fn chew(...) {
+@@ -24,17 @@ rule=rename_method
+  impl<T> Foo<T> {
+- pub fn foo(...) {
++ pub fn bar(...) {
     ...
  }
 ```
 
-Field rename (reads follow by receiver anchoring):
+Field rename (reads follow by receiver anchoring; copy the type annotation verbatim from the file):
 
 ```diff rsmpl
 @@ -8,7 @@ rule=rename_field
 # follow=uses
-  struct Widget {
-- tooth: T
-+ fang: T
+  struct Foo {
+- foo: T
++ bar: T
 ```
 
 - Fn rename: `fn foo(...)` matches plain fns only; write `pub`/`async`/`unsafe`/generics/`where` explicitly to match them. Explicit slots evolve, `...`/same-metavar slots are preserved, bodies are never rewritten; rename+body joints (one to three `- E`/`+ E` pairs inside the renamed body) ride the same `# follow=uses` hunk. A braced body is an `...` context line plus the closing `}` context line — both keep the one-space hunk marker (`    ...`, ` }`); a bare unprefixed `}` never enters the hunk and fails as an unbalanced body block. A `trait T {` header + fn pair rewrites trait methods incl. `;` decls (never `pub`); an `impl S {` header + fn pair rewrites inherent methods the same way. Slots run `fn name<generics>(params) -> ret where...` — elide what you don't touch (`(...)`, no return); container headers spell generics exactly as written (`impl<T, F> S<T, F> {`).
