@@ -22,7 +22,7 @@ use syn::visit::Visit;
 
 /// Parse the pre-image once; `None` = no entry (caller allows).
 pub(crate) fn parse_pre(file_old: Option<&str>) -> Option<syn::File> {
-    file_old.and_then(|t| syn::parse_str::<syn::File>(t).ok())
+    crate::probe_cache::cached_parse_pre(file_old)
 }
 
 /// Changed-line cover (T411): an opaque container spanning 1-based
@@ -636,15 +636,7 @@ pub(crate) fn template_type_counts(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n- {minus_template}\n+ {minus_template}\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// Paired-template totality (WI-9b1): the hetero macro pair
@@ -678,15 +670,7 @@ pub(crate) fn template_pair_holds(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {hetero_minus}\n+ {hetero_plus}\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return false;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return false;
-    };
-    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+    crate::probe_cache::run_probe(path, pre, &probe) == Some(n)
 }
 
 /// Fold totality (WI-1c): the emitted minus fold template `minus_template`
@@ -720,15 +704,7 @@ pub(crate) fn template_repeat_holds(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# repeat\n- {minus_template}\n+ E0\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return false;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return false;
-    };
-    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+    crate::probe_cache::run_probe(path, pre, &probe) == Some(n)
 }
 
 /// Sequence totality (WI-5c, WI-5d): the emitted K-line minus template
@@ -773,15 +749,7 @@ pub(crate) fn template_sequence_holds(
     for p in plus_tpls {
         probe.push_str(&format!("+ {p}\n"));
     }
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return false;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return false;
-    };
-    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+    crate::probe_cache::run_probe(path, pre, &probe) == Some(n)
 }
 /// whose uppercase callee infers as an `expr` hole) must match exactly
 /// `n` sub-expressions in the pre-image file. Same self-rewrite probe
@@ -815,15 +783,7 @@ pub(crate) fn template_expr_holds(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n- {minus_template}\n+ {minus_template}\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return false;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return false;
-    };
-    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+    crate::probe_cache::run_probe(path, pre, &probe) == Some(n)
 }
 
 /// Generic template totality for fn-header sweeps (WI-4c): the emitted

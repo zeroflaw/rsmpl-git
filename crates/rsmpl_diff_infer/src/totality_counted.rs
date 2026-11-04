@@ -34,7 +34,7 @@ pub(crate) enum FamilyVerdict {
 }
 
 fn parse_pre(file_old: Option<&str>) -> Option<syn::File> {
-    file_old.and_then(|t| syn::parse_str::<syn::File>(t).ok())
+    crate::probe_cache::cached_parse_pre(file_old)
 }
 
 fn opaque_hit(minuses: &[&str], file: &syn::File, changed: &[usize]) -> bool {
@@ -105,15 +105,7 @@ fn real_pair_count(path: &str, pre: &str, minus: &str, plus: &str) -> Option<usi
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n- {minus}\n+ {plus}\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// Slice-2a engine counts: real-pair probe (`template_pair_holds`
@@ -146,15 +138,7 @@ pub(crate) fn template_fn_counts(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n{body}",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// Fn-header engine count inside a verbatim `impl` block header (the
@@ -177,15 +161,7 @@ pub(crate) fn template_fn_block_counts(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n{body}",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// Map an engine `Option<usize>` count to a verdict: `None` pre-image
@@ -232,15 +208,7 @@ pub(crate) fn template_sequence_counts(
     for p in plus_tpls {
         probe.push_str(&format!("+ {p}\n"));
     }
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// WI-4 slice 2b-rest-b: fold engine count (`template_repeat_holds`
@@ -259,15 +227,7 @@ pub(crate) fn template_repeat_counts(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# repeat\n- {minus_template}\n+ E0\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// WI-4 slice 2b-rest-b: generic expression engine count
@@ -288,15 +248,7 @@ pub(crate) fn template_expr_counts(
         "{}\n@@ -1,1 @@ rule=probe\n# sweep\n# optional\n- {minus_template}\n+ {minus_template}\n",
         crate::git_header(path)
     );
-    let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return None;
-    };
-    let mut files = std::collections::HashMap::new();
-    files.insert(path.to_string(), pre.to_string());
-    let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return None;
-    };
-    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
+    crate::probe_cache::run_probe(path, pre, &probe)
 }
 
 /// WI-4 slice 2b-rest-b: peel verdict (mirrors `peel_holds` — the

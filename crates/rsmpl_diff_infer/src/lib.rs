@@ -27,6 +27,7 @@
 //! never an unparseable patch.
 
 pub(crate) mod diff_text;
+pub(crate) mod probe_cache;
 pub(crate) mod reprobe;
 pub mod semantic;
 pub(crate) mod totality;
@@ -91,6 +92,8 @@ pub fn infer_rsmpl_with_pre_images(
 }
 
 fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch, InferError> {
+    // WI-11: every parse/probe cache dies with its `infer` call.
+    probe_cache::reset_all();
     // No changes is the legitimate empty shape here (the binary, not
     // infer, decides how to report it); an empty patch is only an
     // authoring typo on the `applyrs` side (T59).
