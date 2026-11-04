@@ -1,0 +1,5 @@
+Smoke test — answer briefly, do not modify any files.
+
+1. Is a skill named "gitrs" available to you in this session? If yes, quote its one-line purpose; if no, say so plainly.
+2. Is there a `gitrs` binary on your PATH? Report the exact output of `which gitrs` (and `gitrs --help | head -5` if it exists).
+3. If gitrs is actually available to you in this session (skill or binary), say in one sentence what you would use it for; otherwise state plainly that it is unavailable and do not describe using it.

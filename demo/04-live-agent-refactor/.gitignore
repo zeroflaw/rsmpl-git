@@ -1,0 +1,4 @@
+# Demo 04 runtime artifacts — never commit.
+workspace/
+runs/
+__pycache__/

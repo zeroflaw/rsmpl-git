@@ -22,6 +22,7 @@ From the repo root:
 ./demo/01-apply-rename-calls/run.sh
 ./demo/02-diff-call-sweep/run.sh
 ./demo/03-apply-move-fn/run.sh
+python3 demo/04-live-agent-refactor/run.py --with-gitrs  # needs muse CLI + LLM key; see demo README
 ```
 
 Pass `--keep` to leave the work copy behind for inspection (its path is
@@ -36,6 +37,7 @@ commands plus the expected output.
 | 01-apply-rename-calls | one 5-line patch renames `foo`→`bar` at 12 call sites: `--check` preview, apply, then `grep \| wc -l` proves all 12 landed | 83 B vs 409 B (80% smaller) |
 | 02-diff-call-sweep | `gitrs diff` compresses 12 changed call sites into one 5-line semantic patch; compared against `git diff -U0` of the same change | 75 B vs 416 B (82% smaller) |
 | 03-apply-move-fn | a 9-line cut+paste patch moves a 44-line fn from `src/old.rs` to `src/new.rs`; the body is named once, never restated | 142 B vs 1,576 B (91% smaller) |
+| 04-live-agent-refactor | live headless agent turn with/without the gitrs skill: streams messages, reports runtime/tokens/compactions | n/a (agent-driven) |
 
 Sizes are from the current build and may shift as the engine evolves;
 each script re-measures them live. The native baseline is the 0-context
