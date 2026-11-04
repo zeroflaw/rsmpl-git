@@ -246,6 +246,12 @@ fn run() -> Result<(), CliError> {
             "version": rsmpl_patch::REPORT_VERSION,
             "files": patch.files.iter().map(|path| serde_json::json!({"path": path})).collect::<Vec<_>>(),
             "patch": patch.rsmpl,
+            // WI-4 slice 1: patch-level pre-pass declines (one per
+            // declined pre-pass stage; empty when every pre-pass fired).
+            // Additive (v5 stays): machines filter, humans skim.
+            "pre_pass_declined": patch.pre_pass_declined.iter().map(|d| serde_json::json!({
+                "detector": d.detector, "reason": d.reason,
+            })).collect::<Vec<_>>(),
             // WI-15c/17: wholly-ordinary sections carry one entry with
             // `detector: "ordinary"` and the chain-level `declined`
             // trial log (attempted declines in chain order plus
@@ -286,6 +292,11 @@ fn run() -> Result<(), CliError> {
         return check_verdict(&check);
     }
     print!("{}", patch.rsmpl);
+    // WI-4 slice 1: patch-level pre-pass declines ride stderr as one
+    // `declined:` line per declined stage (no file — patch-global).
+    for d in &patch.pre_pass_declined {
+        eprintln!("declined: pre-pass {} {}", d.detector, d.reason);
+    }
     // WI-17 slice 1 text parity: the patch artifact stays stdout-only
     // (byte-identical with or without provenance), while the same
     // ordinary-section trial JSON carries rides stderr as one

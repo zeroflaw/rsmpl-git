@@ -17,6 +17,7 @@ use super::antiunify::{
     antiunify_let_template, antiunify_let_type_add, antiunify_pat_swap, antiunify_sequence,
     antiunify_types, antiunify_untyped_let, TypedSite,
 };
+use super::prov::Counted;
 use super::unique_rule;
 use quote::ToTokens;
 use syn::spanned::Spanned;
@@ -43,18 +44,31 @@ pub(crate) fn try_let_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if let Some(ty) = antiunify_let_type_add(minuses, pluses) {
-        if !crate::totality::let_untyped_holds(file_old, minuses, changed) {
-            return None;
+        // WI-4 slice 1: counted decline like the call family.
+        match crate::totality::let_untyped_verdict(file_old, minuses, changed) {
+            crate::totality::LetUntypedVerdict::Holds => {}
+            crate::totality::LetUntypedVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality::LetUntypedVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality::LetUntypedVerdict::Unproven => return Counted::Miss,
         }
-        return Some(super::let_framed::emit_let_type_add(
+        return Counted::Fire(super::let_framed::emit_let_type_add(
             path, &ty, changed, used_rules,
         ));
     }
     // WI-14 slice 4: framed fallback lives in the `let_framed`
     // sibling (D5 split — production only, tests stay inline here).
-    super::let_framed::try_framed_let_sweep(minuses, pluses, path, file_old, changed, used_rules)
+    // Counted mapping is a later slice (bool probe inside); a miss
+    // here is shape-or-count, not yet attributed.
+    match super::let_framed::try_framed_let_sweep(
+        minuses, pluses, path, file_old, changed, used_rules,
+    ) {
+        Some(s) => Counted::Fire(s),
+        None => Counted::Miss,
+    }
 }
 
 /// N-site (N ≥ 2) type rewrite sweep: every pair carries the same type
@@ -78,17 +92,19 @@ pub(crate) fn try_type_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() != pluses.len() || minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     if minuses.iter().all(|m| *m == minuses[0]) && pluses.iter().all(|p| *p == pluses[0]) {
-        return None;
+        return Counted::Miss;
     }
     let mut minus_sites = Vec::with_capacity(minuses.len());
     let mut plus_sites = Vec::with_capacity(pluses.len());
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let (mt, pt, m_text, p_text) = extract_type_pair(m, p)?;
+        let Some((mt, pt, m_text, p_text)) = extract_type_pair(m, p) else {
+            return Counted::Miss;
+        };
         minus_sites.push(TypedSite {
             ty: mt,
             text: m_text,
@@ -98,14 +114,27 @@ pub(crate) fn try_type_sweep(
             text: p_text,
         });
     }
-    let (minus_tpl, plus_tpl) = antiunify_types(&minus_sites, &plus_sites)?;
-    if !crate::totality::template_type_holds(path, file_old, &minus_tpl, minuses.len()) {
-        return None;
+    let Some((minus_tpl, plus_tpl)) = antiunify_types(&minus_sites, &plus_sites) else {
+        return Counted::Miss;
+    };
+    // WI-4 slice 1: counted decline — the engine self-rewrite names its
+    // file-wide match count (`totality:found:want`).
+    if file_old.is_none() {
+        // Legacy section-visible allow (no pre-image, no counts).
+    } else if let Some(found) = crate::totality::template_type_counts(path, file_old, &minus_tpl) {
+        if found != minuses.len() {
+            return Counted::Totality {
+                found,
+                want: minuses.len(),
+            };
+        }
+    } else {
+        return Counted::Miss;
     }
     let rule = unique_rule(used_rules, "type_sweep");
     let mut hunk = crate::emission_header(path, &rule, changed);
     hunk.push_str(&format!("- {minus_tpl}\n+ {plus_tpl}\n"));
-    Some(hunk)
+    Counted::Fire(hunk)
 }
 
 /// N-site (N ≥ 2) joint let-template sweep (WI-5 slice 1): typed→typed

@@ -164,14 +164,14 @@ pub(crate) fn run_pair_chain(
     ) {
         return Some((evo, "definition_evolution"));
     }
-    if let Some(m2f) = attempt(
+    if let Some(m2f) = attempt_counted(
         declined,
         "method_to_fn",
         super::try_method_to_fn_sweep(minuses, pluses, path, file_old, changed, used_rules),
     ) {
         return Some((m2f, "method_to_fn"));
     }
-    if let Some(m2m) = attempt(
+    if let Some(m2m) = attempt_counted(
         declined,
         "method_to_method",
         super::try_method_to_method_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -325,7 +325,7 @@ pub(crate) fn run_pair_chain(
     // hetero across sites, uniform concrete T) — after the call-shape
     // chain (those ignore the `let` wrapper and cannot express an
     // ascription delta), before the verbatim stage in the caller.
-    if let Some(let_sweep) = attempt(
+    if let Some(let_sweep) = attempt_counted(
         declined,
         "let_sweep",
         super::try_let_sweep(minuses, pluses, path, file_old, changed, used_rules),
@@ -336,7 +336,7 @@ pub(crate) fn run_pair_chain(
     // sites) — after the let-shape chain (those own whole-statement
     // templates with init/pattern holes; this owns sub-line type
     // templates), before the verbatim stage in the caller.
-    if let Some(type_sweep) = attempt(
+    if let Some(type_sweep) = attempt_counted(
         declined,
         "type_sweep",
         super::try_type_sweep(minuses, pluses, path, file_old, changed, used_rules),

@@ -9,23 +9,29 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use super::prov::HunkProvenance;
+use super::prov::{HunkDeclined, HunkProvenance};
 use super::{
     cross_sweep, fn_joint_driver, item_intent, item_joint_impl, member, mod_rename, moves, prov,
 };
 
-/// Run the whole-patch pre-passes over `sections`.
-///
-/// Returns the rewritten sections plus the fn-joint suppression set (the
-/// per-section loop skips suppressed callee names in its fallback). Sets
-/// `compressed_any` exactly as the inlined chain did.
+/// WI-4 slice 1: pre-pass attribution — each stage that declines records
+/// one patch-level `{detector, "no-match"}` entry (silence removed).
+/// Firing stages record nothing. Finer counted reasons per pre-pass are
+/// slice 2; this skeleton proves the plumbing (decline is attributed).
 pub(crate) fn run_pre_passes<'a>(
     sections: &'a [String],
     pre: &HashMap<String, String>,
     used_rules: &mut Vec<String>,
     prov: &mut Vec<HunkProvenance>,
+    pre_pass_declined: &mut Vec<HunkDeclined>,
     compressed_any: &mut bool,
 ) -> (Cow<'a, [String]>, HashSet<(String, String)>) {
+    fn decline(out: &mut Vec<HunkDeclined>, detector: &str) {
+        out.push(HunkDeclined {
+            detector: detector.to_string(),
+            reason: prov::reason_no_match(),
+        });
+    }
     // T430 whole-patch move pre-pass (cross-section bind/use pairs);
     // per-section detectors run on the rewritten sections below.
     let move_rules_before = used_rules.len();
@@ -42,7 +48,10 @@ pub(crate) fn run_pre_passes<'a>(
             );
             Cow::Owned(rewritten)
         }
-        None => Cow::Borrowed(sections),
+        None => {
+            decline(pre_pass_declined, "move");
+            Cow::Borrowed(sections)
+        }
     };
     // WI-15a whole-patch item-intent pre-pass (single definition +
     // same-delta uses joined into one follow hunk); per-section
@@ -62,6 +71,8 @@ pub(crate) fn run_pre_passes<'a>(
             pre,
             compressed_any,
         ));
+    } else {
+        decline(pre_pass_declined, "item_intent");
     }
     // WI-3 whole-patch joint-`impl` pre-pass (trait + self-type renames
     // composed in one `impl` header collapse to one shared-rule intent);
@@ -82,6 +93,8 @@ pub(crate) fn run_pre_passes<'a>(
             pre,
             compressed_any,
         ));
+    } else {
+        decline(pre_pass_declined, "item_joint_impl");
     }
     // WI-4a whole-patch fn-joint pre-pass (single `fn` rename+slot
     // definition + callee-only call uses in one file collapse to one
@@ -139,6 +152,8 @@ pub(crate) fn run_pre_passes<'a>(
             }
             current = Cow::Owned(rewritten);
         }
+    } else {
+        decline(pre_pass_declined, "fn_joint");
     }
     // WI-15b whole-patch member-intent pre-pass (single member definition
     // + same-delta uses across files, file/section-pure partial); runs on
@@ -158,6 +173,8 @@ pub(crate) fn run_pre_passes<'a>(
             pre,
             compressed_any,
         ));
+    } else {
+        decline(pre_pass_declined, "member_rename");
     }
     // WI-15c whole-patch mod-intent pre-pass (single `mod old;` def +
     // same-delta `old::` path uses across files + optional headers-only
@@ -178,12 +195,16 @@ pub(crate) fn run_pre_passes<'a>(
             pre,
             compressed_any,
         ));
+    } else {
+        decline(pre_pass_declined, "mod_rename");
     }
     // WI-12 cross-file assoc/trait-method intents (commits inside).
     if let Some(rewritten) =
         cross_sweep::try_cross_intents(current.as_ref(), pre, used_rules, prov, compressed_any)
     {
         current = Cow::Owned(rewritten);
+    } else {
+        decline(pre_pass_declined, "cross");
     }
     (current, joint_suppressed)
 }

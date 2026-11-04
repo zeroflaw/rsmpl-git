@@ -64,6 +64,10 @@ pub struct InferredPatch {
     /// inference (T386; warned like binaries).
     pub stripped_gitlink: Vec<String>,
     pub hunks: Vec<HunkProvenance>,
+    /// WI-4 slice 1: patch-level pre-pass declines (one per declined
+    /// pre-pass stage; empty when every pre-pass fired or was skipped).
+    /// Additive (v5 stays).
+    pub pre_pass_declined: Vec<HunkDeclined>,
 }
 
 pub fn infer_rsmpl(raw: &str) -> Result<InferredPatch, InferError> {
@@ -95,6 +99,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             stripped_binary: Vec::new(),
             stripped_gitlink: Vec::new(),
             hunks: Vec::new(),
+            pre_pass_declined: Vec::new(),
         });
     }
     let (kept, stripped, stripped_gitlink) = strip_unpatchable_sections(raw);
@@ -110,6 +115,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             stripped_binary: stripped,
             stripped_gitlink,
             hunks: Vec::new(),
+            pre_pass_declined: Vec::new(),
         });
     }
     // Native hunks often carry git's `@@ -a,b +c,d @@ <funcname>`
@@ -142,14 +148,21 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
     // reports none. WI-15c: the fallbacks DO report ordinary entries
     // (wholly-ordinary sections explain themselves via `declined`).
     let mut prov = Vec::new();
-    let candidate =
-        semantic::infer_semantic_with_provenance(&kept, pre, &mut prov).unwrap_or_default();
+    let mut pre_pass_declined = Vec::new();
+    let candidate = semantic::infer_semantic_with_provenance_and_pre_pass(
+        &kept,
+        pre,
+        &mut prov,
+        &mut pre_pass_declined,
+    )
+    .unwrap_or_default();
     if candidate.is_empty() {
         return Ok(InferredPatch {
             rsmpl: passthrough,
             stripped_binary: stripped,
             stripped_gitlink,
             hunks: prov,
+            pre_pass_declined,
         });
     }
     match rsmpl_patch::parse_patch(&candidate) {
@@ -158,6 +171,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
             stripped_binary: stripped,
             stripped_gitlink,
             hunks: prov,
+            pre_pass_declined,
         }),
         Err(_) => Ok(InferredPatch {
             rsmpl: passthrough,
@@ -170,6 +184,7 @@ fn infer_inner(raw: &str, pre: &HashMap<String, String>) -> Result<InferredPatch
                 .into_iter()
                 .filter(|h| h.detector == "ordinary")
                 .collect(),
+            pre_pass_declined,
         }),
     }
 }
@@ -1488,5 +1503,70 @@ mod tests {
             "got:\n{}",
             files["f.rs"]
         );
+    }
+
+    #[test]
+    fn wi4_method_counted_decline_names_found_want() {
+        // WI-4 slice 1: a 2-pair method rename over a 5-site pre-image
+        // declines the whole-section sweep with `totality:5:2` (not
+        // `no-match`) and stays ordinary.
+        let raw = "diff --git a/f.rs b/f.rs\n--- a/f.rs\n+++ b/f.rs\n@@ -2,1 +2,1 @@\n-    a.foo(1);\n+    a.bar(1);\n@@ -3,1 +3,1 @@\n-    a.foo(1);\n+    a.bar(1);\n";
+        let pre = "fn m() {\n    a.foo(1);\n    a.foo(1);\n    a.foo(1);\n    a.foo(1);\n    a.foo(1);\n}\n";
+        let out = infer_rsmpl_with_pre_images(raw, &pre_map(&[("f.rs", pre)])).unwrap();
+        assert!(
+            !out.rsmpl.contains("rule="),
+            "must stay ordinary, got: {}",
+            out.rsmpl
+        );
+        let ord = out
+            .hunks
+            .iter()
+            .find(|h| h.detector == "ordinary")
+            .expect("ordinary entry");
+        assert!(
+            ord.declined
+                .iter()
+                .any(|d| d.detector == "method_to_method" && d.reason == "totality:5:2"),
+            "counted method decline, got: {:?}",
+            ord.declined
+        );
+        for d in &ord.declined {
+            assert!(
+                crate::semantic::prov::reason_is_closed(&d.reason),
+                "open reason: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wi4_pre_pass_declines_are_attributed() {
+        // WI-4 slice 1: a two-file no-move pair attributes every declined
+        // pre-pass stage at patch level (was silent before).
+        let raw = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,1 @@\n-const A: u32 = 1;\n+const A: u32 = 2;\n";
+        let out =
+            infer_rsmpl_with_pre_images(raw, &pre_map(&[("a.rs", "const A: u32 = 1;\n")])).unwrap();
+        assert!(!out.pre_pass_declined.is_empty(), "declines attributed");
+        for d in &out.pre_pass_declined {
+            assert_eq!(d.reason, "no-match", "skeleton reason, got: {d:?}");
+            assert!(
+                crate::semantic::prov::reason_is_closed(&d.reason),
+                "open reason: {d:?}"
+            );
+        }
+        let names: Vec<&str> = out
+            .pre_pass_declined
+            .iter()
+            .map(|d| d.detector.as_str())
+            .collect();
+        for want in [
+            "move",
+            "item_intent",
+            "fn_joint",
+            "member_rename",
+            "mod_rename",
+            "cross",
+        ] {
+            assert!(names.contains(&want), "missing {want}, got: {names:?}");
+        }
     }
 }

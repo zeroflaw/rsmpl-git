@@ -208,14 +208,33 @@ pub fn infer_semantic_with_provenance(
     pre: &std::collections::HashMap<String, String>,
     prov: &mut Vec<HunkProvenance>,
 ) -> Option<String> {
+    let mut sink = Vec::new();
+    infer_semantic_with_provenance_and_pre_pass(sections, pre, prov, &mut sink)
+}
+
+/// WI-4 slice 1: as above, plus patch-level pre-pass declines in
+/// `pre_pass_declined` (one `{detector, "no-match"}` per declined
+/// pre-pass stage; firing stages record nothing).
+pub fn infer_semantic_with_provenance_and_pre_pass(
+    sections: &[String],
+    pre: &std::collections::HashMap<String, String>,
+    prov: &mut Vec<HunkProvenance>,
+    pre_pass_declined: &mut Vec<HunkDeclined>,
+) -> Option<String> {
     let mut out = String::new();
     let mut used_rules: Vec<String> = Vec::new();
     let mut compressed_any = false;
     // Whole-patch pre-pass chain (move -> item-intent -> joint-impl ->
     // fn-joint -> member -> mod -> cross); lives in `pre_pass.rs` (D5
     // split; this file was at 1993/2000).
-    let (pre_passed, joint_suppressed) =
-        pre_pass::run_pre_passes(sections, pre, &mut used_rules, prov, &mut compressed_any);
+    let (pre_passed, joint_suppressed) = pre_pass::run_pre_passes(
+        sections,
+        pre,
+        &mut used_rules,
+        prov,
+        pre_pass_declined,
+        &mut compressed_any,
+    );
     // WI-1b: the reprobe floor degrades to the TRUE native input, never
     // to pre-pass output (a move/intent rewrite is semantic, not an
     // ordinary fallback) — captured before the shadowing below.

@@ -226,6 +226,9 @@ pub struct CompressedPatch {
     /// WI-2 per-hunk provenance (one entry per emitted semantic hunk;
     /// empty when fully ordinary), backing `diffrs --format json`.
     pub hunks: Vec<HunkProvenance>,
+    /// WI-4 slice 1: patch-level pre-pass declines (one per declined
+    /// pre-pass stage). Additive (v5 stays).
+    pub pre_pass_declined: Vec<HunkDeclined>,
     /// WI-10a: changed `.rs` paths with no pre-image in a staged/rev
     /// conversion (the binary warns: `proven` downgraded to
     /// section-visible). Empty for pending worktree conversions.
@@ -372,6 +375,7 @@ fn finish(inferred: &InferredPatch, meta: RaiseMeta) -> CompressedPatch {
         skipped_history: meta.skipped_history,
         skipped_untracked_dirs: meta.skipped_untracked_dirs,
         hunks: inferred.hunks.clone(),
+        pre_pass_declined: inferred.pre_pass_declined.clone(),
         proven_downgraded: meta.proven_downgraded,
     }
 }

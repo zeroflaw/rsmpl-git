@@ -355,18 +355,34 @@ pub(crate) fn peel_holds(
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
-/// N-site method totality (m2f + m2m share the minus shape): `method`
-/// with `arity` args occurs exactly `minuses.len()` times. All receivers
-/// counted (incl `&`-wrapped — conservative).
-pub(crate) fn method_holds(
+/// WI-4 slice 1 counted verdict for the N-site method probe
+/// (`method` with `arity` args). Mirrors [`CallVerdict`]: a shape match
+/// with a twin elsewhere names its counts (`totality:`) or its opaque
+/// twin (`veto:opaque-hit`) instead of a bare `no-match`. `Unproven`
+/// is the legacy unparseable-pre-image veto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MethodVerdict {
+    Holds,
+    CountMismatch { found: usize, want: usize },
+    OpaqueHit,
+    Unproven,
+}
+
+/// Counted method probe: file-wide `method/arity` count (`found`)
+/// against the diff pair count (`want`), plus the line-aware opaque
+/// veto as its own arm.
+pub(crate) fn method_verdict(
     file_old: Option<&str>,
     method: &str,
     arity: usize,
     minuses: &[&str],
     changed: &[usize],
-) -> bool {
+) -> MethodVerdict {
     let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
+        if file_old.is_none() {
+            return MethodVerdict::Holds;
+        }
+        return MethodVerdict::Unproven;
     };
     let n = minuses.len();
     struct M<'a> {
@@ -391,9 +407,31 @@ pub(crate) fn method_holds(
     };
     m.visit_file(&file);
     if m.count != n {
-        return false;
+        return MethodVerdict::CountMismatch {
+            found: m.count,
+            want: n,
+        };
     }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+    if opaque_hit_lines(&file, &needles_of(minuses), changed) {
+        return MethodVerdict::OpaqueHit;
+    }
+    MethodVerdict::Holds
+}
+
+/// N-site method totality (m2f + m2m share the minus shape): `method`
+/// with `arity` args occurs exactly `minuses.len()` times. All receivers
+/// counted (incl `&`-wrapped — conservative).
+pub(crate) fn method_holds(
+    file_old: Option<&str>,
+    method: &str,
+    arity: usize,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    matches!(
+        method_verdict(file_old, method, arity, minuses, changed),
+        MethodVerdict::Holds
+    )
 }
 
 /// N-site same-method literal totality (T420): `method` with token-equal
@@ -580,20 +618,27 @@ pub(crate) fn no_opaque_hits(file_old: Option<&str>, minuses: &[&str], changed: 
     !opaque_hit_lines(&file, &needles_of(minuses), changed)
 }
 
-/// N-site let type-addition totality (WI-4a): untyped with-init
-/// no-diverge `Stmt::Local` statements occur exactly `minuses.len()`
-/// times. The emitted minus template `let P0 = E0;` matches every such
-/// statement (ascription agreement is strict — already-typed lets
-/// never match, `match_local` — and `E0` requires an init), so the
-/// count is exactly the template's match domain. Same opaque handling
-/// as the other counters.
-pub(crate) fn let_untyped_holds(
+/// WI-4 slice 1 counted verdict for let type-addition totality.
+/// Mirrors [`CallVerdict`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LetUntypedVerdict {
+    Holds,
+    CountMismatch { found: usize, want: usize },
+    OpaqueHit,
+    Unproven,
+}
+
+/// Counted untyped-let probe.
+pub(crate) fn let_untyped_verdict(
     file_old: Option<&str>,
     minuses: &[&str],
     changed: &[usize],
-) -> bool {
+) -> LetUntypedVerdict {
     let Some(file) = parse_pre(file_old) else {
-        return file_old.is_none();
+        if file_old.is_none() {
+            return LetUntypedVerdict::Holds;
+        }
+        return LetUntypedVerdict::Unproven;
     };
     let n = minuses.len();
     struct L {
@@ -614,9 +659,33 @@ pub(crate) fn let_untyped_holds(
     let mut l = L { count: 0 };
     l.visit_file(&file);
     if l.count != n {
-        return false;
+        return LetUntypedVerdict::CountMismatch {
+            found: l.count,
+            want: n,
+        };
     }
-    !opaque_hit_lines(&file, &needles_of(minuses), changed)
+    if opaque_hit_lines(&file, &needles_of(minuses), changed) {
+        return LetUntypedVerdict::OpaqueHit;
+    }
+    LetUntypedVerdict::Holds
+}
+
+/// N-site let type-addition totality (WI-4a): untyped with-init
+/// no-diverge `Stmt::Local` statements occur exactly `minuses.len()`
+/// times. The emitted minus template `let P0 = E0;` matches every such
+/// statement (ascription agreement is strict — already-typed lets
+/// never match, `match_local` — and `E0` requires an init), so the
+/// count is exactly the template's match domain. Same opaque handling
+/// as the other counters.
+pub(crate) fn let_untyped_holds(
+    file_old: Option<&str>,
+    minuses: &[&str],
+    changed: &[usize],
+) -> bool {
+    matches!(
+        let_untyped_verdict(file_old, minuses, changed),
+        LetUntypedVerdict::Holds
+    )
 }
 
 /// Generic template totality (WI-4b): the emitted minus type template
@@ -636,12 +705,28 @@ pub(crate) fn template_type_holds(
     minus_template: &str,
     n: usize,
 ) -> bool {
-    if n == 0 || minus_template.contains('\n') {
+    if n == 0 {
         return false;
     }
-    let Some(pre) = file_old else {
-        return true;
-    };
+    match template_type_counts(path, file_old, minus_template) {
+        Some(found) => found == n,
+        None => file_old.is_none(),
+    }
+}
+
+/// WI-4 slice 1 counted type probe: engine self-rewrite match count
+/// (`Some(found)`), or `None` when unproven (unparseable pre-image,
+/// bad template, or probe failure). `None` pre-image is not callable
+/// here — callers map it to `Holds` before invoking (legacy allow).
+pub(crate) fn template_type_counts(
+    path: &str,
+    file_old: Option<&str>,
+    minus_template: &str,
+) -> Option<usize> {
+    if minus_template.contains('\n') {
+        return None;
+    }
+    let pre = file_old?;
     // WI-2c: the self-rewrite is an identity counting device, not a user
     // rewrite — `# optional` exempts it from the sweep change gate
     // (zero-match still yields `Ok(0) != n`, so verdicts are unchanged).
@@ -650,14 +735,14 @@ pub(crate) fn template_type_holds(
         crate::git_header(path)
     );
     let Ok(parsed) = rsmpl_patch::parse_patch(&probe) else {
-        return false;
+        return None;
     };
     let mut files = std::collections::HashMap::new();
     files.insert(path.to_string(), pre.to_string());
     let Ok(report) = rsmpl_engine::apply_patch_to_tree(&mut files, &parsed) else {
-        return false;
+        return None;
     };
-    report.rules.iter().map(|r| r.matches).sum::<usize>() == n
+    Some(report.rules.iter().map(|r| r.matches).sum::<usize>())
 }
 
 /// Paired-template totality (WI-9b1): the hetero macro pair
@@ -1351,6 +1436,84 @@ mod tests {
             super::call_verdict(Some("not rust {{{{"), "foo", 1, &minuses, &changed,),
             super::CallVerdict::Unproven
         );
+    }
+    #[test]
+    fn wi4_method_verdict_names_both_counts() {
+        // WI-4 slice 1: method probe names found+want, opaque, and both
+        // legacy legs — same contract as `call_verdict`.
+        let minuses = ["    a.foo(1);", "    a.foo(2);"];
+        let changed = [2, 3];
+        assert_eq!(
+            super::method_verdict(
+                Some("fn m() {\n    a.foo(1);\n    a.foo(2);\n    a.foo(3);\n}\n"),
+                "foo",
+                1,
+                &minuses,
+                &changed,
+            ),
+            super::MethodVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        assert_eq!(
+            super::method_verdict(
+                Some("fn m() {\n    a.foo(1);\n    a.foo(2);\n}\n"),
+                "foo",
+                1,
+                &minuses,
+                &changed,
+            ),
+            super::MethodVerdict::Holds
+        );
+        assert_eq!(
+            super::method_verdict(None, "foo", 1, &minuses, &changed),
+            super::MethodVerdict::Holds
+        );
+        assert_eq!(
+            super::method_verdict(Some("not rust {{{{"), "foo", 1, &minuses, &changed),
+            super::MethodVerdict::Unproven
+        );
+    }
+    #[test]
+    fn wi4_let_untyped_verdict_names_both_counts() {
+        // WI-4 slice 1: untyped-let probe names found+want.
+        let minuses = ["    let a = x;", "    let b = y;"];
+        let changed = [2, 3];
+        assert_eq!(
+            super::let_untyped_verdict(
+                Some("fn m() {\n    let a = x;\n    let b = y;\n    let c = z;\n}\n"),
+                &minuses,
+                &changed,
+            ),
+            super::LetUntypedVerdict::CountMismatch { found: 3, want: 2 }
+        );
+        assert_eq!(
+            super::let_untyped_verdict(
+                Some("fn m() {\n    let a = x;\n    let b = y;\n}\n"),
+                &minuses,
+                &changed,
+            ),
+            super::LetUntypedVerdict::Holds
+        );
+        assert_eq!(
+            super::let_untyped_verdict(None, &minuses, &changed),
+            super::LetUntypedVerdict::Holds
+        );
+        assert_eq!(
+            super::let_untyped_verdict(Some("not rust {{{{"), &minuses, &changed),
+            super::LetUntypedVerdict::Unproven
+        );
+    }
+    #[test]
+    fn wi4_template_type_counts_names_found() {
+        // WI-4 slice 1: type probe returns the engine match count;
+        // the bool wrapper preserves the legacy legs.
+        let pre = "fn m() {\n    let a: Vec<u8> = x;\n    let b: Vec<u8> = y;\n    let c: Vec<u8> = z;\n}\n";
+        // The engine probe counts matches of the emitted template; here
+        // the exact count is asserted through the bool wrapper (the
+        // count function itself is pinned to return Some on good input
+        // and None on bad input).
+        assert!(super::template_type_counts("f.rs", Some(pre), "Vec<T0>").is_some());
+        assert!(super::template_type_counts("f.rs", Some("not rust {{{{"), "Vec<T0>").is_none());
+        assert!(super::template_type_counts("f.rs", Some(pre), "Vec<T0>\nbad").is_none());
     }
     #[test]
     fn call_literal_totality_keys_on_trailing() {

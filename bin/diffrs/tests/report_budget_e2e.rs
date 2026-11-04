@@ -107,7 +107,9 @@ fn json_hunks_within_absolute_budget() {
         .sum();
     // WI-15: `declined` arrays ride the `75·D` term (zero here — the
     // fixture fully compresses, so ordinary entries never appear and
-    // the term is inert on this pin).
+    // the term is inert on this pin). WI-4 slice 1: the patch-level
+    // `pre_pass_declined` array rides the same `75·P` term (fixed
+    // vocabulary, bounded by construction).
     let d: usize = hunks
         .iter()
         .map(|e| {
@@ -117,11 +119,16 @@ fn json_hunks_within_absolute_budget() {
                 .unwrap_or(0)
         })
         .sum();
+    let p: usize = v
+        .get("pre_pass_declined")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
     let overhead = stdout.len() - patch.len();
-    let budget = 150 + 190 * h + 10 * t + 75 * d;
+    let budget = 150 + 190 * h + 10 * t + 75 * d + 75 * p;
     assert!(
         overhead <= budget,
-        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
+        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d} P={p}): {v}"
     );
     for e in hunks {
         assert!(e.get("rule").is_some(), "got: {v}");
@@ -205,13 +212,15 @@ fn wi15_ordinary_section_names_declined_detectors() {
         .filter(|d| d["detector"] == serde_json::json!("item_rename"))
         .count();
     assert_eq!(item_count, 1, "got: {names:?}");
-    // WI-15 review (pre-pass silence): whole-patch pre-pass declines are
-    // patch-global and never attributed per-section — the pre-pass-only
-    // detectors never appear in a section's `declined` list. The shared
-    // names (`member_rename`, `assoc_rename`, `trait_method_rename`) also
-    // fire as per-section chain detectors, so only the five pre-pass-only
-    // names are pinned absent here. There is deliberately no patch-level
-    // `declined` key.
+    // WI-4 slice 1 (replaces the WI-15 silence pin): whole-patch
+    // pre-pass declines are patch-global and never attributed
+    // per-section — the pre-pass-only detectors never appear in a
+    // section's `declined` list. The shared names (`member_rename`,
+    // `assoc_rename`, `trait_method_rename`) also fire as per-section
+    // chain detectors, so only the five pre-pass-only names are pinned
+    // absent here. Declines are attributed at patch level under
+    // `pre_pass_declined` (WI-4 slice 1 records `no-match` per declined
+    // stage).
     for prepass in [
         "move",
         "item_intent",
@@ -225,18 +234,40 @@ fn wi15_ordinary_section_names_declined_detectors() {
         );
     }
     assert!(v.get("declined").is_none(), "got: {v}");
+    let pre_pass = v["pre_pass_declined"]
+        .as_array()
+        .expect("pre_pass_declined array, got: {v}");
+    assert!(
+        !pre_pass.is_empty(),
+        "pre-pass declines attributed, got: {v}"
+    );
+    for d in pre_pass {
+        let reason = d["reason"].as_str().unwrap();
+        let closed = reason == "no-match"
+            || reason.starts_with("totality:")
+            || reason.starts_with("veto:")
+            || reason.starts_with("precondition:");
+        assert!(closed, "open pre-pass reason: {d}");
+    }
     // The ordinary entry still carries the covering site + totality.
     assert_eq!(e["sites"], serde_json::json!([2]), "got: {v}");
     assert_eq!(e["totality"], serde_json::json!("pre-image"), "got: {v}");
     // WI-15 budget: the ordinary entry prices under the `75·D` term.
+    // WI-4 slice 1: the patch-level `pre_pass_declined` array rides the
+    // same `75·P` term.
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let patch = v["patch"].as_str().unwrap();
     let overhead = stdout.len() - patch.len();
     let d = declined.len();
-    let budget = 150 + 190 + 10 + 75 * d;
+    let p: usize = v
+        .get("pre_pass_declined")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let budget = 150 + 190 + 10 + 75 * d + 75 * p;
     assert!(
         overhead <= budget,
-        "overhead {overhead} B exceeds budget {budget} B (D={d}): {v}"
+        "overhead {overhead} B exceeds budget {budget} B (D={d} P={p}): {v}"
     );
 }
 
@@ -308,7 +339,8 @@ fn wi15_partial_section_gains_remainder_ordinary_entry() {
             "pre-pass {prepass} leaked into remainder declined: {names:?}"
         );
     }
-    // WI-15 budget over both entries.
+    // WI-15 budget over both entries. WI-4 slice 1: the patch-level
+    // `pre_pass_declined` array rides the same `75·P` term.
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let patch = v["patch"].as_str().unwrap();
     let overhead = stdout.len() - patch.len();
@@ -326,10 +358,15 @@ fn wi15_partial_section_gains_remainder_ordinary_entry() {
                 .unwrap_or(0)
         })
         .sum();
-    let budget = 150 + 190 * h + 10 * t + 75 * d;
+    let p: usize = v
+        .get("pre_pass_declined")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let budget = 150 + 190 * h + 10 * t + 75 * d + 75 * p;
     assert!(
         overhead <= budget,
-        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
+        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d} P={p}): {v}"
     );
 }
 
@@ -402,10 +439,15 @@ fn wi15_partial_subhunk_mix_reports_context_exact_remainder() {
                 .unwrap_or(0)
         })
         .sum();
-    let budget = 150 + 190 * h + 10 * t + 75 * d;
+    let p: usize = v
+        .get("pre_pass_declined")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let budget = 150 + 190 * h + 10 * t + 75 * d + 75 * p;
     assert!(
         overhead <= budget,
-        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d}): {v}"
+        "overhead {overhead} B exceeds budget {budget} B (H={h} T={t} D={d} P={p}): {v}"
     );
 }
 
@@ -415,7 +457,9 @@ fn wi17_text_parity_matches_json_trial() {
     // the same ordinary-section trial in text mode (stderr
     // `declined:` lines, stdout patch untouched) and in JSON mode
     // (`declined` arrays). The two sets must be equal as
-    // (file, detector, reason) triples.
+    // (file, detector, reason) triples. WI-4 slice 1: the patch-level
+    // `pre_pass_declined` array rides the same parity as
+    // `pre-pass <detector> <reason>` text lines.
     let dir = init_repo();
     write(
         dir.path(),
@@ -446,6 +490,17 @@ fn wi17_text_parity_matches_json_trial() {
             want.insert(format!(
                 "{} {} {}",
                 file,
+                d["detector"].as_str().unwrap(),
+                d["reason"].as_str().unwrap()
+            ));
+        }
+    }
+    // WI-4 slice 1 patch-level parity: `pre_pass_declined` entries ride
+    // text as `pre-pass <detector> <reason>`.
+    if let Some(pre_pass) = v.get("pre_pass_declined").and_then(|a| a.as_array()) {
+        for d in pre_pass {
+            want.insert(format!(
+                "pre-pass {} {}",
                 d["detector"].as_str().unwrap(),
                 d["reason"].as_str().unwrap()
             ));

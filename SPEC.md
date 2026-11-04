@@ -7903,10 +7903,15 @@ computable from the report alone), `totality:<found>:<want>`
 (site-count mismatch — WI-17 slice 4 wires the call family first
 (`call_sweep` / `call_arg_add` whole-section, per-hunk `call_sweep`
 single: the shape matched and the file-wide count `found` differs
-from the diff pair count `want`; unwired detectors still decline
-shape-or-count as `no-match`), `veto:<name>` (named veto: off-diff
-use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the same
-call family when a macro/string twin covers a changed line —,
+from the diff pair count `want`; WI-4 slice 1 wires the method family
+(`method_to_fn` / `method_to_method` whole-section), the let-add family
+(`let_sweep` type-add arm via the untyped-let count), and the type
+family (`type_sweep` via the engine self-rewrite count); remaining
+detectors still decline shape-or-count as `no-match` pending WI-4
+slice 2), `veto:<name>` (named veto: off-diff
+use, opaque hit — WI-17 slice 4 wires `veto:opaque-hit` for the call
+family when a macro/string twin covers a changed line, WI-4 slice 1
+extends the same arm to the method and let-add families —,
 ambiguous anti-unification, `reprobe-failed` — WI-1b: the infer
 reprobe floor (D18) degraded a semantic section whose scratch-apply
 or post-compare against the pre-image failed; emitted only by the
@@ -7929,13 +7934,13 @@ per-section: the pre-pass-only detectors (`move`, `item_intent`,
 `item_joint_impl`, `fn_joint`, `mod_rename`) never appear in a
 section's `declined` list (`member_rename`, `assoc_rename`, and
 `trait_method_rename` also fire as per-section chain detectors and keep
-appearing there under their chain meaning). There is deliberately no
-patch-level `declined` key — a pre-pass decline is the absence of a
-semantic entry, by design (WI-17 close-out: the absent pre-pass
-`not-tried` listing is a final non-goal, not deferred work — a
-patch-global absence cannot be attributed per-section without
-inventing a section it never ran on, and the per-section absence is
-already data via `not-tried`); partially-compressed sections (semantic plus ordinary
+appearing there under their chain meaning). Every declined pre-pass
+stage records one patch-level entry in `pre_pass_declined`
+(`{detector, reason}` — WI-4 slice 1 records `no-match` per declined
+stage; firing stages record nothing; finer counted reasons per pre-pass
+are WI-4 slice 2) and one `declined: pre-pass <detector> <reason>`
+stderr line in text mode (JSON carries the same array under
+`pre_pass_declined`); partially-compressed sections (semantic plus ordinary
 remainder in one emitted file section) carry one remainder ordinary entry —
 `sites` are the original section's changed lines minus the union of the committed
 semantic prov sites for the emitted rules (run-scoped, so context-carrying bodies
@@ -7951,13 +7956,15 @@ error object, `v1` with a hand-built error payload).
 Budget (bytes beyond `patch`):
 ≈100 B fixed + ≈165 B per `hunks[]` entry + ≈5 B per covered site
 (`sites` arrays grow with matches — evidence, not overhead) +
-≈75 B per `declined` entry (fixed detector/reason vocabulary —
-evidence, not overhead).
-Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D` bytes (`H` = hunks,
-`T` = total sites, `D` = total `declined` entries). No relative % bound, same rationale as D.2.
+≈75 B per `declined` entry + ≈75 B per `pre_pass_declined` entry
+(fixed detector/reason vocabulary — evidence, not overhead).
+Operational pin: overhead ≤ `150 + 190·H + 10·T + 75·D + 75·P` bytes (`H` = hunks,
+`T` = total sites, `D` = total `declined` entries, `P` = total
+`pre_pass_declined` entries). No relative % bound, same rationale as D.2.
 The completed log needs no truncation arm (WI-17 close-out): the entry
 count is bounded by construction (one per attempted detector family,
-gate, and registry completion, deduped), so the `75·D` term prices
+gate, and registry completion, deduped, plus one per pre-pass stage),
+so the `75·D + 75·P` term prices
 every length and the totals stay the default truth at any size.
 
 - Fn/item rename: exactly one `-`/`+` line pair in the section,

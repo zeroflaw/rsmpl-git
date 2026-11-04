@@ -56,8 +56,9 @@ pub struct HunkProvenance {
 /// decline, no candidate), `guard:<kind>:sem=X:ord=Y:allow=Z` (a
 /// candidate priced out by the byte guard, with the three WI-7
 /// numbers), `totality:<a>:<b>` (site-count mismatch — WI-17 slice 4
-/// wires the call family first; unwired detectors still decline
-/// shape-or-count as `no-match`), `veto:<name>`
+/// wires the call family first; WI-4 slice 1 wires method, let-add, and
+/// type; remaining detectors still decline
+/// shape-or-count as `no-match` pending WI-4 slice 2), `veto:<name>`
 /// (a named veto: off-diff use, opaque hit, ambiguous
 /// anti-unification, joint-territory section gates),
 /// `precondition:<name>` (a stated shape premise failed, incl. the

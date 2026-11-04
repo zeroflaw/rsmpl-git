@@ -6,6 +6,7 @@
 //! live in the parent.
 
 use super::arg_template::{parse_method_line, tok};
+use super::prov::Counted;
 use super::{call_parts, ident_len, strip_one_terminator, unique_rule};
 
 /// N-site (N ≥ 2) method-to-function fan-out (T345, SPEC 18.5): every
@@ -24,9 +25,9 @@ pub(crate) fn try_method_to_fn_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut old_method: Option<String> = None;
     let mut new_func: Option<String> = None;
@@ -38,24 +39,33 @@ pub(crate) fn try_method_to_fn_sweep(
             break;
         };
         if old_method.as_ref().is_some_and(|c| *c != o) {
-            return None;
+            return Counted::Miss;
         }
         if new_func.as_ref().is_some_and(|c| *c != n) {
-            return None;
+            return Counted::Miss;
         }
         if arity.is_some_and(|x| x != a) {
-            return None;
+            return Counted::Miss;
         }
         old_method = Some(o);
         new_func = Some(n);
         arity = Some(a);
     }
     if whole_ok {
-        let (old_method, new_func, arity) = (old_method?, new_func?, arity?);
-        if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
-            return None;
+        let (Some(old_method), Some(new_func), Some(arity)) = (old_method, new_func, arity) else {
+            return Counted::Miss;
+        };
+        // WI-4 slice 1: the shape matched, so a failing probe names its
+        // counts (`totality:`) or its opaque twin (`veto:opaque-hit`).
+        match crate::totality::method_verdict(file_old, &old_method, arity, minuses, changed) {
+            crate::totality::MethodVerdict::Holds => {}
+            crate::totality::MethodVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality::MethodVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality::MethodVerdict::Unproven => return Counted::Miss,
         }
-        return Some(emit_method_to_fn(
+        return Counted::Fire(emit_method_to_fn(
             path,
             used_rules,
             &old_method,
@@ -67,23 +77,25 @@ pub(crate) fn try_method_to_fn_sweep(
     // WI-4 sub-line fallback (mixed whole/sub lines veto;
     // all-identical pairs defer to verbatim, T422).
     if super::subline::all_identical_pairs(minuses, pluses) {
-        return None;
+        return Counted::Miss;
     }
     let mut sub_old: Option<String> = None;
     let mut sub_new: Option<String> = None;
     let mut sub_arity: Option<usize> = None;
     let mut total = 0usize;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let sites = super::subline::extract_method_fn_sites(m, p)?;
+        let Some(sites) = super::subline::extract_method_fn_sites(m, p) else {
+            return Counted::Miss;
+        };
         for s in &sites {
             if sub_old.as_ref().is_some_and(|c| *c != s.old_method) {
-                return None;
+                return Counted::Miss;
             }
             if sub_new.as_ref().is_some_and(|c| *c != s.new_func) {
-                return None;
+                return Counted::Miss;
             }
             if sub_arity.is_some_and(|x| x != s.arity) {
-                return None;
+                return Counted::Miss;
             }
             sub_old = Some(s.old_method.clone());
             sub_new = Some(s.new_func.clone());
@@ -91,9 +103,11 @@ pub(crate) fn try_method_to_fn_sweep(
             total += 1;
         }
     }
-    let (old_method, new_func, arity) = (sub_old?, sub_new?, sub_arity?);
+    let (Some(old_method), Some(new_func), Some(arity)) = (sub_old, sub_new, sub_arity) else {
+        return Counted::Miss;
+    };
     if total < 2 {
-        return None;
+        return Counted::Miss;
     }
     if !crate::totality::template_expr_holds(
         path,
@@ -101,9 +115,9 @@ pub(crate) fn try_method_to_fn_sweep(
         &format!("Receiver.{old_method}({})", m2f_args(arity)),
         total,
     ) {
-        return None;
+        return Counted::Miss;
     }
-    Some(emit_method_to_fn(
+    Counted::Fire(emit_method_to_fn(
         path,
         used_rules,
         &old_method,
@@ -230,9 +244,9 @@ pub(crate) fn try_method_to_method_sweep(
     file_old: Option<&str>,
     changed: &[usize],
     used_rules: &mut Vec<String>,
-) -> Option<String> {
+) -> Counted<String> {
     if minuses.len() < 2 {
-        return None;
+        return Counted::Miss;
     }
     let mut old_method: Option<String> = None;
     let mut new_method: Option<String> = None;
@@ -244,27 +258,36 @@ pub(crate) fn try_method_to_method_sweep(
             break;
         };
         if old_method.as_ref().is_some_and(|c| *c != o) {
-            return None;
+            return Counted::Miss;
         }
         if new_method.as_ref().is_some_and(|c| *c != n) {
-            return None;
+            return Counted::Miss;
         }
         if arity.is_some_and(|x| x != a) {
-            return None;
+            return Counted::Miss;
         }
         old_method = Some(o);
         new_method = Some(n);
         arity = Some(a);
     }
     if whole_ok {
-        let (old_method, new_method, arity) = (old_method?, new_method?, arity?);
+        let (Some(old_method), Some(new_method), Some(arity)) = (old_method, new_method, arity)
+        else {
+            return Counted::Miss;
+        };
         if old_method == new_method {
-            return None;
+            return Counted::Miss;
         }
-        if !crate::totality::method_holds(file_old, &old_method, arity, minuses, changed) {
-            return None;
+        // WI-4 slice 1: counted decline like the m2f arm above.
+        match crate::totality::method_verdict(file_old, &old_method, arity, minuses, changed) {
+            crate::totality::MethodVerdict::Holds => {}
+            crate::totality::MethodVerdict::CountMismatch { found, want } => {
+                return Counted::Totality { found, want };
+            }
+            crate::totality::MethodVerdict::OpaqueHit => return Counted::Opaque,
+            crate::totality::MethodVerdict::Unproven => return Counted::Miss,
         }
-        return Some(emit_method_to_method(
+        return Counted::Fire(emit_method_to_method(
             path,
             used_rules,
             &old_method,
@@ -276,23 +299,25 @@ pub(crate) fn try_method_to_method_sweep(
     // WI-4 sub-line fallback (mixed whole/sub lines veto;
     // all-identical pairs defer to verbatim, T422).
     if super::subline::all_identical_pairs(minuses, pluses) {
-        return None;
+        return Counted::Miss;
     }
     let mut sub_old: Option<String> = None;
     let mut sub_new: Option<String> = None;
     let mut sub_arity: Option<usize> = None;
     let mut total = 0usize;
     for (m, p) in minuses.iter().zip(pluses.iter()) {
-        let sites = super::subline::extract_method_sites(m, p)?;
+        let Some(sites) = super::subline::extract_method_sites(m, p) else {
+            return Counted::Miss;
+        };
         for s in &sites {
             if sub_old.as_ref().is_some_and(|c| *c != s.old_method) {
-                return None;
+                return Counted::Miss;
             }
             if sub_new.as_ref().is_some_and(|c| *c != s.new_method) {
-                return None;
+                return Counted::Miss;
             }
             if sub_arity.is_some_and(|x| x != s.arity) {
-                return None;
+                return Counted::Miss;
             }
             sub_old = Some(s.old_method.clone());
             sub_new = Some(s.new_method.clone());
@@ -300,9 +325,11 @@ pub(crate) fn try_method_to_method_sweep(
             total += 1;
         }
     }
-    let (old_method, new_method, arity) = (sub_old?, sub_new?, sub_arity?);
+    let (Some(old_method), Some(new_method), Some(arity)) = (sub_old, sub_new, sub_arity) else {
+        return Counted::Miss;
+    };
     if old_method == new_method || total < 2 {
-        return None;
+        return Counted::Miss;
     }
     if !crate::totality::template_expr_holds(
         path,
@@ -310,9 +337,9 @@ pub(crate) fn try_method_to_method_sweep(
         &format!("Receiver.{old_method}({})", m2f_args(arity)),
         total,
     ) {
-        return None;
+        return Counted::Miss;
     }
-    Some(emit_method_to_method(
+    Counted::Fire(emit_method_to_method(
         path,
         used_rules,
         &old_method,
