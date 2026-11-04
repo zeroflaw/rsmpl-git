@@ -23,6 +23,11 @@ SmPL (Semantic Patch Language), used by Coccinelle in Linux kernel development, 
 Rust's language semantics, `gitrs` produces compact, readable semantic diffs that both 
 humans and agents can understand.
 
+## Why gitrs
+
+- **muse-spark** — Empower smaller, faster models to handle complex refactors. Compress the intended change into a semantic patch, then apply it locally to avoid mistakes.
+- **muse-wonder** — Reserve frontier models for the decisions that matter. Let them focus on design and reasoning without paying frontier rates for mechanical work.
+
 ## Install
 
 ```sh
