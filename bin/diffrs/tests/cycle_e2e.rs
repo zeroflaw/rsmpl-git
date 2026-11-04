@@ -257,6 +257,9 @@ fn commit_all(dir: &Path, what: &str) {
 const CYCLE_OK: &[&str] = &[
     "02-rename-calls",
     "03-move-fn",
+    "04-mixed",
+    "14-item-rename",
+    "22-attrs-strip",
     "15-use-rename",
     "16-repeat-fold",
     "17-scope-file",
@@ -370,7 +373,6 @@ const CYCLE_OK: &[&str] = &[
 /// `hetero` sites differ structurally so no template fires (WI-4/7);
 /// `empty` zero-edit re-diff (05).
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
-    ("04-mixed", "partial (WI-3 slice 4): hunk-2 re-infers as a call_sweep single; hunk-1 one-line col0 fn rename stays ordinary (slot frame ~2x native, precision-guard veto; terse admission reverted — greedy partial would park hunk-2's win; opener is WI-6 free-fn col0 emission + leftover retry)"),
     (
         "05-optional-noop",
         "empty: zero-match optional leaves an empty re-diff",
@@ -386,14 +388,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     (
         "13-sig-evolution",
         "mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)",
-    ),
-    (
-        "14-item-rename",
-        "partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)",
-    ),
-    (
-        "22-attrs-strip",
-        "two-slot joint (WI-3 slice 5): rename + full attr/doc strip needs the WI-8 composed probe -- no D17 arm admits `Attrs`-carrying hunks by design, so the N=1 pair stays ordinary (the -20B detector half is joint-owned)",
     ),
     (
         "30-trait-sweep",

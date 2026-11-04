@@ -958,6 +958,128 @@ fn site_fn_return(site_line: &str) -> Option<String> {
     Some(pretty)
 }
 
+/// WI-6(b): single-site bare-pair locality drop (D17).
+///
+/// A pure single-pair hunk whose pair lines carry no holes and whose
+/// directives are locality-only (`allow`/`scope`, the default `lang`,
+/// macro mode, an at-most-vacuous `follow`) and which proves exactly
+/// one distinct line site keeps its pair text byte-identical, pins its
+/// range to the site, and drops the locality directives — the inferred
+/// tight diet (`@@ -S,L @@` + `# allow=many` + `- Old` / `+ New`) and
+/// the authored diet (same pair, no directives) share one tree-aware
+/// form. The verbatim/filter/evo arms own their shapes (literal
+/// rewrite, filter frame, return fill); this arm owns the bare
+/// remainder they decline. Multi-site evidence, holed pairs, and
+/// non-locality directives (symbol/fallback/attrs/move/bind/repeat/
+/// optional/…) decline by construction. The caller keeps the rewrite
+/// only when the unified patch re-proves the identical post-tree, so a
+/// load-bearing `allow` (a second site the literal misses) can never
+/// be healed away.
+pub(crate) fn unify_single_site_bare_locality(
+    patch: &mut rsmpl_patch::Patch,
+    _pre: &HashMap<String, String>,
+    _post: &HashMap<String, String>,
+    spans: &mut HashMap<(String, String), Vec<(u32, u32)>>,
+    raw_spans: &HashMap<(String, String), Vec<(u32, u32)>>,
+) {
+    use std::collections::HashMap;
+    let mut owners: HashMap<(String, String), Vec<(usize, usize)>> = HashMap::new();
+    for (fi, sec) in patch.files.iter().enumerate() {
+        for (hi, hunk) in sec.hunks.iter().enumerate() {
+            if let Hunk::Rsmpl(r) = hunk {
+                owners
+                    .entry((sec.target_path.clone(), r.rule_name()))
+                    .or_default()
+                    .push((fi, hi));
+            }
+        }
+    }
+    let mut keys: Vec<(String, String)> = owners.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        let idxs = &owners[&key];
+        if idxs.len() != 1 {
+            continue;
+        }
+        let Some(s) = single_line_site(spans, raw_spans, &key) else {
+            continue;
+        };
+        let (fi, hi) = idxs[0];
+        // Read-only gate pass: hole-free single pair under
+        // locality-only directives, so a veto leaves the hunk
+        // byte-identical.
+        let gated = {
+            let sec = &patch.files[fi];
+            if sec.is_rename() {
+                false
+            } else if let Hunk::Rsmpl(r) = &sec.hunks[hi] {
+                gate_bare_pair_locality(r)
+            } else {
+                false
+            }
+        };
+        if !gated {
+            continue;
+        }
+        let Hunk::Rsmpl(r) = &mut patch.files[fi].hunks[hi] else {
+            continue;
+        };
+        r.header.old_start = s;
+        r.header.old_len = 1;
+        // Diet single: no locality lines (the WI-8 range rule keeps the
+        // single span as the tight actual). Every other directive
+        // (follow/attrs/lang/macro-mode/…) is kept — only the locality
+        // by which the legs differ is dropped.
+        r.directives
+            .retain(|d| !matches!(d, Directive::Allow(_) | Directive::Scope(_)));
+        r.raw_directives.retain(|l| {
+            let t = l.trim_start_matches('#').trim_start();
+            !(t.starts_with("sweep") || t.starts_with("allow") || t.starts_with("scope"))
+        });
+        spans.insert(key, vec![(s, s)]);
+    }
+}
+
+/// WI-6(b) gate: `true` when hunk `r` is one hole-free minus plus one
+/// hole-free plus (no context lines) under locality-only directives.
+/// Holes are ASCII-uppercase tokens (metavars, `V Q G W` wildcards,
+/// concrete generics like `Vec<T>` all decline — a future slice may
+/// widen where the declaration discipline is proven); non-locality
+/// directives (symbol/fallback/attrs/move/bind/repeat/optional/…)
+/// decline.
+fn gate_bare_pair_locality(r: &rsmpl_patch::RsmplHunk) -> bool {
+    if !r.directives.iter().all(|d| {
+        matches!(
+            d,
+            Directive::Allow(_)
+                | Directive::Scope(_)
+                | Directive::LangRust
+                | Directive::MacroMode(_)
+                | Directive::FollowUses
+        )
+    }) {
+        return false;
+    }
+    let mut minus = 0;
+    let mut plus = 0;
+    for l in &r.lines {
+        if l.is_removal() {
+            minus += 1;
+            if l.text.chars().any(|c| c.is_ascii_uppercase()) {
+                return false;
+            }
+        } else if l.is_addition() {
+            plus += 1;
+            if l.text.chars().any(|c| c.is_ascii_uppercase()) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    minus == 1 && plus == 1
+}
+
 #[cfg(test)]
 mod tests {
     use crate::canonical_tree::{canonicalize_with_tree, single_site_post_key};
@@ -1032,6 +1154,61 @@ mod tests {
         assert!(
             a.contains("- fn helper(...) {\n"),
             "composite site return never fills:\n{a}"
+        );
+    }
+
+    #[test]
+    fn wi6_bare_locality_drop_unifies_tight_allow_with_diet() {
+        // WI-6(b): the inferred tight diet (`@@ -S,L @@` +
+        // `# allow=many` + bare pair) and the authored diet (same pair,
+        // no directives) share one tree-aware form over the same single
+        // site; the `allow` (meaningless at one site) drops.
+        let p = pre(&[(
+            "src/lib.rs",
+            "fn foo() {}\n\nfn calls() {\n    old_call();\n}\n",
+        )]);
+        let inferred =
+            "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n# allow=many\n- fn foo\n+ fn bar\n";
+        let authored = "diff --git src/lib.rs\n@@ -1,1 @@ rule=r1\n- fn foo\n+ fn bar\n";
+        let a = canonicalize_with_tree(inferred, &p).unwrap();
+        let b = canonicalize_with_tree(authored, &p).unwrap();
+        assert_eq!(a, b, "inferred:\n{a}\nauthored:\n{b}");
+        assert!(!a.contains("allow"), "locality dropped:\n{a}");
+        assert!(a.contains("- fn foo\n+ fn bar\n"), "pair kept:\n{a}");
+    }
+
+    #[test]
+    fn wi6_bare_locality_drop_keeps_multi_site() {
+        // Negative control: two proven sites keep `allow=many` — the
+        // drop never heals a load-bearing locality.
+        let p = pre(&[("src/lib.rs", "fn m() {\n    foo(1);\n    foo(2);\n}\n")]);
+        let text =
+            "diff --git src/lib.rs\n@@ -2,2 @@ rule=r1\n# allow=many\n- foo(E0)\n+ bar(E0)\n";
+        let got = canonicalize_with_tree(text, &p).unwrap();
+        assert!(
+            got.contains("# allow=many"),
+            "multi-site stays many:\n{got}"
+        );
+    }
+
+    #[test]
+    fn wi6_bare_locality_drop_declines_context_and_attr() {
+        // Negative controls: a single-site pair with a context line and
+        // an attrs-carrying hunk keep their directives (the arm owns
+        // context-free bare pairs only).
+        let p = pre(&[("src/lib.rs", "fn m() {\\n    foo(1);\\n}\\n")]);
+        let ctx = "diff --git src/lib.rs\\n@@ -1,2 @@ rule=r1\\n# allow=many\\n fn m() {\\n-    foo(1);\\n+    foo(2);\\n";
+        let got = canonicalize_with_tree(ctx, &p).unwrap();
+        assert!(
+            got.contains("# allow=many"),
+            "context pair keeps allow:\\n{got}"
+        );
+        let pre2 = pre(&[("src/lib.rs", "/// Adds one.\\nfn foo() {}\\n")]);
+        let strip = "diff --git src/lib.rs\\n@@ -1,2 @@ rule=r1\\n# allow=many\\n# attrs=strip\\n- fn foo(...) {\\n+ fn bar(...) {\\n      ...\\n  }\\n";
+        let got2 = canonicalize_with_tree(strip, &pre2).unwrap();
+        assert!(
+            got2.contains("# attrs=strip"),
+            "strip keeps policy:\\n{got2}"
         );
     }
 }

@@ -21,7 +21,7 @@ use super::{ident_len, item_emission_header, unique_rule};
 /// single-delta shape. Returns the renamed ident (self-ty or
 /// trait-side). Both lines trim-compared; everything around the one
 /// ident delta must be byte-equal.
-fn parse_impl_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
+pub(crate) fn parse_impl_pair(old_line: &str, new_line: &str) -> Option<(String, String)> {
     let old = old_line.trim();
     let new = new_line.trim();
     // Shared joint head discipline: `impl Foo`, `impl\tFoo`, and

@@ -36,6 +36,20 @@ pub(crate) fn run_pair_chain(
     used_rules: &mut Vec<String>,
     declined: &mut Vec<HunkDeclined>,
 ) -> Option<(String, &'static str)> {
+    // WI-6(b): double-delta `impl` widening (one double-delta pair
+    // absorbed by two widened sweeps + tight singles for the rest) —
+    // first: the gate requires a double-delta pair plus its defs and
+    // heads, so unrelated sections skip fast and nothing else is
+    // stolen.
+    if let Some(wide) = attempt_counted(
+        declined,
+        "item_rename",
+        super::item_joint_impl::try_impl_double_delta_section(
+            minuses, pluses, path, file_old, changed, used_rules,
+        ),
+    ) {
+        return Some((wide, "item_rename"));
+    }
     // WI-7b + WI-16: `macro_rules!` definition + invocation rename (one
     // def plus N uses, hetero by construction; WI-16 emits the def with
     // `# follow=uses` when the scratch probe proves the site set, else
@@ -1380,6 +1394,62 @@ fn compress_section_per_hunk(
                 continue;
             } else {
                 used_rules.truncate(regroup_before);
+            }
+        }
+        // WI-6(c): rename + full attr-strip joint (unbalanced Nv1
+        // header hunk: N-1 attr/doc deletions + one header rename pair).
+        // Balanced hunks keep the shared chain below.
+        if minuses.len() >= 2 && pluses.len() == 1 {
+            let strip_before = used_rules.len();
+            let strip_changed = crate::totality::changed_old_lines(hunk);
+            if let Some(stripped) = attempt_counted(
+                declined,
+                "attr_sweep",
+                super::attr_strip::try_attr_strip_joint(
+                    &minuses,
+                    &pluses,
+                    path,
+                    file_old,
+                    &strip_changed,
+                    used_rules,
+                ),
+            ) {
+                let body = stripped
+                    .split_once('\n')
+                    .map(|(_, rest)| rest)
+                    .unwrap_or("");
+                if super::guard::within_precision(
+                    body.len(),
+                    super::normalized_hunk_len(hunk),
+                    1,
+                    0,
+                ) {
+                    push_section_prov(
+                        prov,
+                        body,
+                        hunk,
+                        path,
+                        "attr_sweep",
+                        &strip_changed,
+                        file_old,
+                        strip_before,
+                        used_rules,
+                    );
+                    compressed_any = true;
+                    out.push_str(body);
+                    continue;
+                }
+                declined_guard_with_numbers(
+                    declined,
+                    "attr_sweep",
+                    "precision",
+                    body.len(),
+                    super::normalized_hunk_len(hunk),
+                    super::guard::precision_allowance(1, 0),
+                );
+                used_rules.truncate(strip_before);
+            } else {
+                used_rules.truncate(strip_before);
             }
         }
         // One balanced hunk through the shared detector chain

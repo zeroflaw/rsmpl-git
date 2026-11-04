@@ -348,10 +348,13 @@ fn rev_argument_covers_history() {
     commit_all(dir.path());
 
     // Worktree is clean; `HEAD~1` still surfaces the last commit.
+    // WI-6(a): a one-line col0 free-fn rename with no other uses raises
+    // as the terse single (never the verbatim line pair).
     let out = run(dir.path(), &["HEAD~1"]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("+fn v2() {}"), "got: {patch}");
+    assert!(patch.contains("- fn v1\n"), "got: {patch}");
+    assert!(patch.contains("+ fn v2\n"), "got: {patch}");
 }
 
 #[test]

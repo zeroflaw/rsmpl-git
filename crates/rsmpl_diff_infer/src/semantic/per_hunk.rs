@@ -733,6 +733,20 @@ pub(crate) fn compress_balanced_pair_body(
         )
         .map(|f| (f, "item_rename"))
         .or_else(|| {
+            // WI-6(a): column-0 one-line free-fn terse single (the shape
+            // `try_item_rename` declines to avoid whole-section parking;
+            // this arm is per-hunk-only by construction). Multi-line
+            // headers still prefer the terse arm above.
+            attempt_counted(
+                declined,
+                "item_rename",
+                super::col0_single::try_col0_oneline_fn_single(
+                    minuses, pluses, path, file_old, changed, used_rules,
+                ),
+            )
+            .map(|f| (f, "item_rename"))
+        })
+        .or_else(|| {
             attempt_counted(
                 declined,
                 "precision_definition_single",

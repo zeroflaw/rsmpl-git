@@ -183,16 +183,17 @@ fn two_dot_range_converts_and_round_trips() {
     let out = run(dir.path(), &["HEAD~1..HEAD"]);
     assert_eq!(out.status.code(), Some(0));
     let patch = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(patch.contains("+fn v2() {}"), "got: {patch}");
-    assert!(!patch.contains("rule="), "got: {patch}");
+    // WI-6(a): the one-line col0 rename raises terse (semantic hunks
+    // need the engine — bare-git compat stays pinned by ordinary-output
+    // tests, not here).
+    assert!(patch.contains("- fn v1\n"), "got: {patch}");
+    assert!(patch.contains("+ fn v2\n"), "got: {patch}");
 
     let pre = init_repo();
     write(pre.path(), "f.rs", "fn v1() {}\n");
     commit_all(pre.path());
     let checked = check_with_applyrs(pre.path(), &patch);
     assert_eq!(checked.status.code(), Some(0));
-    let git_out = check_with_bare_git_unidiff_zero(pre.path(), &patch);
-    assert!(git_out.status.success());
     let applied = Command::new(sibling_applyrs())
         .arg("--patch")
         .arg(&patch)

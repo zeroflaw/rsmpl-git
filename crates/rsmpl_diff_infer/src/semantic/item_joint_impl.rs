@@ -593,6 +593,264 @@ fn probe_joint(
     true
 }
 
+/// WI-6(b) double-delta widening arm: one `impl`-double-delta pair
+/// absorbed by two widened single-delta sweeps (SPEC D.4).
+///
+/// The authored `14` grouping covers the double-delta line
+/// (`impl Printable for Old {` → `impl Labeled for New {`) with two
+/// overlapping wide sweeps — `impl Old` over the self-ty head block
+/// through the double-delta block, `impl Printable` over the
+/// trait-side head block through the double-delta block — while the
+/// trait/self-ty defs and every unrelated pair raise as tight singles.
+/// The raiser's tight singles exclude the double-delta line, so it
+/// stays ordinary. This arm replays the authored grouping when the
+/// section holds exactly: one double-delta pair, its trait-def pair,
+/// its self-ty-def pair (`struct`/`enum`/`union`/`type`), one inherent
+/// self-ty head pair (no `for`), one trait-side head pair (with `for`,
+/// unchanged self-ty), and any number of rest pairs that each fire
+/// `try_item_rename` (bare defs). Anything else declines to today's
+/// behavior (`Counted::Miss` — the 8 singles + ordinary remainder).
+///
+/// Emission: rest singles (their current tight bodies) plus the two
+/// head bodies re-headered to the `syn` cover of head + double-delta
+/// item spans (the authored `@@ -18,23 @@` / `@@ -30,11 @@` ranges by
+/// construction), hunks ordered by start. Soundness is the D13 section
+/// probe (`probe_joint` over every pair): the assembled emission
+/// applied to a pre clone must show each native plus line at its site
+/// with every other line byte-identical — range-cited hunks cannot
+/// over-match, and the probe fails the arm on any mismatch. Pricing is
+/// the caller's `pair_section_gate` (`item_rename`, Precision).
+pub(crate) fn try_impl_double_delta_section(
+    minuses: &[&str],
+    pluses: &[&str],
+    path: &str,
+    file_old: Option<&str>,
+    changed: &[usize],
+    used_rules: &mut Vec<String>,
+) -> super::prov::Counted<String> {
+    use super::prov::Counted;
+    if minuses.len() != pluses.len() || minuses.len() < 5 || changed.len() != minuses.len() {
+        return Counted::Miss;
+    }
+    let pre = match file_old {
+        Some(p) => p,
+        None => return Counted::Miss,
+    };
+    // Cheap prefilter: a double-delta needs an `impl … for …` minus.
+    if !minuses
+        .iter()
+        .any(|m| m.trim_start().starts_with("impl ") && has_word(m, "for"))
+    {
+        return Counted::Miss;
+    }
+    let checkpoint = used_rules.len();
+    let pairs: Vec<(String, String, usize)> = minuses
+        .iter()
+        .zip(pluses.iter())
+        .zip(changed.iter())
+        .map(|((m, p), s)| (m.to_string(), p.to_string(), *s))
+        .collect();
+    // Exactly one double-delta pair.
+    let mut dd_idx: Option<usize> = None;
+    let mut dd_names: Option<(String, String, String, String)> = None;
+    for (i, (m, p, _)) in pairs.iter().enumerate() {
+        if !m.trim_start().starts_with("impl ") {
+            continue;
+        }
+        if let Some(names) = parse_impl_double_delta(m, p) {
+            if dd_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return Counted::Miss;
+            }
+            dd_idx = Some(i);
+            dd_names = Some(names);
+        }
+    }
+    let (dd_at, (ot, nt, oy, ny)) = match (dd_idx, dd_names) {
+        (Some(i), Some(n)) => (pairs[i].2, n),
+        _ => {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        }
+    };
+    // Exactly one trait-def pair and one self-ty-def pair naming the
+    // double-delta halves (cross-file defs are not in this section, so
+    // the arm declines — residue).
+    let mut trait_idx: Option<usize> = None;
+    let mut ty_idx: Option<usize> = None;
+    for (i, (m, p, _)) in pairs.iter().enumerate() {
+        if Some(i) == dd_idx {
+            continue;
+        }
+        let Some((_, kind, old_ident, new_ident)) = split_def_pair(m, p) else {
+            continue;
+        };
+        if kind == "trait" && old_ident == ot && new_ident == nt {
+            if trait_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return Counted::Miss;
+            }
+            trait_idx = Some(i);
+        } else if matches!(kind.as_str(), "struct" | "enum" | "union" | "type")
+            && old_ident == oy
+            && new_ident == ny
+        {
+            if ty_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return Counted::Miss;
+            }
+            ty_idx = Some(i);
+        }
+    }
+    if trait_idx.is_none() || ty_idx.is_none() {
+        used_rules.truncate(checkpoint);
+        return Counted::Miss;
+    }
+    // Exactly one inherent self-ty head (no `for`, delta oy→ny) and one
+    // trait-side head (with `for`, delta ot→nt), each a valid tight
+    // single today (the widened emission reuses their pair spelling).
+    let mut head_ty_idx: Option<usize> = None;
+    let mut head_tr_idx: Option<usize> = None;
+    for (i, (m, p, _)) in pairs.iter().enumerate() {
+        if Some(i) == dd_idx || Some(i) == trait_idx || Some(i) == ty_idx {
+            continue;
+        }
+        let has_for = has_word(m, "for") || has_word(p, "for");
+        let Some(single) = super::impl_single::parse_impl_pair(m, p) else {
+            continue;
+        };
+        if !has_for && single.0 == oy && single.1 == ny {
+            if head_ty_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return Counted::Miss;
+            }
+            head_ty_idx = Some(i);
+        } else if has_for && single.0 == ot && single.1 == nt {
+            if head_tr_idx.is_some() {
+                used_rules.truncate(checkpoint);
+                return Counted::Miss;
+            }
+            head_tr_idx = Some(i);
+        }
+    }
+    let (head_ty_at, head_tr_at) = match (head_ty_idx, head_tr_idx) {
+        (Some(a), Some(b)) => (pairs[a].2, pairs[b].2),
+        _ => {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        }
+    };
+    // Every remaining pair must be a bare item rename (the defs found
+    // above included — they raise as tight singles here, exactly like
+    // the authored grouping); anything else declines the arm.
+    let mut hunk_bodies: Vec<(usize, String)> = Vec::new();
+    for (i, (m, p, site)) in pairs.iter().enumerate() {
+        if Some(i) == dd_idx || Some(i) == head_ty_idx || Some(i) == head_tr_idx {
+            continue;
+        }
+        let Some(sec) = super::try_item_rename(m, p, path, Some(pre), &[*site], used_rules) else {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        };
+        let Some((_, body)) = sec.split_once('\n') else {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        };
+        hunk_bodies.push((*site, body.to_string()));
+    }
+    // Widen the two head singles to cover the double-delta item span.
+    // The tight bodies prove the pair shapes; the section probe below
+    // proves the widened ranges.
+    for (head_i, head_site) in [
+        (head_ty_idx.unwrap(), head_ty_at),
+        (head_tr_idx.unwrap(), head_tr_at),
+    ] {
+        let (m, p, _) = &pairs[head_i];
+        let ms: &str = m;
+        let ps: &str = p;
+        let tight = match super::impl_single::try_impl_header_single(
+            std::slice::from_ref(&ms),
+            std::slice::from_ref(&ps),
+            path,
+            Some(pre),
+            &[head_site],
+            used_rules,
+        ) {
+            Counted::Fire((s, _)) => s,
+            _ => {
+                used_rules.truncate(checkpoint);
+                return Counted::Miss;
+            }
+        };
+        let Some((_, tight_hunk)) = tight.split_once('\n') else {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        };
+        // Cover of head item + double-delta item (the authored ranges
+        // by construction); a sweep dummy (span >64) declines.
+        let cover = super::item_emission_header(path, "r0", Some(pre), &[head_site, dd_at]);
+        if cover.contains("# sweep") {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        }
+        let Some(wide_range) = cover.lines().nth(1) else {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        };
+        let mut lines: Vec<String> = tight_hunk.lines().map(str::to_string).collect();
+        if lines.is_empty() || !lines[0].starts_with("@@") {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        }
+        // Keep the reserved rule name; swap in the widened range.
+        let Some(old_rule) = lines[0]
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("rule="))
+        else {
+            used_rules.truncate(checkpoint);
+            return Counted::Miss;
+        };
+        let new_head = wide_range.replacen("rule=r0", &format!("rule={old_rule}"), 1);
+        lines[0] = new_head;
+        let start: usize = wide_range
+            .split_whitespace()
+            .nth(1)
+            .and_then(|r| r.strip_prefix('-'))
+            .and_then(|r| r.split(',').next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(head_site);
+        hunk_bodies.push((start, lines.join("\n") + "\n"));
+    }
+    // File-ordered assembly (authored hunk order).
+    hunk_bodies.sort_by_key(|(s, _)| *s);
+    let mut out = crate::git_header(path);
+    out.push('\n');
+    for (_, body) in &hunk_bodies {
+        out.push_str(body);
+    }
+    // D13 section probe over every pair (heads, defs, rest): the
+    // assembled emission must reproduce each native plus line at its
+    // site with every other line byte-identical.
+    let mut pre_map = HashMap::new();
+    pre_map.insert(path.to_string(), pre.to_string());
+    if !probe_joint(&pre_map, &out, &pairs) {
+        used_rules.truncate(checkpoint);
+        return Counted::Miss;
+    }
+    Counted::Fire(out)
+}
+
+/// Word-boundary containment (never substring): the `for`-word gate
+/// for the double-delta widening arm.
+fn has_word(haystack: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    haystack
+        .split(|c: char| c != '_' && !c.is_ascii_alphanumeric())
+        .any(|w| w == word)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,5 +1300,106 @@ mod tests {
             "Old",
             "New"
         ));
+    }
+
+    const DD_PRE: &str = "struct Old {\n    x: i32,\n}\n\nimpl Old {\n    fn get(&self) -> i32 {\n        self.x\n    }\n}\n\ntrait Printable {\n    fn label(&self) -> String;\n}\n\nstruct Foo;\n\nimpl Printable for Foo {\n    fn label(&self) -> String {\n        \"foo\".to_string()\n    }\n}\n\nimpl Printable for Old {\n    fn label(&self) -> String {\n        \"old\".to_string()\n    }\n}\n";
+
+    fn dd_pairs() -> (Vec<&'static str>, Vec<&'static str>, Vec<usize>) {
+        (
+            vec![
+                "struct Old {",
+                "impl Old {",
+                "trait Printable {",
+                "impl Printable for Foo {",
+                "impl Printable for Old {",
+            ],
+            vec![
+                "struct New {",
+                "impl New {",
+                "trait Labeled {",
+                "impl Labeled for Foo {",
+                "impl Labeled for New {",
+            ],
+            vec![1, 5, 11, 17, 23],
+        )
+    }
+
+    #[test]
+    fn dd_wide_section_fires_and_round_trips() {
+        // WI-6(b) 14-shape: one double-delta + defs + two heads + bare
+        // rest raises as tight singles plus two widened sweeps and
+        // rebuilds the post tree byte-identical.
+        let (m, p, c) = dd_pairs();
+        let mut used = Vec::new();
+        let out = super::try_impl_double_delta_section(&m, &p, "f.rs", Some(DD_PRE), &c, &mut used)
+            .unwrap_fire("14 shape must fire");
+        assert_eq!(out.matches("rule=").count(), 4, "got:\n{out}");
+        assert!(
+            out.contains("@@ -5,23 @@"),
+            "ty wide covers head..dd, got:\n{out}"
+        );
+        assert!(
+            out.contains("@@ -17,11 @@"),
+            "tr wide covers head..dd, got:\n{out}"
+        );
+        let parsed = rsmpl_patch::parse_patch(&out).expect("must parse");
+        let mut files = pre_map(&[("f.rs", DD_PRE)]);
+        rsmpl_engine::apply_patch_to_tree(&mut files, &parsed).expect("must apply");
+        let post = "struct New {\n    x: i32,\n}\n\nimpl New {\n    fn get(&self) -> i32 {\n        self.x\n    }\n}\n\ntrait Labeled {\n    fn label(&self) -> String;\n}\n\nstruct Foo;\n\nimpl Labeled for Foo {\n    fn label(&self) -> String {\n        \"foo\".to_string()\n    }\n}\n\nimpl Labeled for New {\n    fn label(&self) -> String {\n        \"old\".to_string()\n    }\n}\n";
+        assert_eq!(files["f.rs"], post, "got:\n{}", files["f.rs"]);
+    }
+
+    #[test]
+    fn dd_wide_section_veto_matrix() {
+        // Missing trait def, missing head, non-item rest, and a second
+        // double-delta all decline to today's behavior.
+        let (m, p, c) = dd_pairs();
+        let mut used = Vec::new();
+        // No trait def (trait pair renamed to something else).
+        let mut p2 = p.clone();
+        p2[2] = "trait Other {";
+        assert!(
+            super::try_impl_double_delta_section(&m, &p2, "f.rs", Some(DD_PRE), &c, &mut used)
+                .is_miss()
+        );
+        // No ty head (head pair left unchanged is not a pair at all —
+        // drop it, leaving 4 pairs).
+        let (mut m3, mut p3, mut c3) = (m.clone(), p.clone(), c.clone());
+        m3.remove(1);
+        p3.remove(1);
+        c3.remove(1);
+        assert!(super::try_impl_double_delta_section(
+            &m3,
+            &p3,
+            "f.rs",
+            Some(DD_PRE),
+            &c3,
+            &mut used
+        )
+        .is_miss());
+        // Non-item rest (call pair) declines.
+        let (mut m4, mut p4, mut c4) = (m.clone(), p.clone(), c.clone());
+        m4.push("    Old(1)");
+        p4.push("    New(1)");
+        c4.push(24);
+        assert!(super::try_impl_double_delta_section(
+            &m4,
+            &p4,
+            "f.rs",
+            Some(DD_PRE),
+            &c4,
+            &mut used
+        )
+        .is_miss());
+        // Pre-image without the trait item (unparseable cover) declines.
+        assert!(super::try_impl_double_delta_section(
+            &m,
+            &p,
+            "f.rs",
+            Some("garbage {{{"),
+            &c,
+            &mut used
+        )
+        .is_miss());
     }
 }

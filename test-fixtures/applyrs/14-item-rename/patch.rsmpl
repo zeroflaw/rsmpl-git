@@ -23,8 +23,8 @@ diff --git a/src/lib.rs b/src/lib.rs
 
 @@ -13,3 +13,3 @@ rule=rename_nested
 # lang=rust
-- struct Helper
-+ struct Aid
+- pub struct Helper
++ pub struct Aid
 
 @@ -18,23 +18,23 @@ rule=rename_impl
 # lang=rust

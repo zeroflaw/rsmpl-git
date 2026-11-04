@@ -7948,14 +7948,19 @@ single: the shape matched and the file-wide count `found` differs
    rewrite — shadowed, capturing, macro-hidden, nested-fn, or
    out-of-scope uses — or a follow divergence on full coverage;
    `unproven-use`: an engine follow line the native diff did not show —
-   the raiser never invents edits; `ambiguous-binder`: the candidate
+   the raiser never invents edits (WI-5 binder uses; WI-6(a) col0
+   one-line defs with an off-def word-bound occurrence of the old
+   ident); `ambiguous-binder`: the candidate
    hunk fails engine-apply, so no single site is proven),
    `reprobe-failed` — WI-1b: the infer
    reprobe floor (D18) degraded a semantic section whose scratch-apply
    or post-compare against the pre-image failed; emitted only by the
    floor as `declined: [{detector: reprobe, reason:
    veto:reprobe-failed}]` on the replacement ordinary entry, never by
-   detectors), `precondition:<name>` (named
+   detectors), `attr-mentions-old` — WI-6(c): the rename + full
+   attr-strip joint declined because a stripped attribute/doc line
+   mentions the old ident (opaque attr interiors are never classified;
+   the pair stays ordinary), `precondition:<name>` (named
 failed shape premise, incl. the LF-only section premise); the pre-WI-17 bare `byte-guard` /
 `precision-guard` spellings stay parseable but are no longer emitted
 anywhere (WI-17 slice 2 unified every guard veto path), and the bare
@@ -9281,6 +9286,53 @@ every length and the totals stay the default truth at any size.
   level up: the binder run fuses in the subhunk partition while other
   runs raise alone (fixture `12-stmt-rewrite` raises as a type single
   plus one binder intent).
+- Column-0 one-line free-fn terse single (WI-6(a)): a lone
+  `fn foo() {}` → `fn bar() {}` definition (whole item on one line,
+  rename-only, byte-identical body, column-0 — indented one-liners are
+  methods owned by the slot sweep) raises as the terse diet pair
+  (`- fn foo` / `+ fn bar`, no directives) under the precision guard.
+  The VQ slot frame prices this shape at ~2x native by construction;
+  the terse diet is the only byte-honest spelling. Per-hunk-only (never
+  whole-section/partition: a whole-section claim of the def single
+  would strand a co-resident call win ordinary). Soundness: pre-image
+  required with the pre-image line equal to the minus; any word-bound
+  occurrence of the old ident outside the def line vetoes as
+  `veto:unproven-use` (a col0 rename whose calls the diff does not
+  update stays wholly ordinary — the raiser never invents edits); the
+  D13 scratch-apply must reproduce the plus line at the site with every
+  other line byte-identical. Detector name `item_rename` (fixture
+  `04-mixed` raises as the terse def plus the call single).
+- Double-delta `impl` widening (WI-6(b)): a section holding exactly one
+  `impl OldTr for OldTy {` → `impl NewTr for NewTy {` pair plus its
+  trait-def pair, its self-ty-def pair (`struct`/`enum`/`union`/`type`),
+  one inherent self-ty head pair (no `for`) and one trait-side head
+  pair (with `for`), with every remaining pair a bare item rename,
+  raises as the rest singles plus the two head singles re-headered to
+  the `syn` cover of head + double-delta item spans (the authored
+  `@@ -18,23 @@` / `@@ -30,11 @@` overlapping wide sweeps, one shared
+  shape per half, hunks ordered by start) — the double-delta line is
+  absorbed by both wides and never stated alone. Missing defs/heads, a
+  second double-delta, cross-file defs, or a non-item rest pair declines
+  to today's behavior (tight singles plus the ordinary remainder).
+  Soundness is the D13 section probe over every pair (range-cited hunks
+  cannot over-match; the probe fails the arm on any mismatch); pricing
+  is the caller's `pair_section_gate` (`item_rename`, Precision).
+  Detector name `item_rename` (fixture `14-item-rename` replays the
+  authored 8-hunk grouping byte-for-byte up to rule names).
+- Rename + full attr-strip joint (WI-6(c)): an unbalanced Nv1 hunk of
+  N-1 attribute/doc deletions (`#[…]`, `///`, `//!`) above a column-0
+  fn pure-rename header pair, with a bare header plus line (full strip
+  only — partial strips stay ordinary), raises as the item-cited range
+  (attrs included, via `syn`) plus `# attrs=strip` plus the rename
+  frame (`- fn foo(...) {` / `+ fn bar(...) {` + `...` + `}`). No
+  `# allow` line (a single-item joint never needs it, and carrying
+  `# allow=many` changes the engine's reported span granularity,
+  breaking canonical equality with the authored diet). A stripped line
+  mentioning the old ident vetoes as `veto:attr-mentions-old` (opaque
+  attr interiors are never classified). Soundness is the D13 unbalanced
+  splice probe (first changed line ← plus, rest deleted; the emission
+  must reproduce it byte-identical). Detector name `attr_sweep`
+  (fixture `22-attrs-strip` replays the authored joint).
 - Statement-sequence sweep (WI-5c, fourth anti-unification shape): N
   flat `-`/`+` pairs splitting block-major into ≥ 2 blocks × K = 2–4
   `let` statements (each block's changed old lines consecutive — the
@@ -10339,15 +10391,12 @@ the anchor/header facts exceed the native bytes (WI-7 allowance admits
 them as proved intents); a factored shared-rule diet stays future work.
 
 <!-- generated: d5-exclusions start -- do not hand-edit; run `python3 tools/gen_d5_exclusions.py --write` -->
-CYCLE_OK: 102 entries (canonically lossless; the harness asserts tree-canonical equality plus the `S'' == S'` fixed point).
-KNOWN_DIVERGENT: 11 entries (divergence pinned with the owning reason; a fix moves the entry to CYCLE_OK in the same change as the detector):
-- `04-mixed`: partial (WI-3 slice 4): hunk-2 re-infers as a call_sweep single; hunk-1 one-line col0 fn rename stays ordinary (slot frame ~2x native, precision-guard veto; terse admission reverted — greedy partial would park hunk-2's win; opener is WI-6 free-fn col0 emission + leftover retry)
+CYCLE_OK: 105 entries (canonically lossless; the harness asserts tree-canonical equality plus the `S'' == S'` fixed point).
+KNOWN_DIVERGENT: 8 entries (divergence pinned with the owning reason; a fix moves the entry to CYCLE_OK in the same change as the detector):
 - `05-optional-noop`: empty: zero-match optional leaves an empty re-diff
 - `06-insert-use`: by design (WI-3 slice 4): standalone single-line insertion singles cost more than native (rule-tag overhead, literal-only) so they stay ordinary; insertion joints ride WI-8/WI-13
 - `12-stmt-rewrite`: partial (WI-5): the binder line now raises as one `let_binder` intent (`let count = E;` → `let n = E;` plus the in-block follow covering `let bumped`, D11/D16 proof: count + follow-coverage + scratch-apply). The fused same-name header keeps it divergent: authored states `Vec<T>` → `Box<[T]>` as a holed sweep hunk plus a separate `count` → `n` use hunk (3 hunks), the raiser emits a concrete type single plus the binder-follow hunk (2 hunks) — canonical spellings differ while both tree legs close.
 - `13-sig-evolution`: mixed (WI-2b): hunk-1 vis+stable-ret re-infers per-hunk as a sig_evolution single under the normalized span; hunk-2 async+generics+where stays ordinary by design (generics/where veto, type-sweep N>=2)
-- `14-item-rename`: partial (WI-19c): struct/enum/const/mod/nested-Helper/impl-self-ty/trait/trait-side re-infer as precision singles (8 semantic); the `impl Printable for Old` → `impl Labeled for New` double-delta stays atomic-ordinary (needs a joint trait+self-ty intent, item-intent follow work)
-- `22-attrs-strip`: two-slot joint (WI-3 slice 5): rename + full attr/doc strip needs the WI-8 composed probe -- no D17 arm admits `Attrs`-carrying hunks by design, so the N=1 pair stays ordinary (the -20B detector half is joint-owned)
 - `30-trait-sweep`: hetero: trait-side-only decl/def shapes stay ordinary by design (no impl side; mixed trait+impl raises via trait_method_rename)
 - `52-macro-verbatim`: hetero by design (WI-1s2): two-site let-verbatim macro sweep re-infers as sub-line call sweep — D17 literal equality needs exactly one line site, so no single instantiation premise holds; tree legs still close
 - `55-infer-wildcard`: t442: hetero concrete inits vs uniform plus stay ordinary (authored `_` applies but re-diff cannot anti-unify hetero `1 + 2`/`3 + 4` to one hole; tree legs still close)

@@ -34,7 +34,7 @@ use rsmpl_patch::{canonicalize_with_spans_parsed, parse_patch, ParseError};
 
 use crate::single_site_eq::{
     post_tree_key, unify_fn_evo_single_to_concrete, unify_fn_filter_single_to_concrete,
-    unify_single_site_verbatim_to_literal,
+    unify_single_site_bare_locality, unify_single_site_verbatim_to_literal,
 };
 
 /// Canonicalize `patch_text` against the pre-image tree `pre`
@@ -155,6 +155,11 @@ pub fn canonicalize_with_tree(
         // return unify to the concrete-minus form under the same
         // discipline (the site return fills the omission).
         unify_fn_evo_single_to_concrete(&mut patch, pre, post, &mut unified_spans, &raw_spans);
+        // WI-6(b): bare single-site pairs agree on locality (inferred
+        // tight `# allow=many` vs authored diet) — same D17 discipline,
+        // disjoint gate (only what the verbatim/filter/evo arms
+        // decline: hole-free pairs with locality-only directives).
+        unify_single_site_bare_locality(&mut patch, pre, post, &mut unified_spans, &raw_spans);
         let mut check = seeded;
         let same = crate::apply_patch_to_tree(&mut check, &patch).is_ok()
             && post_tree_key(&check) == post_tree_key(post);
